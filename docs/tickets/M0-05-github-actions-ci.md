@@ -15,4 +15,8 @@ Acceptance criteria:
 - YAML lints clean (e.g. actionlint if available); coder cannot prove "green" locally without GitHub, so report that CI is unrun until the human pushes `dev`.
 - Note: ARCHITECTURE section 13 says CI also runs pytest on PostgreSQL; deferred to M1 when a DB exists. Add a comment in the workflow.
 New i18n keys: none
-Status: todo
+Status: done (QA APPROVE, merged into dev at c796a9e)
+Notes:
+- The workflow has never run on GitHub. The compose smoke test and the buildx multi-arch build are verified only after the human pushes `dev`.
+- Licence fact checked by QA: the official gitleaks-action README says GITLEAKS_LICENSE is required for organisations, which is why the gitleaks binary is used instead of the action.
+- Optional QA nits: redundant `-d` together with `--wait`; duplicate `--build`; add a source comment for the licence fact.

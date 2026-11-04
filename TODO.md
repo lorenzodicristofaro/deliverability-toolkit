@@ -5,9 +5,10 @@ Mark items `[x]` when done. Acceptance criteria are the definition of done.
 
 ## M0 — Project setup
 - [x] Repo, AGPL-3.0 LICENSE, README stub, CONTRIBUTING (DCO), CODE_OF_CONDUCT
-- [ ] uv project, ruff, mypy, pytest, pre-commit, GitHub Actions CI
+- [x] uv project, ruff, mypy, pytest, pre-commit, GitHub Actions CI
 - [x] Dockerfile (multi-arch) + compose.yaml with optional `unbound` / `postgres` profiles
 - Accept: `docker compose up` serves a health page; CI green.
+  Status: pending — CI not yet run on GitHub (needs push of dev); local Docker daemon unavailable.
 
 ## M1 — Core platform (auth + multi-tenancy skeleton)
 - [ ] Config, logging, DB, Alembic migrations (SQLite + PostgreSQL)
