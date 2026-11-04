@@ -29,9 +29,12 @@ packages = ["app"]
 [tool.ruff]
 target-version = "py312"
 line-length = 100
-# ruff 0.17 formats Markdown code blocks (verified: removing this reformats ARCHITECTURE.md)
-# keep the project docs untouched
+# ruff 0.17.3 formats Markdown code blocks (verified 2026-11-04: with --isolated,
+# `ruff format --check --diff ARCHITECTURE.md` reports it would be reformatted).
+# extend-exclude applies to both lint and format; force-exclude keeps it effective for
+# files passed explicitly (e.g. by pre-commit). Docs: https://docs.astral.sh/ruff/settings/
 extend-exclude = ["*.md"]
+force-exclude = true
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "SIM"]
