@@ -5,6 +5,7 @@ the user's membership in a tenant they ask to enter, happens *before* a tenant i
 what builds the TenantContext in the first place, so it cannot be filtered by one. It is scoped by
 the user instead: every query filters on the user id given at construction, and results are
 read-only value objects (no ORM rows that could be modified or re-used outside a tenant scope).
+A deactivated user (`is_active = false`) resolves no memberships here.
 
 Use it only for login/tenant selection and context resolution; everything that reads or writes a
 tenant's data goes through `app.repositories.repo_for(ctx, session)`.
@@ -18,7 +19,7 @@ from dataclasses import dataclass
 from sqlalchemy import Row, Select, select
 from sqlalchemy.orm import Session
 
-from app.models import Membership, MembershipRole, Tenant
+from app.models import Membership, MembershipRole, Tenant, User
 from app.repositories.base import coerce_id
 
 
@@ -52,7 +53,8 @@ class UserMembershipsRepository:
         return (
             select(Membership.id, Membership.tenant_id, Tenant.name, Tenant.slug, Membership.role)
             .join(Tenant, Tenant.id == Membership.tenant_id)
-            .where(Membership.user_id == self._user_id)
+            .join(User, User.id == Membership.user_id)
+            .where(Membership.user_id == self._user_id, User.is_active.is_(True))
         )
 
     def list(self) -> Sequence[UserTenantMembership]:

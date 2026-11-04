@@ -5,17 +5,20 @@ fixture); the schema is built by Alembic. Two tenants with rows: every repositor
 tenant A is checked never to return, change or delete tenant B rows, including malformed ids.
 """
 
+import ast
 import dataclasses
+import datetime as dt
 import re
 from collections.abc import Iterator
 from dataclasses import dataclass
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
 import pytest
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import Engine, text
+from sqlalchemy import Engine, bindparam, func, literal, literal_column, select, text
 from sqlalchemy.orm import Session
 
 from app.core.db import create_db_engine, create_session_factory
@@ -28,7 +31,7 @@ from app.repositories import (
     UserMembershipsRepository,
     repo_for,
 )
-from app.repositories.base import coerce_id
+from app.repositories.base import coerce_id, is_plain_value
 
 ROOT = Path(__file__).resolve().parents[2]
 KEY = "k" * 40
@@ -431,52 +434,279 @@ def test_user_memberships_reject_malformed_user(user_id: Any) -> None:
         UserMembershipsRepository(Session(), user_id)
 
 
-# --- static rule: queries on tenant-owned tables live only in app/repositories -----------------
+# --- SQL expressions are never accepted as values ----------------------------------------------
 
 
-def _tenant_model_names() -> list[str]:
-    return sorted(
-        mapper.class_.__name__
-        for mapper in Base.registry.mappers
-        if "tenant_id" in mapper.columns and not mapper.columns["tenant_id"].nullable
+class _ClauseProxy:
+    def __init__(self, inner: Any) -> None:
+        self._inner = inner
+
+    def __clause_element__(self) -> Any:
+        return self._inner
+
+
+def _sql_values(world: World) -> dict[str, Any]:
+    b_u3 = world.memberships["b_u3"]
+    return {
+        "literal_column": literal_column(f"(SELECT user_id FROM memberships WHERE id={b_u3})"),
+        "text": text(f"(SELECT user_id FROM memberships WHERE id={b_u3})"),
+        "scalar_subquery": select(Membership.user_id)
+        .where(Membership.id == b_u3)
+        .scalar_subquery(),
+        "func": func.max(Membership.user_id),
+        "bindparam": bindparam("x", 1),
+        "column": Membership.user_id,
+        "table_column": Membership.__table__.c.user_id,
+        "literal": literal(1),
+        "clause_element_proxy": _ClauseProxy(Membership.user_id),
+        "json_with_expression": {"k": [literal_column("1")]},
+        "object": object(),
+    }
+
+
+SQL_VALUE_NAMES = [
+    "literal_column",
+    "text",
+    "scalar_subquery",
+    "func",
+    "bindparam",
+    "column",
+    "table_column",
+    "literal",
+    "clause_element_proxy",
+    "json_with_expression",
+    "object",
+]
+
+
+@pytest.mark.parametrize("name", SQL_VALUE_NAMES)
+def test_update_rejects_sql_expressions(world: World, name: str) -> None:
+    value = _sql_values(world)[name]
+    repo = repo_for(world.ctx_a(), world.session).memberships
+    before_a = _db_rows(world, "memberships", world.tenant_a)
+    key = "feature_toggles" if name == "json_with_expression" else "user_id"
+    with pytest.raises(TenantScopeError):
+        repo.update(world.memberships["a_u2"], {key: value})
+    assert _db_rows(world, "memberships", world.tenant_a) == before_a
+
+
+@pytest.mark.parametrize("name", SQL_VALUE_NAMES)
+def test_add_rejects_sql_expressions(world: World, name: str) -> None:
+    value = _sql_values(world)[name]
+    repo = repo_for(world.ctx_a(), world.session).memberships
+    before_a = _db_rows(world, "memberships", world.tenant_a)
+    obj = Membership(user_id=world.users["u3"], role=MembershipRole.ANALYST)
+    if name == "json_with_expression":
+        obj.feature_toggles = value
+    else:
+        obj.user_id = value
+    with pytest.raises(TenantScopeError):
+        repo.add(obj)
+    assert obj not in world.session
+    assert _db_rows(world, "memberships", world.tenant_a) == before_a
+
+
+def test_update_accepts_plain_json_and_enum(world: World) -> None:
+    repo = repo_for(world.ctx_a(), world.session).memberships
+    toggles = {"reports": True, "limits": [1, 2.5, None, "x"], "nested": {"a": {"b": []}}}
+    updated = repo.update(
+        world.memberships["a_u2"], {"feature_toggles": toggles, "role": MembershipRole.ADMIN}
     )
-
-
-def _query_pattern() -> re.Pattern[str]:
-    models = "|".join(_tenant_model_names())
-    return re.compile(
-        rf"\b(?:select|update|delete|insert)\s*\(\s*(?:{models})\b"
-        rf"|\.(?:query|get|merge)\s*\(\s*(?:{models})\b"
-    )
-
-
-def test_tenant_model_list_is_complete() -> None:
-    assert {"Domain", "DomainAccess", "Membership"} <= set(_tenant_model_names())
+    assert updated is not None
+    world.session.commit()
+    world.session.expire_all()
+    reloaded = repo.get(world.memberships["a_u2"])
+    assert reloaded is not None and reloaded.feature_toggles == toggles
+    assert reloaded.role is MembershipRole.ADMIN
 
 
 @pytest.mark.parametrize(
-    ("source", "matches"),
+    ("value", "plain"),
     [
-        ("stmt = select(Domain).where(Domain.id == 1)", True),
-        ("session.query( Membership ).all()", True),
-        ("session.get(DomainAccess, (1, 2))", True),
-        ("update(Domain).values(name='x')", True),
-        ("select(Tenant)", False),
-        ("select(User.id)", False),
-        ("repos.memberships.get(1)", False),
+        (None, True),
+        (1, True),
+        ("x", True),
+        (1.5, True),
+        (Decimal("1.2"), True),
+        (dt.datetime(2026, 1, 1, tzinfo=dt.UTC), True),
+        (dt.date(2026, 1, 1), True),
+        (MembershipRole.OWNER, True),
+        ({"a": [1, {"b": None}]}, True),
+        ({1: "non-str key"}, False),
+        ((1, 2), False),
+        ({1, 2}, False),
+        (object(), False),
+        (literal_column("1"), False),
+        (text("1"), False),
+        (_ClauseProxy(literal_column("1")), False),
+        ([text("1")], False),
     ],
 )
-def test_query_pattern(source: str, matches: bool) -> None:
-    assert bool(_query_pattern().search(source)) is matches
+def test_is_plain_value(value: Any, plain: bool) -> None:
+    assert is_plain_value(value) is plain
 
 
-def test_no_tenant_queries_outside_repositories() -> None:
-    pattern = _query_pattern()
+def test_unsaved_object_tenant_can_be_reassigned(world: World) -> None:
+    obj = Domain(name="draft.example", tenant_id=world.tenant_b)
+    obj.tenant_id = world.tenant_a  # transient: allowed, add() decides
+    world.session.add(obj)
+    obj.tenant_id = world.tenant_b  # pending (not flushed): still allowed
+    obj.tenant_id = world.tenant_a
+    world.session.expunge(obj)
+    added = DomainRepo(world.ctx_a(), world.session).add(obj)
+    with pytest.raises(TenantScopeError):
+        added.tenant_id = world.tenant_b  # persisted now
+
+
+def test_deactivated_user_resolves_no_memberships(world: World) -> None:
+    user = world.session.get(User, world.users["u1"])
+    assert user is not None
+    user.is_active = False
+    world.session.commit()
+    repo = UserMembershipsRepository(world.session, world.users["u1"])
+    assert repo.list() == []
+    assert repo.get_for_tenant(world.tenant_a) is None
+    still_active = UserMembershipsRepository(world.session, world.users["u2"])
+    assert [m.tenant_id for m in still_active.list()] == [world.tenant_a]
+
+
+# --- static rule: tenant models/tables are only touched in app/repositories (and app/models) ---
+
+
+def _tenant_mappers() -> list[Any]:
+    return [
+        mapper
+        for mapper in Base.registry.mappers
+        if "tenant_id" in mapper.columns and not mapper.columns["tenant_id"].nullable
+    ]
+
+
+TENANT_MODELS = frozenset(m.class_.__name__ for m in _tenant_mappers())
+TENANT_TABLES = frozenset(m.local_table.name for m in _tenant_mappers())
+_RAW_SQL = re.compile(
+    rf"\b(?:FROM|JOIN|UPDATE|INTO|TABLE)\s+[\"`]?(?:{'|'.join(sorted(TENANT_TABLES))})\b",
+    re.IGNORECASE,
+)
+
+
+def _dotted(node: ast.AST) -> str | None:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        base = _dotted(node.value)
+        return None if base is None else f"{base}.{node.attr}"
+    return None
+
+
+def _docstring_nodes(tree: ast.AST) -> set[int]:
+    ids: set[int] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Module | ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef):
+            body = node.body
+            if body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant):
+                ids.add(id(body[0].value))
+    return ids
+
+
+def _is_models_module(name: str) -> bool:
+    return name == "app.models" or name.startswith("app.models.")
+
+
+def tenant_access_violations(source: str) -> list[str]:
+    """Lines of `source` referencing a tenant model (name, import incl. `as` alias, attribute on
+    any object incl. app.models module aliases, getattr string) or raw SQL naming a tenant table.
+    Docstrings are ignored."""
+    tree = ast.parse(source)
+    found: set[str] = set()
+
+    def flag(node: ast.AST, why: str) -> None:
+        found.add(f"{getattr(node, 'lineno', 0)}: {why}")
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module and _is_models_module(node.module):
+            for alias in node.names:
+                if alias.name == "*" or alias.name in TENANT_MODELS:
+                    flag(node, f"imports {node.module}.{alias.name}")
+
+    docstrings = _docstring_nodes(tree)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and node.id in TENANT_MODELS:
+            flag(node, f"references {node.id}")
+        elif isinstance(node, ast.Attribute) and node.attr in TENANT_MODELS:
+            # Any `<x>.Domain` is flagged, so module aliases (`models.Domain`, `import app.models
+            # as m; m.Domain`) need no alias resolution; `X as D` is caught at the import.
+            flag(node, f"references {_dotted(node) or node.attr}")
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+            if id(node) in docstrings:
+                continue
+            if node.value in TENANT_MODELS:
+                flag(node, f"names {node.value}")
+            elif _RAW_SQL.search(node.value):
+                flag(node, "raw SQL on a tenant table")
+        elif isinstance(node, ast.Subscript) and isinstance(node.slice, ast.Constant):
+            target = _dotted(node.value) or ""
+            if node.slice.value in TENANT_TABLES and target.endswith("tables"):
+                flag(node, f"metadata table {node.slice.value}")
+    return sorted(found)
+
+
+def test_tenant_model_list_is_complete() -> None:
+    assert {"Domain", "DomainAccess", "Membership"} <= TENANT_MODELS
+    assert {"domains", "domain_access", "memberships"} <= TENANT_TABLES
+    assert not {"User", "Tenant"} & TENANT_MODELS
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "from app.models import Domain\nselect(Domain)",
+        "from app.models import Domain as D\nselect(D)",
+        "from app.models.domain import Domain as D",
+        "from app import models\nselect(models.Domain)",
+        "import app.models as m\nm.Membership",
+        "import app.models\napp.models.DomainAccess",
+        "from app.models import domain as dm\ndm.Domain",
+        "from app.models import *",
+        "stmt = select(\n    Domain.id\n)",
+        "select(User).join(Membership)",
+        "q.with_entities(Membership.id)",
+        "Domain.__table__.select()",
+        "aliased(Domain)",
+        "X = getattr(models, 'Domain')",
+        'text("SELECT id FROM domains WHERE x = 1")',
+        "conn.execute('delete from memberships')",
+        'f"UPDATE domain_access SET x = {y}"',
+        'text("SELECT * FROM users u JOIN memberships m ON m.user_id = u.id")',
+        "Base.metadata.tables['domains']",
+    ],
+)
+def test_checker_flags_tenant_access(source: str) -> None:
+    assert tenant_access_violations(source), source
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "from app.models import User, Tenant\nselect(User).join(Tenant)",
+        "from app.models.domain import normalize_domain_name",
+        "from app import models\nmodels.User",
+        "repos.memberships.get(1)\nrepos.memberships.list()",
+        'text("SELECT id FROM users")',
+        '"""Data from domains and memberships is reached via repositories."""',
+        "def f():\n    '''Reads FROM domains only via repo_for.'''\n    return 1",
+        "tags = ['domains']",
+    ],
+)
+def test_checker_no_false_positive(source: str) -> None:
+    assert tenant_access_violations(source) == []
+
+
+def test_no_tenant_access_outside_repositories() -> None:
+    allowed = (ROOT / "app" / "repositories", ROOT / "app" / "models")
     offenders = []
     for path in sorted((ROOT / "app").rglob("*.py")):
-        if (ROOT / "app" / "repositories") in path.parents:
+        if any(directory in path.parents for directory in allowed):
             continue
-        for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-            if pattern.search(line):
-                offenders.append(f"{path.relative_to(ROOT)}:{lineno}: {line.strip()}")
+        for violation in tenant_access_violations(path.read_text(encoding="utf-8")):
+            offenders.append(f"{path.relative_to(ROOT)}:{violation}")
     assert offenders == []
