@@ -1,41 +1,37 @@
-# HANDOFF — 2026-11-04
+# HANDOFF — 2026-11-05
 
 Resume with `/gm`.
 
-## Current milestone: M0 — Project setup
-All TODO.md items ticked (M0-07 done). Milestone acceptance still **pending**:
-- `dev` (including M0-07 rework round 2, merged locally) is NOT pushed; CI has not run on it.
-- `dev` is NOT yet merged into `qa`. No milestone report written yet (`docs/reports/M0.md`).
+## Current milestone: M1 — Core platform (auth + multi-tenancy skeleton)
+Tickets: docs/tickets/M1-01..M1-20. GM decisions recorded in M1-01 ("GM decisions").
 
-## Tickets
-| Ticket | Status | Notes |
-|---|---|---|
-| M0-01 governance docs | done | CoC contact placeholder (CODE_OF_CONDUCT.md:41): maintainer fills in before public release |
-| M0-02 uv toolchain | done | |
-| M0-03 /healthz | done | M1 follow-ups in ticket: /docs + /openapi.json unauthenticated; empty SECRET_KEY/ENCRYPTION_KEY must be treated as missing |
-| M0-04 Dockerfile + compose | done | runtime verified 2026-11-04 (app only) |
-| M0-05 GitHub Actions CI | done | optional nits listed in ticket |
-| M0-06 toolchain/health fixes | done | `data/` item resolved by maintainer decision (seeds/) |
-| M0-07 Docker follow-ups (own Unbound image) | done | round 2 merged into dev 2026-11-04 (QA APPROVE opus, 62 tests passed, lint clean, not pushed). QA nits moved to M1 in TODO.md (gateway pin in IPAM; mDNS/avahi false-fail on host probe 127.0.0.1:5353) |
-| M0-08 gitignore + ruff *.md | done | |
-| M0-09 Unbound hardening nits | superseded | folded into M0-07 round 2 |
+## Ticket status
+| Ticket | Status |
+|---|---|
+| M1-01..M1-10 | done (merged into dev, QA APPROVE, pushed, CI green up to M1-08; M1-10 push CI pending at time of writing) |
+| M1-11 can() permission layer | in progress (opus coder) |
+| M1-12 TenantContext + repositories | in progress (opus coder, parallel with M1-11) |
+| M1-13..M1-20 | todo |
 
-## Decisions taken (maintainer)
-- Seed directory is `seeds/` (image: `/app/seeds`); `/data` stays the runtime volume, `DATABASE_URL=sqlite:////data/app.db` (ARCHITECTURE updated).
-- Unbound: own Debian-slim image (tag + digest pinned), non-root, DNSSEC with Debian's trust anchor, qname-minimisation, recursion from root, no forwarders, internal compose network only, listens on port 5353 inside the network and is never published on the host, healthcheck (AD flag), optional `unbound` profile, multi-arch CI build + periodic rebuild, maintenance rule in `docs/UNBOUND.md`. klutchell/unbound dropped (ARCHITECTURE §7 updated).
-- No bind mounts of folders outside the project into containers (applies to all services).
-- ruff excludes `*.md` explicitly with `force-exclude = true` (verified on ruff 0.17.3).
-- QA reviewer runs on opus; coder model per ticket `Model:` line (default sonnet).
-- DNSBL for the M0-07 integration test: Spamhaus ZEN (test entry 127.0.0.2), skip on provider block/NXDOMAIN/timeout. M7 open: production DNSBL list and Spamhaus free-use terms (non-commercial, low volume) to be settled in `dnsbl.yaml` with `verified_on`.
+Suggested order after 11/12: 13, 14, 16, 15, 17, 18, 19, 20.
 
-## Docker state
-Cleanup done: stale images and network removed. Volume `deliverability-toolkit_app-data` left in place.
+## Maintainer decisions this session
+- Instance admin has NO tenant data access via the flag alone; with a membership, exactly what the
+  membership allows (ARCHITECTURE §4 item 6). Impersonation: possible future feature, not planned.
 
-## Open items for the maintainer
-1. Push `dev` to GitHub so CI runs on the M0-07 round 2 changes.
-2. CoC enforcement contact: before public release.
+## GM decisions this session (not escalated)
+- Tenant delete CASCADE; users with memberships cannot be deleted (RESTRICT), deactivate instead (ARCHITECTURE §4 item 7).
+- Non-ASCII domain names rejected until M1-18 adds IDNA 2008 (dependency allowed there).
+
+## Follow-ups already routed into tickets
+- M1-16: eager locale catalogue validation at startup + Accept-Language 4 KB cap (from M1-09 QA).
+
+## Notes
+- `gh run watch` exits 1 with the repo token (no Checks permission): poll `gh run view` instead.
+  Optional for the maintainer: add "Checks: read" to the fine-grained token.
+- Local `docker compose up` needs SECRET_KEY and ENCRYPTION_KEY (>= 32 chars) in `.env`.
 
 ## Next 3 steps
-1. Maintainer pushes `dev` -> CI green, including the new `integration-unbound` and `unbound-arm64-smoke` jobs (the gateway REFUSED path is first exercised on native Linux there).
-2. GM merges `dev` -> `qa`.
-3. GM writes `docs/reports/M0.md`.
+1. QA M1-11 and M1-12, merge, push, check CI.
+2. M1-13 (argon2 + sessions, opus), then M1-14 (CSRF + headers).
+3. M1-16 templates/dark mode (includes the M1-09 follow-up), then M1-15 login.
