@@ -15,7 +15,7 @@ Acceptance criteria:
 - `.env.example` documents each variable; no real secrets.
 - Existing tests, ruff, mypy green; no network in tests.
 New i18n keys (en + it, files created by M1-09; until then keys are constants only): config.missing, config.invalid_value, config.resolver_addrs_required
-Status: done (merged into dev, QA APPROVE, 99 tests passed)
+Status: done (merged into dev, QA APPROVE; fix round 1 per-run CI keys merged, QA APPROVE)
 GM-accepted additions: BASE_URL must start with http(s)://, default http://localhost:8000; LOG_LEVEL/RESOLVER_MODE/ROLE are case-insensitive.
 
 ## GM decisions (2026-11-04)

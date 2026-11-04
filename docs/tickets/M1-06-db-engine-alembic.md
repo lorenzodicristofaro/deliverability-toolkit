@@ -14,6 +14,7 @@ Acceptance criteria:
 - Container start applies migrations; `docker compose up` still serves /healthz (smoke through existing CI job; coder runs it locally).
 - CLAUDE.md "migrate" command line updated by GM after merge (report the exact command: `uv run alembic upgrade head`).
 - DATABASE_URL credentials never appear in repr/str of Settings or in logs (SecretStr or masked password); repr test with a postgresql://user:pass@host/db URL (QA follow-up from M1-01).
+- SECRET_KEY and ENCRYPTION_KEY have a minimum length (at least 32 characters) enforced in Settings, with config.invalid_value and a table-driven test (QA follow-up from M1-03: very short secrets break log value-masking).
 - No tenant data access in this ticket.
 New i18n keys: none
 Status: todo
