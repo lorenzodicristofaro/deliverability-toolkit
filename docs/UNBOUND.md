@@ -144,8 +144,10 @@ Removed (no concrete justification, or equal to the default):
   signed name; SERVFAIL on `dnssec-failed.org`, NOERROR with CD set (proves it is validation);
   NXDOMAIN (`<random>.invalid`, answered by the signed root); REFUSED from outside the allowed
   subnet; DNSBL test entry; nothing published on the host (inspect `PortBindings`; a
-  `--network host` client querying `172.28.53.2:5353/53` and `127.0.0.1:5353` gets REFUSED
-  (native Linux, gateway rule) or no answer (WSL/VM Docker), never a resolution); read-only rootfs, `cap_drop ALL`,
+  `--network host` client querying `172.28.53.2:5353/53` gets REFUSED
+  (native Linux, gateway rule) or no answer (WSL/VM Docker), never a resolution; on
+  `127.0.0.1:5353` a host mDNS responder (avahi) may answer, so the test only requires that it is
+  not Unbound resolving (NOERROR with RA and AD/answers), see `host_probe_is_unbound`); read-only rootfs, `cap_drop ALL`,
   no-new-privileges, no sysctls; healthy; root.key persistence across `down`/`up`.
 - REFUSED method: the shipped config only listens on `172.28.53.2`/`127.0.0.1`, so a client
   elsewhere would just time out. The test starts a probe from the same image with the shipped
