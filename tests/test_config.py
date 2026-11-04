@@ -1,4 +1,5 @@
 import json
+from ipaddress import IPv6Address
 from pathlib import Path
 
 import pytest
@@ -27,6 +28,9 @@ from app.core.config import (
         ),
         ("1.1.1.1:1", [ResolverAddr("1.1.1.1", 1)]),
         ("1.1.1.1:65535", [ResolverAddr("1.1.1.1", 65535)]),
+        ("1.1.1.1:053", [ResolverAddr("1.1.1.1", 53)]),
+        ("[::ffff:1.2.3.4]:53", [ResolverAddr(str(IPv6Address("::ffff:1.2.3.4")), 53)]),
+        ("1.1.1.1,1.1.1.1", [ResolverAddr("1.1.1.1", 53), ResolverAddr("1.1.1.1", 53)]),
     ],
 )
 def test_parse_valid(value: str, expected: list[ResolverAddr]) -> None:

@@ -11,6 +11,10 @@ Listens on **5353** (udp+tcp) inside the compose network only; never published.
   `172.28.53.2` and also on the default network for outbound recursion.
 - `unbound.conf` listens only on `172.28.53.2` and `127.0.0.1` (port 5353); `access-control`
   allows only `172.28.53.0/24` and loopback, unmatched sources are refused (manual default).
+  The bridge gateway `172.28.53.1/32` is refused explicitly (most specific netblock wins):
+  on native Linux Docker (e.g. GitHub runners) the host reaches `172.28.53.2` from the
+  gateway address, which is inside the /24 and would otherwise get recursion. On WSL / VM
+  based Docker the address is simply unreachable from the host.
   Subnet and IP are declared in BOTH `compose.yaml` and `unbound.conf`; change them together.
 - No `ports:` on the service. To use it, attach a service to `dns` and point it at
   `172.28.53.2:5353` (`RESOLVER_ADDRS=172.28.53.2:5353`, see `app/core/config.py`; the parser's
@@ -89,14 +93,15 @@ below are from that page. Options required by the ticket (`port`, `interface`, `
 | `username: ""` | `unbound` | Container already starts as `unbound`. Without it unbound logs `unable to initgroups unbound: Operation not permitted` (observed) on every start. |
 | `pidfile: ""` | `/usr/local/etc/unbound/unbound.pid` (Debian build: `/run/unbound.pid`) | Read-only rootfs: without it unbound logs `cannot open pidfile /run/unbound.pid: Read-only file system` (observed). |
 | `use-syslog: no` | `yes` | No syslog in the container; without it nothing appears in `docker logs` (observed: no output). |
-| `access-control: 127.0.0.0/8 allow` | unmatched = refuse | Loopback for the healthcheck. |
+| `access-control: 127.0.0.0/8 allow` | unmatched = refuse (the manual also treats localhost as implicitly allowed when no `access-control` is set: `unverified` once other entries exist) | Loopback for the healthcheck; explicit so it does not depend on that implicit rule. |
+| `access-control: 172.28.53.1/32 refuse` | unmatched = refuse | Bridge gateway = the host on native Linux Docker; see Network isolation. |
 | `qname-minimisation: yes` | `yes` | Required by the ticket; explicit so a future default change cannot silently weaken it. |
 
 Removed (no concrete justification, or equal to the default):
 
 | Option | Default | Decision |
 |---|---|---|
-| `chroot: ""` | manual: `/usr/local/etc/unbound`; Debian build differs (`unverified`) | Not needed: tested without it, starts fine as non-root. |
+| `chroot: ""` | manual: `/usr/local/etc/unbound`; Debian build: empty (verified: `unbound -V` shows `--with-chroot-dir=` empty and `unbound-checkconf -o chroot` prints an empty line) | Equal to the Debian default; also tested without it, starts fine as non-root. |
 | `directory`, `logfile: ""` | build default / `""` | Defaults work. |
 | `do-ip4/do-udp/do-tcp: yes` | `yes` | Equal to default. |
 | `do-ip6: no` | `yes` | Removed: no observable need on the default (IPv4-only) compose network, and on a v6-enabled Docker unbound should be able to use IPv6 for recursion. |
@@ -134,8 +139,9 @@ Removed (no concrete justification, or equal to the default):
   (unique name; `down -v --rmi local` afterwards) and checks: KSK-2024 in the image; AD on a
   signed name; SERVFAIL on `dnssec-failed.org`, NOERROR with CD set (proves it is validation);
   NXDOMAIN (`<random>.invalid`, answered by the signed root); REFUSED from outside the allowed
-  subnet; DNSBL test entry; nothing published on the host (inspect `PortBindings`, host TCP
-  connect to `172.28.53.2:53/5353` and `127.0.0.1:5353` fails); read-only rootfs, `cap_drop ALL`,
+  subnet; DNSBL test entry; nothing published on the host (inspect `PortBindings`; a
+  `--network host` client querying `172.28.53.2:5353/53` and `127.0.0.1:5353` gets REFUSED
+  (native Linux, gateway rule) or no answer (WSL/VM Docker), never a resolution); read-only rootfs, `cap_drop ALL`,
   no-new-privileges, no sysctls; healthy; root.key persistence across `down`/`up`.
 - REFUSED method: the shipped config only listens on `172.28.53.2`/`127.0.0.1`, so a client
   elsewhere would just time out. The test starts a probe from the same image with the shipped
@@ -148,13 +154,14 @@ Removed (no concrete justification, or equal to the default):
   documented ZEN codes (127.0.0.2/3/4/9/10/11/30). Sources (read 2026-11-04):
   https://www.spamhaus.org/faq/section/DNSBL%20Usage (test targets; `127.255.255.254` = "Query via
   public/open resolver", `127.255.255.255` = "Excessive number of queries"; free use only for
-  non-commercial, low-volume use, not from a public resolver; "use your own DNS servers") and
+  non-commercial, low-volume use, not from a public resolver or an IP with generic rDNS; "use your own DNS servers") and
   https://docs.spamhaus.com/datasets/docs/source/10-data-type-documentation/datasets/040-zones.html
   (ZEN codes). Our resolver is a private recursive one, which is what Spamhaus asks for.
   `unverified`: that GitHub-hosted runner IPs are answered normally (cloud ranges may be
   treated as high volume/public); and that the toolkit's use counts as "non-commercial". Behaviour
   in the test: local resolution is asserted first (fails if broken); then a `127.255.255.x`
-  answer, SERVFAIL or timeout skips with a reason (provider-side), while a wrong answer for the
+  answer, NXDOMAIN for the listed entry (FAQ: public resolvers or generic-rDNS IPs get "not
+  listed"), SERVFAIL or timeout skips with a reason (provider-side), while a wrong answer for the
   test entry fails. Maintainer to confirm the provider choice.
 - A local run on 2026-11-04 (residential network) got real ZEN answers (127.0.0.2, .4, .10).
 
@@ -177,8 +184,6 @@ raise `ATTEMPTS`; do not make it non-blocking without maintainer approval.
 - RFC 4034 Appendix B (key tag), RFC 5011 (trust anchor updates).
 
 ## Unverified (maintainer to confirm)
-- Debian's built-in default for `chroot` (the manual says `/usr/local/etc/unbound`, the Debian
-  package evidently differs; tested to work without the option).
 - Behaviour on other runtimes (rootless Docker, Podman, Docker Desktop on macOS): named-volume
   copy-up with `read_only`, `cap_drop ALL`. Tested on Docker 29.9.2 (Linux/WSL2) only.
 - Spamhaus: runner IP treatment and the non-commercial condition (see Tests).

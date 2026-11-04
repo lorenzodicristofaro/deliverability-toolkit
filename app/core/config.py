@@ -84,6 +84,9 @@ def parse_resolver_addrs(value: str) -> list[ResolverAddr]:
       listens on 5353, so configure ``172.28.53.2:5353`` explicitly for it.
     - Whitespace around entries is ignored. An empty or whitespace-only string yields an empty
       list; an empty entry inside a list ("a,,b", trailing comma) is an error.
+    - Leading zeros in a port are accepted (``:053`` is 53). An IPv4-mapped IPv6 address
+      (``[::ffff:1.2.3.4]``) is accepted as IPv6 and kept as such (not converted to IPv4).
+      Duplicate entries are kept as given, in order; they are not de-duplicated.
     - Raises ConfigError(``config.resolver_addr.invalid``) naming the offending entry.
     No DNS or network access.
     """
