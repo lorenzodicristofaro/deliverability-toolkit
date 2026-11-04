@@ -13,8 +13,8 @@ services:
       - "8000:8000"
     environment:
       DATABASE_URL: ${DATABASE_URL:-sqlite:////data/app.db}
-      SECRET_KEY: ${SECRET_KEY:-}          # not consumed until M1
-      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-}  # not consumed until M1
+      SECRET_KEY: ${SECRET_KEY:-}          # required since M1; the app refuses to start if empty
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-}  # required since M1; the app refuses to start if empty
     volumes:
       - app-data:/data
     healthcheck:
