@@ -12,8 +12,8 @@ from app.core.config import Settings
 from app.core.logging import JsonFormatter, configure_logging
 from app.main import create_app
 
-SECRET = "s3cr3t-signing-value"  # noqa: S105
-ENC = 'enc-k3y/with"quote'
+SECRET = "s3cr3t-signing-value-0123456789abcdef"  # noqa: S105
+ENC = 'enc-k3y/with"quote-0123456789abcdef'
 SECRETS = [SECRET, ENC]
 
 

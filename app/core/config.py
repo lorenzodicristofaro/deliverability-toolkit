@@ -10,6 +10,7 @@ from pydantic import SecretStr, ValidationError, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 DEFAULT_RESOLVER_PORT = 53
+MIN_SECRET_LENGTH = 32
 
 RESOLVER_ADDR_INVALID_KEY = "config.resolver_addr.invalid"
 # i18n keys; the locale files are created by M1-09, until then these are constants only.
@@ -116,7 +117,8 @@ class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(extra="ignore", frozen=True)
 
-    database_url: str = "sqlite:////data/app.db"
+    # SecretStr: a PostgreSQL URL carries the password; repr/str mask it.
+    database_url: SecretStr = SecretStr("sqlite:////data/app.db")
     secret_key: SecretStr
     encryption_key: SecretStr
     resolver_mode: Literal["system", "custom", "unbound"] = "system"
@@ -132,6 +134,14 @@ class Settings(BaseSettings):
     def _not_blank(cls, value: SecretStr) -> SecretStr:
         if value.get_secret_value().strip() == "":
             raise ValueError("blank")
+        return value
+
+    @field_validator("secret_key", "encryption_key", mode="after")
+    @classmethod
+    def _min_length(cls, value: SecretStr) -> SecretStr:
+        # Very short secrets would make log value-masking match arbitrary text.
+        if len(value.get_secret_value()) < MIN_SECRET_LENGTH:
+            raise ValueError("too short")
         return value
 
     @field_validator("log_level", mode="before")
@@ -151,7 +161,7 @@ class Settings(BaseSettings):
             err = exc.errors(include_input=False, include_url=False)[0]
             name = str(err["loc"][0]) if err["loc"] else "settings"
             # Drop the pydantic exception: its repr would include input values (secrets).
-            if name in _SECRET_FIELDS:
+            if name in _SECRET_FIELDS and "too short" not in err["msg"]:
                 raise ConfigError(CONFIG_MISSING_KEY, name=name.upper()) from None
             raise ConfigError(CONFIG_INVALID_VALUE_KEY, name=name.upper()) from None
         if not self.base_url.startswith(("http://", "https://")):
