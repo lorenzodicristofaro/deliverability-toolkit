@@ -16,4 +16,4 @@ New i18n keys: none
 - Dev dependency switched from `httpx` to `httpx2` (Starlette 1.10.0 deprecates plain httpx in TestClient; QA confirmed at https://starlette.dev/testclient/). Use `uv remove --dev httpx` and `uv add --dev httpx2`; pytest runs without StarletteDeprecationWarning.
 - tests/test_health.py asserts /healthz sets no `set-cookie` header (protects the "unauthenticated, no data exposed" contract once M1 adds sessions).
 - HEAD /healthz answers 200 (app/web/health.py), with a test case in tests/test_health.py.
-Status: done (QA APPROVE, merged to dev in b4d23c6), except the `data/` item (first acceptance criterion): deferred, waiting on the maintainer: ARCHITECTURE.md is read-only and the seed path vs the runtime /data path needs deciding. Tracked in M0-07.
+Status: done (QA APPROVE, merged to dev in b4d23c6), including the `data/` item (first acceptance criterion): resolved by maintainer decision: seeds moved to /seeds in ARCHITECTURE; .gitignore handled in M0-08.
