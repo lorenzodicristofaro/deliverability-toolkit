@@ -2,7 +2,8 @@
 
 domain_access carries tenant_id and composite FKs to memberships(id, tenant_id) and
 domains(id, tenant_id), so a cross-tenant grant is rejected by the database (SQLite and
-PostgreSQL). Deleting a tenant or a user cascades to the rows that depend on it.
+PostgreSQL). Deleting a tenant cascades to its rows; deleting a user with memberships is
+restricted (users are deactivated via is_active).
 
 Revision ID: 0002
 Revises: 0001
@@ -68,8 +69,8 @@ def upgrade() -> None:
             ondelete="CASCADE",
         ),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_domains")),
-        sa.UniqueConstraint("id", "tenant_id", name=op.f("uq_domains_id")),
-        sa.UniqueConstraint("tenant_id", "name", name=op.f("uq_domains_tenant_id")),
+        sa.UniqueConstraint("id", "tenant_id", name=op.f("uq_domains_id_tenant_id")),
+        sa.UniqueConstraint("tenant_id", "name", name=op.f("uq_domains_tenant_id_name")),
     )
     op.create_table(
         "memberships",
@@ -99,11 +100,11 @@ def upgrade() -> None:
             ["user_id"],
             ["users.id"],
             name=op.f("fk_memberships_user_id_users"),
-            ondelete="CASCADE",
+            ondelete="RESTRICT",
         ),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_memberships")),
-        sa.UniqueConstraint("id", "tenant_id", name=op.f("uq_memberships_id")),
-        sa.UniqueConstraint("user_id", "tenant_id", name=op.f("uq_memberships_user_id")),
+        sa.UniqueConstraint("id", "tenant_id", name=op.f("uq_memberships_id_tenant_id")),
+        sa.UniqueConstraint("user_id", "tenant_id", name=op.f("uq_memberships_user_id_tenant_id")),
     )
     op.create_index(op.f("ix_memberships_tenant_id"), "memberships", ["tenant_id"])
     op.create_table(
@@ -114,13 +115,13 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(
             ["domain_id", "tenant_id"],
             ["domains.id", "domains.tenant_id"],
-            name=op.f("fk_domain_access_domain_id_domains"),
+            name=op.f("fk_domain_access_domain_id_tenant_id_domains"),
             ondelete="CASCADE",
         ),
         sa.ForeignKeyConstraint(
             ["membership_id", "tenant_id"],
             ["memberships.id", "memberships.tenant_id"],
-            name=op.f("fk_domain_access_membership_id_memberships"),
+            name=op.f("fk_domain_access_membership_id_tenant_id_memberships"),
             ondelete="CASCADE",
         ),
         sa.ForeignKeyConstraint(

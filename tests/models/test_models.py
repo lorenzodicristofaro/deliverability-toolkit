@@ -23,15 +23,17 @@ ROOT = Path(__file__).resolve().parents[2]
 KEY = "k" * 40
 CORE_TABLES = {"users", "tenants", "memberships", "domains", "domain_access"}
 
-# Seed: two tenants, one user member of both, the same domain name in both tenants.
+# Seed: two tenants, one user member of both, one user with no membership, the same domain name
+# in both tenants, a client viewer (membership 3) with access to domains 1 and 3 of tenant 1.
 SEED = [
     "INSERT INTO tenants (id, name, slug) VALUES (1, 'Tenant A', 'a'), (2, 'Tenant B', 'b')",
-    "INSERT INTO users (id, email) VALUES (1, 'one@example.com'), (2, 'two@example.com')",
+    "INSERT INTO users (id, email) VALUES (1, 'one@example.com'), (2, 'two@example.com'), "
+    "(3, 'three@example.com')",
     "INSERT INTO memberships (id, user_id, tenant_id, role) VALUES "
     "(1, 1, 1, 'owner'), (2, 1, 2, 'client_viewer'), (3, 2, 1, 'client_viewer')",
     "INSERT INTO domains (id, tenant_id, name) VALUES "
     "(1, 1, 'example.com'), (2, 2, 'example.com'), (3, 1, 'example.org')",
-    "INSERT INTO domain_access (membership_id, domain_id, tenant_id) VALUES (3, 1, 1)",
+    "INSERT INTO domain_access (membership_id, domain_id, tenant_id) VALUES (3, 1, 1), (3, 3, 1)",
 ]
 
 
@@ -126,13 +128,30 @@ VIOLATIONS = [
     ("user with null email", U + "(NULL)"),
     ("duplicate tenant slug", T + "('Other', 'a')"),
     ("tenant with null slug", T + "('Other', NULL)"),
+    # Users are deactivated, not deleted: memberships restrict the delete.
+    ("delete user with memberships", "DELETE FROM users WHERE id = 2"),
+    ("delete user with memberships in two tenants", "DELETE FROM users WHERE id = 1"),
+    # Key changes under existing references (ON UPDATE NO ACTION) must not move rows across
+    # tenants or orphan access rows.
+    ("move membership with access rows", "UPDATE memberships SET tenant_id = 2 WHERE id = 3"),
+    ("move domain with access rows", "UPDATE domains SET tenant_id = 2 WHERE id = 3"),
+    (
+        "change domain_access tenant",
+        "UPDATE domain_access SET tenant_id = 2 WHERE membership_id = 3 AND domain_id = 1",
+    ),
+    (
+        "point domain_access at another tenant's domain",
+        "UPDATE domain_access SET domain_id = 2 WHERE membership_id = 3 AND domain_id = 1",
+    ),
+    ("change referenced tenant id", "UPDATE tenants SET id = 99 WHERE id = 1"),
+    ("change referenced membership id", "UPDATE memberships SET id = 99 WHERE id = 3"),
 ]
 
 ALLOWED = [
     ("same domain name in another tenant", D + "(2, 'example.org')"),
-    ("same-tenant domain_access", A + "(3, 3, 1)"),
+    ("same-tenant domain_access", A + "(1, 3, 1)"),
     ("user in a second tenant", M + "(2, 2, 'analyst')"),
-    ("distinct email", U + "('three@example.com')"),
+    ("distinct email", U + "('four@example.com')"),
 ]
 
 
@@ -174,23 +193,23 @@ DELETES = [
     # (statement, expected remaining rows per table)
     (
         "DELETE FROM tenants WHERE id = 1",
-        {"tenants": 1, "users": 2, "memberships": 1, "domains": 1, "domain_access": 0},
+        {"tenants": 1, "users": 3, "memberships": 1, "domains": 1, "domain_access": 0},
     ),
     (
-        "DELETE FROM users WHERE id = 2",
-        {"tenants": 2, "users": 1, "memberships": 2, "domains": 3, "domain_access": 0},
+        "DELETE FROM users WHERE id = 3",  # no memberships: allowed
+        {"tenants": 2, "users": 2, "memberships": 3, "domains": 3, "domain_access": 2},
     ),
     (
         "DELETE FROM domains WHERE id = 1",
-        {"tenants": 2, "users": 2, "memberships": 3, "domains": 2, "domain_access": 0},
+        {"tenants": 2, "users": 3, "memberships": 3, "domains": 2, "domain_access": 1},
     ),
     (
         "DELETE FROM memberships WHERE id = 3",
-        {"tenants": 2, "users": 2, "memberships": 2, "domains": 3, "domain_access": 0},
+        {"tenants": 2, "users": 3, "memberships": 2, "domains": 3, "domain_access": 0},
     ),
     (
         "DELETE FROM domains WHERE id = 2",
-        {"tenants": 2, "users": 2, "memberships": 3, "domains": 2, "domain_access": 1},
+        {"tenants": 2, "users": 3, "memberships": 3, "domains": 2, "domain_access": 2},
     ),
 ]
 
@@ -236,7 +255,9 @@ def test_orm_roundtrip(migrated: Engine) -> None:
         domain = Domain(tenant_id=tenant.id, name=" Mail.Example.COM. ")
         session.add_all([membership, domain])
         session.flush()
-        session.add(DomainAccess(membership_id=membership.id, domain_id=domain.id, tenant_id=1))
+        session.add(
+            DomainAccess(membership_id=membership.id, domain_id=domain.id, tenant_id=tenant.id)
+        )
     with factory() as session:
         stored = session.scalars(select(Membership)).one()
         assert stored.role is MembershipRole.CLIENT_VIEWER
