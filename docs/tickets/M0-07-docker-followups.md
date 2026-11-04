@@ -37,7 +37,49 @@ Verification and reporting
 - Docker runtime checks (up, healthcheck, ownership) are covered by CI in M0-05.
 
 New i18n keys: none
-Status: done (branch feat/M0-07-unbound; QA pending)
+Status: rework (round 2). Round 1: done on branch feat/M0-07-unbound, QA APPROVE (opus), merged into dev locally (not pushed). Round 1 history is not reopened; round 2 is a new branch from dev.
+
+## Rework round 2 — maintainer 2026-11-04
+Branch: fix/M0-07-unbound-r2 (from dev). Model: sonnet. Parallel-safe: no (compose.yaml, ci.yml, app config shared).
+Files in scope (adds to round 1): docker/unbound/Dockerfile, docker/unbound/unbound.conf, compose.yaml, .github/workflows/*.yml, docs/UNBOUND.md, README.md (arm64 note only if E takes the "untested" option), app config module that parses RESOLVER_ADDRS (coder locates it), tests/ (unit + new integration dir), pyproject.toml (pytest marker only), locale files en+it (only if a new error string is needed), ARCHITECTURE.md (ONLY the RESOLVER_ADDRS format line, authorized by the maintainer for this commit).
+Out of scope: everything else in app code, SPEC.md, other ARCHITECTURE.md content.
+Folded in from M0-09 (now superseded): items a, c, d. Item b is obsolete (sysctl removed).
+
+Acceptance criteria:
+A. Trust anchor
+- Fact (verified 2026-11-04): since 2026-10-11 the root DNSKEY RRset is signed only by KSK-2024, key tag 38696. Sources: https://www.iana.org/news/2026/root-zone-begins-using-new-ksk-2026 ; https://www.icann.org/resources/pages/ksk-rollover . KSK-2017 (tag 20326) revocation is planned for 2027. Record sources and verified_on in docs/UNBOUND.md.
+- A1. Automated test (no network; runs against the BUILT image, e.g. `docker run --rm <image> cat <root.key path>`) asserts key tag 38696 is present in root.key. Computing the tag from the DNSKEY record must be done by the test (RFC 4034 App. B) or via a tool in the image; do not grep a hardcoded string only.
+- A2. root.key lives in a named volume writable by the `unbound` user so RFC 5011 updates persist; the volume is seeded from the image on first start (named-volume copy-up or an entrypoint step; verify the mechanism works with read_only rootfs, see D-hardening below). Test: after `down` and `up` without `-v`, the file in the volume is retained.
+- A3. Healthcheck resolves a DNSSEC-signed name and verifies validation (AD flag), not just process liveness. Use only tools present in the image (verify; add a package only if needed and document). 
+- Known risk (document in docs/UNBOUND.md): the healthcheck depends on external resolution, so the container reports unhealthy when the host is offline or egress to root servers is blocked. Document the behaviour, the healthcheck interval/retries/start_period chosen, and that `depends_on: condition: service_healthy` on unbound will block dependents in that case.
+B. Port
+- Unbound listens on unprivileged port 5353 (udp+tcp) inside the compose network only; never published. Remove the `net.ipv4.ip_unprivileged_port_start` sysctl from compose.yaml and any docs mention.
+- `RESOLVER_ADDRS` accepts comma-separated `host:port` entries, including bracketed IPv6 (`[::1]:5353`); an entry without a port keeps the documented default (coder states which default in the parser docstring, 53). Parser lives in the app config; table-driven unit tests cover: IPv4 with/without port, bracketed IPv6 with/without port, unbracketed IPv6 (reject or documented behaviour), port 0 / 65536 / non-numeric, empty entry, empty string, whitespace, hostname vs IP (per current spec). No network in tests.
+- ARCHITECTURE.md: update the RESOLVER_ADDRS format line in the same commit.
+- Any user-facing error string uses an i18n key (en+it); list new keys below. If errors are only raised at startup as exceptions for operators, still state the choice in the PR.
+C. Config audit
+- docs/UNBOUND.md gets a table of every unbound.conf option that is not required by this ticket, each with a concrete justification and a link to the official unbound.conf manual (NLnet Labs, https://unbound.docs.nlnetlabs.nl/en/latest/manual/unbound/unbound.conf.html). Options without a concrete reason are removed from unbound.conf.
+- Specifically re-evaluate (a) root-hints from file (built-in hints vs file; keep only with a cited reason, including who updates the file) and (b) every harden-* option against the manual (default value, what it protects, whether it is already default). Remove ones that are defaults unless explicit-setting is justified.
+- Any claim not verifiable in the manual is marked `unverified`.
+D. Integration tests (pytest marker, e.g. `integration`; excluded from the default `uv run pytest -q` run via marker config; run in CI with Docker, the job name documented)
+- Tests run from a container on the `dns` network (or equivalent) against the built image and cover: DNSSEC validation (AD on a signed name), SERVFAIL on bad signature (dnssec-failed.org, confirm with +cd NOERROR if feasible), NXDOMAIN, REFUSED for a query from outside the allowed subnet (second network/container or host-side attempt; state the method), and a DNSBL test-entry query.
+- DNSBL test entry: semantics (e.g. 127.0.0.2 test point, expected answer) and any restriction on queries from cloud/CI/public-resolver IPs MUST be checked in the chosen provider's official docs and cited. If not verifiable, mark `unverified` in the test and docs/UNBOUND.md, and the test must skip or xfail (not fail CI) on a provider-side block (e.g. answer in 127.255.255.x or REFUSED/timeouts); it must still fail on a local malfunction. Coder proposes provider, GM/maintainer confirms; do not invent.
+- Unit run stays offline and unchanged in duration.
+E. arm64: either a QEMU smoke test in CI (start the arm64 container, resolve a signed name, check AD) OR arm64 clearly marked "untested" in docs/UNBOUND.md and README. Coder picks one and states it; if smoke test is chosen, a flaky/timeouts policy is documented.
+F. Hardening (from M0-09 c, d, a)
+- compose.yaml unbound service: `cap_drop: [ALL]`, `security_opt: [no-new-privileges:true]`, `read_only: true`, tmpfs for `/run/unbound` (and any other path found necessary), writable named volume for root.key (A2). Port 5353 needs no capability. If any capability or writable path is needed, add back only the minimum, verified at runtime and documented.
+- No fixed `image:` name `deliverability-toolkit-unbound:local`: drop it or tie it to the compose project name.
+- docs/UNBOUND.md: cite the dns-root-data README.Debian as read from the .deb (slim image has no /usr/share/doc) and state how it was obtained.
+G. Before merge: no leftover containers, networks or volumes from the project (`docker ps -a`, `docker network ls`, `docker volume ls` filtered by the project). GM did this once on 2026-11-04; re-check and record output in the verification record.
+H. Generic: `docker compose --profile unbound config -q` OK; lint and default tests green; unbound.conf subnet still matches the compose subnet; no references to port 53 left in docs/compose for the container side (host never publishes). Append a "Round 2 verification record" to this ticket. Anything unverifiable is marked `unverified` and reported to the GM.
+
+New i18n keys (round 2): only if the RESOLVER_ADDRS parser surfaces a user-facing message; coder lists them here (en+it). Expected: none or `config.resolver_addr.invalid`.
+Review: security-relevant (isolation, caps, trust anchor); opus QA required for round 2.
+
+## M1 follow-ups (from QA)
+- Attach the app service to the `dns` network and point the guarded client at 172.28.53.2.
+- Add a CI runtime check of the `unbound` profile (up, healthy, AD flag, port 53 unpublished).
+- Awareness: the healthcheck (`unbound-control`) only proves the process is up, not that resolution works.
 
 ## Verification record (2026-11-04, Docker 29.9.2, Linux/WSL2, run locally)
 - `docker compose --profile unbound config -q`: OK.
