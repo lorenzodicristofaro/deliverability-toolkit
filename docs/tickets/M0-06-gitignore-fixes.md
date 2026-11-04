@@ -1,6 +1,6 @@
 # M0-06 toolchain and health fixes (M0-02 and M0-03 QA follow-ups)
 Milestone: M0
-Branch: feature/m0-06-gitignore-fixes
+Branch: feature/m0-06-toolchain-health-fixes
 Files in scope: .gitignore, pyproject.toml, uv.lock, tests/test_health.py, app/web/health.py, CLAUDE.md (Commands section, test line only, and only if that is the option chosen)
 Out of scope: any app code, CI, Docker, other pyproject.toml settings
 Depends on: M0-02 (merged)
@@ -16,4 +16,4 @@ New i18n keys: none
 - Dev dependency switched from `httpx` to `httpx2` (Starlette 1.10.0 deprecates plain httpx in TestClient; QA confirmed at https://starlette.dev/testclient/). Use `uv remove --dev httpx` and `uv add --dev httpx2`; pytest runs without StarletteDeprecationWarning.
 - tests/test_health.py asserts /healthz sets no `set-cookie` header (protects the "unauthenticated, no data exposed" contract once M1 adds sessions).
 - HEAD /healthz answers 200 (app/web/health.py), with a test case in tests/test_health.py.
-Status: todo
+Status: done (QA APPROVE, merged to dev in b4d23c6), except the `data/` item (first acceptance criterion): deferred, waiting on the maintainer: ARCHITECTURE.md is read-only and the seed path vs the runtime /data path needs deciding. Tracked in M0-07.

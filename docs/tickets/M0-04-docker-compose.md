@@ -12,4 +12,6 @@ Acceptance criteria:
 - Optional profile `unbound` and profile `postgres`: separate services only started with `--profile`. Image names/tags, Unbound config and Postgres env vars must come from official documentation; mark UNVERIFIED in a comment and in the summary anything not confirmed. Postgres password via env var with no real default committed (placeholder requiring user input, or a clearly dev-only value flagged to GM).
 - `docker compose config` validates for default and with each profile; `docker compose up` then `curl localhost:<port>/healthz` returns 200 (coder reports whether Docker was available to test; if not, say so).
 New i18n keys: none
-Status: todo
+Status: done (QA APPROVE, merged to dev in af1620c)
+
+Runtime UNVERIFIED: no access to the Docker daemon, so none of these were run: image build, `docker compose up`, /healthz, container healthcheck, volume ownership of /data, postgres/unbound profile startup. CI verifies this in M0-05. Follow-ups in M0-07.
