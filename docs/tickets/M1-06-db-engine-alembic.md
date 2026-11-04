@@ -17,4 +17,4 @@ Acceptance criteria:
 - SECRET_KEY and ENCRYPTION_KEY have a minimum length (at least 32 characters) enforced in Settings, with config.invalid_value and a table-driven test (QA follow-up from M1-03: very short secrets break log value-masking).
 - No tenant data access in this ticket.
 New i18n keys: none
-Status: todo
+Status: done (merged into dev, QA APPROVE, 229 passed + 1 PG skipped; log masking of DB password moved to M1-07)

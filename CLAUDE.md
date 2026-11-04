@@ -28,4 +28,4 @@ Read `SPEC.md`, `ARCHITECTURE.md` and `TODO.md` at the start of every session.
 - test: `uv run pytest -q --tb=short`
 - lint: `uv run ruff check . && uv run ruff format --check . && uv run mypy app`
 - pre-commit install: `uv run pre-commit install`
-- migrate: not yet available (M1)
+- migrate: `uv run alembic upgrade head` (the Docker image runs it before uvicorn)
