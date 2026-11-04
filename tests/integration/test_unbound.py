@@ -210,3 +210,34 @@ def test_container_hardening(stack: Stack) -> None:
 
 def test_healthcheck_is_healthy(stack: Stack) -> None:
     assert _inspect(stack)["State"]["Health"]["Status"] == "healthy"
+
+
+# --- app on the dns network (M1-04) ------------------------------------------------------------
+
+# Runs inside the app container with the stdlib only: a minimal UDP DNS query ("." SOA, RD set,
+# id 0x1234) to the resolver; any reply carrying the same id proves the path app -> unbound.
+_APP_PROBE = (
+    "import socket;"
+    "q=bytes.fromhex('123401000001000000000000')+b'\\x00'+bytes.fromhex('00060001');"
+    "s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);s.settimeout(5);"
+    "s.sendto(q,('172.28.53.2',5353));d=s.recv(512);"
+    "raise SystemExit(0 if d[:2]==bytes.fromhex('1234') else 1)"
+)
+
+
+def test_app_on_dns_network_reaches_unbound(stack: Stack) -> None:
+    """With the unbound profile the `app` container is on `dns` and 172.28.53.2:5353 answers.
+
+    `compose run` keeps the service networks, publishes no host port (no --service-ports) and
+    bypasses the uvicorn CMD, so no app keys are needed and host port 8000 is not touched.
+    """
+    app = f"{stack.project}-app-probe"
+    try:
+        stack.compose("run", "-d", "--no-deps", "--name", app, "app", "sleep", "120")
+        nets = json.loads(run("docker", "inspect", app).stdout)[0]["NetworkSettings"]["Networks"]
+        assert stack.network in nets, list(nets)
+        ip = nets[stack.network]["IPAddress"]
+        assert ipaddress.ip_address(ip) in ipaddress.ip_network("172.28.53.128/25"), ip
+        run("docker", "exec", app, "python", "-c", _APP_PROBE)
+    finally:
+        run("docker", "rm", "-f", app, check=False)

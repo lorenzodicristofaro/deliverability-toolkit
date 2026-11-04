@@ -148,7 +148,10 @@ Removed (no concrete justification, or equal to the default):
   (native Linux, gateway rule) or no answer (WSL/VM Docker), never a resolution; on
   `127.0.0.1:5353` a host mDNS responder (avahi) may answer, so the test only requires that it is
   not Unbound resolving (NOERROR with RA and AD/answers), see `host_probe_is_unbound`); read-only rootfs, `cap_drop ALL`,
-  no-new-privileges, no sysctls; healthy; root.key persistence across `down`/`up`.
+  no-new-privileges, no sysctls; healthy; root.key persistence across `down`/`up`; the `app`
+  container is attached to `dns` (address in the upper half, `172.28.53.128/25`) and gets a DNS
+  answer from `172.28.53.2:5353` (`docker exec` + stdlib UDP socket, no tools added to the image).
+  Mapping of the CI runtime check (up, healthy, AD, 5353 unpublished) to tests: M1-08 PR summary.
 - REFUSED method: the shipped config only listens on `172.28.53.2`/`127.0.0.1`, so a client
   elsewhere would just time out. The test starts a probe from the same image with the shipped
   `unbound.conf` where only the `interface:` lines are replaced by `0.0.0.0`, on the compose

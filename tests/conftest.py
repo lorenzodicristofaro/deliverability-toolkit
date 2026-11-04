@@ -29,6 +29,16 @@ def refusal_reason(test_url: str, app_url: str | None) -> str | None:
     return None
 
 
+def pytest_sessionstart(session: pytest.Session) -> None:
+    """Refuse an unsafe TEST_DATABASE_URL before anything is collected or run (exit code 2)."""
+    url = os.environ.get("TEST_DATABASE_URL")
+    if not url:
+        return
+    reason = refusal_reason(url, os.environ.get("DATABASE_URL"))
+    if reason:
+        pytest.exit(f"Refusing to reset the test database: {reason}", returncode=2)
+
+
 def _reset_postgres(url: str) -> None:
     """Drop only what this project creates, so a clean schema is guaranteed per test."""
     engine = create_db_engine(url)
@@ -55,10 +65,7 @@ def db_url(request: pytest.FixtureRequest, tmp_path: Path) -> Iterator[str]:
     if request.param == "sqlite":
         yield f"sqlite:///{tmp_path / 'test.db'}"
         return
-    url = os.environ["TEST_DATABASE_URL"]
-    reason = refusal_reason(url, os.environ.get("DATABASE_URL"))
-    if reason:
-        pytest.exit(f"Refusing to reset the test database: {reason}", returncode=2)
+    url = os.environ["TEST_DATABASE_URL"]  # already vetted in pytest_sessionstart
     _reset_postgres(url)
     yield url
     _reset_postgres(url)
