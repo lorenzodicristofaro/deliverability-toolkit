@@ -12,4 +12,4 @@ Acceptance criteria:
 - A code comment states that M10 re-exposes OpenAPI behind authentication.
 - GM decision 2026-11-04 (M1-01 Q2): disable; revisit with auth/API keys in M10.
 New i18n keys: none
-Status: todo
+Status: done (merged into dev, QA APPROVE, 108 tests)
