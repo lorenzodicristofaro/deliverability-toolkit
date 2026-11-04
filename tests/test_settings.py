@@ -12,8 +12,8 @@ from app.core.config import (
 )
 from app.main import create_app
 
-SECRET = "s3cr3t-value-DO-NOT-LEAK"
-ENC = "enc-value-DO-NOT-LEAK"
+SECRET = "s3cr3t-value-DO-NOT-LEAK-0123456789abcdef"
+ENC = "enc-value-DO-NOT-LEAK-0123456789abcdef-xyz"
 VARS = [
     "DATABASE_URL",
     "SECRET_KEY",
@@ -43,7 +43,7 @@ def load(monkeypatch: pytest.MonkeyPatch, **env: str) -> Settings:
 
 def test_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     s = load(monkeypatch)
-    assert s.database_url == "sqlite:////data/app.db"
+    assert s.database_url.get_secret_value() == "sqlite:////data/app.db"
     assert s.resolver_mode == "system"
     assert s.role == "all"
     assert s.allow_smtp_checks is False
@@ -178,3 +178,28 @@ def test_startup_loads_env(monkeypatch: pytest.MonkeyPatch) -> None:
     load(monkeypatch)
     with TestClient(create_app()) as client:
         assert client.get("/healthz").status_code == 200
+
+
+@pytest.mark.parametrize("var", ["SECRET_KEY", "ENCRYPTION_KEY"])
+@pytest.mark.parametrize(
+    ("value", "ok"),
+    [("x", False), ("a" * 31, False), ("é" * 31, False), ("a" * 32, True), ("a" * 43, True)],
+)
+def test_secret_minimum_length(
+    monkeypatch: pytest.MonkeyPatch, var: str, value: str, ok: bool
+) -> None:
+    if ok:
+        load(monkeypatch, **{var: value})
+        return
+    with pytest.raises(ConfigError) as excinfo:
+        load(monkeypatch, **{var: value})
+    assert excinfo.value.key == CONFIG_INVALID_VALUE_KEY
+    assert excinfo.value.params == {"name": var}
+    assert value not in f"{excinfo.value} {excinfo.value!r}"
+
+
+def test_database_url_credentials_not_in_repr(monkeypatch: pytest.MonkeyPatch) -> None:
+    s = load(monkeypatch, DATABASE_URL="postgresql://user:pass-DO-NOT-LEAK@host/db")
+    for text in (repr(s), str(s)):
+        assert "pass-DO-NOT-LEAK" not in text
+    assert s.database_url.get_secret_value() == "postgresql://user:pass-DO-NOT-LEAK@host/db"
