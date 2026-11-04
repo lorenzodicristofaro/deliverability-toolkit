@@ -14,4 +14,4 @@ Acceptance criteria:
 - Locally: `docker compose --profile postgres` or a throwaway container runs the suite green on PostgreSQL; coder reports it. The GitHub run itself is unverified until the GM pushes `dev`.
 - Third-party actions stay SHA-pinned; none added unless required (service containers need no action).
 New i18n keys: none
-Status: todo
+Status: done (merged into dev, QA APPROVE after fix round 1; SQLite 245 passed, PG 249 passed locally; test-DB guard verified with canary table)
