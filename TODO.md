@@ -4,7 +4,7 @@ Rule: finish one milestone (code + tests + docs + commit) before starting the ne
 Mark items `[x]` when done. Acceptance criteria are the definition of done.
 
 ## M0 — Project setup
-- [ ] Repo, AGPL-3.0 LICENSE, README stub, CONTRIBUTING (DCO), CODE_OF_CONDUCT
+- [x] Repo, AGPL-3.0 LICENSE, README stub, CONTRIBUTING (DCO), CODE_OF_CONDUCT
 - [ ] uv project, ruff, mypy, pytest, pre-commit, GitHub Actions CI
 - [ ] Dockerfile (multi-arch) + compose.yaml with optional `unbound` / `postgres` profiles
 - Accept: `docker compose up` serves a health page; CI green.

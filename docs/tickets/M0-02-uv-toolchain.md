@@ -15,4 +15,4 @@ Acceptance criteria:
 - CLAUDE.md "Commands" section filled: install (`uv sync`), run (`uv run uvicorn app.main:app --reload`; the module path `app.main:app` is the contract M0-03 must satisfy), test (`uv run pytest -q --tb=short`), lint (`uv run ruff check . && uv run ruff format --check . && uv run mypy app`), pre-commit install, plus a "migrate: not yet available (M1)" line. No other CLAUDE.md edits.
 - `uv sync`, ruff, mypy and pytest all pass locally from a clean checkout; uv.lock committed.
 New i18n keys: none
-Status: todo
+Status: done (QA APPROVE, merged to dev in ce47b46; follow-ups in M0-06)

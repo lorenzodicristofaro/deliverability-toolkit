@@ -13,4 +13,5 @@ Acceptance criteria:
 - CODE_OF_CONDUCT.md is the official Contributor Covenant text from https://www.contributor-covenant.org/ (state the version used and the URL in the file header comment or commit message). Enforcement contact: leave a clearly marked placeholder `TODO(maintainer): contact` and report it to the GM; do not invent an address.
 - Files are plain Markdown/text; markdown has no broken relative links.
 New i18n keys: none
-Status: todo
+Status: done (QA APPROVE, merged to dev in 27cab65)
+Open item: Code of Conduct enforcement contact (CODE_OF_CONDUCT.md:41) must be supplied by the maintainer before release.
