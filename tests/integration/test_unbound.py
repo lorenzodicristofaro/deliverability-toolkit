@@ -16,7 +16,7 @@ from pathlib import Path
 import pytest
 
 from tests.dnssec_tag import root_key_tags
-from tests.integration.stack import REPO, UNBOUND_IP, Stack, run
+from tests.integration.stack import REPO, UNBOUND_IP, Stack, host_probe_is_unbound, run
 
 pytestmark = pytest.mark.integration
 
@@ -184,13 +184,18 @@ def test_nothing_published_on_host(stack: Stack) -> None:
     # Host side, via a container in the host's network namespace. Native Linux Docker: the host
     # reaches 172.28.53.2 from the gateway 172.28.53.1, which unbound.conf refuses -> REFUSED.
     # WSL / VM-based Docker: the address is unreachable -> no answer. Either is acceptable;
-    # a resolved answer is not. Port 53 and loopback 5353 must give no answer either.
-    for server, port in [(UNBOUND_IP, 5353), (UNBOUND_IP, 53), ("127.0.0.1", 5353)]:
+    # a resolved answer is not. Port 53 must give no answer either.
+    for server, port in [(UNBOUND_IP, 5353), (UNBOUND_IP, 53)]:
         try:
             ans = stack.drill("ietf.org", "A", server=server, port=port, network="host")
         except ValueError:
             continue  # no response at all
         assert ans.rcode == "REFUSED", f"host reached {server}:{port}:\n{ans.raw}"
+    # Loopback 5353 may legitimately be a host mDNS responder (avahi): it can time out, send
+    # garbage, or refuse. Not being published (asserted above) plus "no resolution by Unbound
+    # (RA/AD answer)" is the check; REFUSED is not required.
+    raw = stack.drill_raw("ietf.org", "A", server="127.0.0.1", port=5353, network="host")
+    assert not host_probe_is_unbound(raw), f"host loopback 5353 resolves via Unbound:\n{raw}"
 
 
 def test_container_hardening(stack: Stack) -> None:

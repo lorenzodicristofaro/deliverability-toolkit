@@ -47,6 +47,20 @@ def parse_drill(output: str) -> Answer:
     return Answer(rcode.group(1), set(flags.group(1).split()), answers, output)
 
 
+def host_probe_is_unbound(output: str) -> bool:
+    """True if drill output from a host-side probe looks like Unbound resolving for us.
+
+    A host mDNS responder (avahi) may own 127.0.0.1:5353: it times out, answers garbage or
+    refuses, none of which is Unbound. Only a NOERROR answer with RA (recursion available) and
+    AD (validated) or answer records counts as a resolution by our resolver.
+    """
+    try:
+        ans = parse_drill(output)
+    except ValueError:
+        return False  # timeout / not a DNS response
+    return ans.rcode == "NOERROR" and "ra" in ans.flags and ("ad" in ans.flags or bool(ans.answers))
+
+
 class Stack:
     """A throwaway compose project running the `unbound` profile (project name unique per run)."""
 
@@ -87,6 +101,11 @@ class Stack:
         self, *query: str, server: str = UNBOUND_IP, port: int = UNBOUND_PORT, network: str = ""
     ) -> Answer:
         """Run drill from a throwaway container (same image) on the given network (default dns)."""
+        return parse_drill(self.drill_raw(*query, server=server, port=port, network=network))
+
+    def drill_raw(
+        self, *query: str, server: str = UNBOUND_IP, port: int = UNBOUND_PORT, network: str = ""
+    ) -> str:
         proc = run(
             "docker",
             "run",
@@ -103,4 +122,4 @@ class Stack:
             timeout=60,
             check=False,
         )
-        return parse_drill(proc.stdout)
+        return proc.stdout
