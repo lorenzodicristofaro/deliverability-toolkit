@@ -17,6 +17,7 @@ from sqlalchemy.exc import IntegrityError
 from app.core.db import create_db_engine, create_session_factory
 from app.models import Base, Domain, DomainAccess, Membership, MembershipRole, Tenant, User
 from app.models.domain import normalize_domain_name
+from app.models.user import normalize_email
 
 ROOT = Path(__file__).resolve().parents[2]
 KEY = "k" * 40
@@ -278,3 +279,36 @@ def test_normalize_domain_name(raw: str, expected: str) -> None:
 def test_normalize_domain_name_rejects_malformed(raw: str) -> None:
     with pytest.raises(ValueError):
         normalize_domain_name(raw)
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("user@example.com", "user@example.com"),
+        ("  User@Example.COM \n", "user@example.com"),
+        ("ÉLODIE@Exemple.fr", "élodie@exemple.fr"),
+        ("STRASSE@example.de", "strasse@example.de"),
+        ("Straße@example.de", "straße@example.de"),  # lower(), not casefold(): no ß -> ss
+        ('"a@b"@example.com', '"a@b"@example.com'),
+    ],
+)
+def test_normalize_email(raw: str, expected: str) -> None:
+    assert normalize_email(raw) == expected
+
+
+@pytest.mark.parametrize(
+    "raw",
+    ["", "   ", "user.example.com", "@example.com", "user@", "@", "us er@example.com"],
+)
+def test_normalize_email_rejects_malformed(raw: str) -> None:
+    with pytest.raises(ValueError):
+        normalize_email(raw)
+
+
+def test_email_uniqueness_non_ascii_case_via_orm(migrated: Engine) -> None:
+    """SQLite's lower() folds only ASCII; the ORM validator makes the index hold anyway."""
+    factory = create_session_factory(migrated)
+    with factory.begin() as session:
+        session.add(User(email="élodie@exemple.fr"))
+    with pytest.raises(IntegrityError), factory.begin() as session:
+        session.add(User(email="ÉLODIE@exemple.fr"))
