@@ -103,6 +103,10 @@ Isolation strategy (defense in depth):
    role and domain access allow, like any other member; the admin flag neither
    adds nor removes anything there (maintainer decision 2026-11-04). Audited impersonation may be
    evaluated later; it is not planned.
+7. Deletes: deleting a tenant cascades to its memberships, domains and domain access
+   (deliberate admin action). Users are never hard-deleted while they hold memberships
+   (FK RESTRICT); they are deactivated with `is_active = false`. Cross-tenant
+   `domain_access` rows are impossible by composite FKs on (id, tenant_id) (M1-10).
 
 ## 5. Data model (core tables)
 
