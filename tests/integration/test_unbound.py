@@ -225,14 +225,19 @@ _APP_PROBE = (
 )
 
 
-def test_app_on_dns_network_reaches_unbound(stack: Stack, monkeypatch: pytest.MonkeyPatch) -> None:
-    """With the unbound profile the `app` container is on `dns` and 172.28.53.2:5353 answers."""
-    for name in ("SECRET_KEY", "ENCRYPTION_KEY"):  # throwaway, only for this compose project
-        monkeypatch.setenv(name, secrets.token_urlsafe(32))
-    stack.compose("up", "-d", "--build", "--wait", "--wait-timeout", "120", "app")
-    app = f"{stack.project}-app-1"
-    nets = json.loads(run("docker", "inspect", app).stdout)[0]["NetworkSettings"]["Networks"]
-    assert stack.network in nets, list(nets)
-    ip = nets[stack.network]["IPAddress"]
-    assert ipaddress.ip_address(ip) in ipaddress.ip_network("172.28.53.128/25"), ip
-    run("docker", "exec", app, "python", "-c", _APP_PROBE)
+def test_app_on_dns_network_reaches_unbound(stack: Stack) -> None:
+    """With the unbound profile the `app` container is on `dns` and 172.28.53.2:5353 answers.
+
+    `compose run` keeps the service networks, publishes no host port (no --service-ports) and
+    bypasses the uvicorn CMD, so no app keys are needed and host port 8000 is not touched.
+    """
+    app = f"{stack.project}-app-probe"
+    try:
+        stack.compose("run", "-d", "--no-deps", "--name", app, "app", "sleep", "120")
+        nets = json.loads(run("docker", "inspect", app).stdout)[0]["NetworkSettings"]["Networks"]
+        assert stack.network in nets, list(nets)
+        ip = nets[stack.network]["IPAddress"]
+        assert ipaddress.ip_address(ip) in ipaddress.ip_network("172.28.53.128/25"), ip
+        run("docker", "exec", app, "python", "-c", _APP_PROBE)
+    finally:
+        run("docker", "rm", "-f", app, check=False)
