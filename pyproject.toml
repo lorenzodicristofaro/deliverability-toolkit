@@ -11,7 +11,7 @@ dependencies = [
 
 [dependency-groups]
 dev = [
-    "httpx>=0.28.1",
+    "httpx2>=2.16.0",
     "mypy",
     "pre-commit",
     "pytest",
@@ -29,7 +29,8 @@ packages = ["app"]
 [tool.ruff]
 target-version = "py312"
 line-length = 100
-# ruff 0.17 formats Markdown code blocks; keep the project docs untouched
+# ruff 0.17 formats Markdown code blocks (verified: removing this reformats ARCHITECTURE.md)
+# keep the project docs untouched
 extend-exclude = ["*.md"]
 
 [tool.ruff.lint]
@@ -42,6 +43,5 @@ files = ["app"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q"
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"

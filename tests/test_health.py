@@ -19,3 +19,13 @@ def test_healthz_ok() -> None:
 def test_healthz_other_requests(method: str, path: str, status: int) -> None:
     response = client.request(method, path)
     assert response.status_code == status
+
+
+def test_healthz_head_ok() -> None:
+    response = client.head("/healthz")
+    assert response.status_code == 200
+
+
+def test_healthz_sets_no_cookie() -> None:
+    response = client.get("/healthz")
+    assert "set-cookie" not in response.headers
