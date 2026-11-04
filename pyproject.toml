@@ -17,6 +17,7 @@ dev = [
     "pre-commit",
     "pytest",
     "pytest-asyncio",
+    "pyyaml>=6.0.3",
     "ruff",
 ]
 

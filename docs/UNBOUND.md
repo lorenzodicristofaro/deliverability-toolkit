@@ -16,9 +16,13 @@ Listens on **5353** (udp+tcp) inside the compose network only; never published.
   gateway address, which is inside the /24 and would otherwise get recursion. On WSL / VM
   based Docker the address is simply unreachable from the host.
   Subnet and IP are declared in BOTH `compose.yaml` and `unbound.conf`; change them together.
-- No `ports:` on the service. To use it, attach a service to `dns` and point it at
-  `172.28.53.2:5353` (`RESOLVER_ADDRS=172.28.53.2:5353`, see `app/core/config.py`; the parser's
-  default port is 53 when none is given).
+- No `ports:` on the service. The `app` service is always attached to `default` and `dns`
+  (internet access stays on `default`). To use the resolver set `RESOLVER_MODE=unbound` and
+  `RESOLVER_ADDRS=172.28.53.2:5353` in `.env` (defaults: `system` and empty; see
+  `app/core/config.py`; the parser's default port is 53 when none is given).
+- The `dns` network pins `ipam` `gateway: 172.28.53.1`, the address refused in `unbound.conf`
+  (line 26). `unverified`: that every Docker engine honours `gateway` on an `internal: true`
+  network; checked locally with `docker network inspect` on one engine only.
 - Rule for all services: no bind mounts of folders outside the project.
 
 ## Container hardening
