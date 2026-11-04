@@ -13,4 +13,4 @@ Acceptance criteria:
 - uvicorn access/error loggers routed through the same formatter.
 - Tests capture logs; no network.
 New i18n keys: none (logs are for operators, not translated)
-Status: todo
+Status: done (merged into dev, QA APPROVE after fix round 1, 140 tests)
