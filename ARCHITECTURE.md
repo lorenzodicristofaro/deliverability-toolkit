@@ -126,7 +126,9 @@ and DNS snapshots are kept longer.
 ## 7. DNS layer
 
 - Interface `Resolver` with implementations: system, custom nameservers,
-  DoH (optional). Default in compose: bundled Unbound.
+  DoH (optional). Unbound is bundled as an optional compose profile (`unbound`):
+  our own Debian-slim image, recursive from the root with DNSSEC, reachable only on
+  the compose network (see docs/UNBOUND.md for the maintenance rule).
 - Per-query timeout, retry policy, TTL-aware cache, response size caps.
 - Distinguish NXDOMAIN, NODATA, SERVFAIL, timeout, REFUSED explicitly in the
   result type; checks must handle each.
