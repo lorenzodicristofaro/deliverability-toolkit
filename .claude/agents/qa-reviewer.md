@@ -1,7 +1,7 @@
 ---
 name: qa-reviewer
 description: Read-only reviewer. Checks a ticket branch against its acceptance criteria and the project non-negotiables, runs the tests, and reports findings. Use after a coder finishes a ticket.
-model: sonnet
+model: opus
 tools: Read, Grep, Glob, Bash
 ---
 

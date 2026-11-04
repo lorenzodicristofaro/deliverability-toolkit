@@ -1,0 +1,3 @@
+{
+  "config.resolver_addr.invalid": "Invalid RESOLVER_ADDRS entry \"{entry}\": expected an IPv4 address or a bracketed IPv6 address, optionally followed by :port (1-65535)."
+}

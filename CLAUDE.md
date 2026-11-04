@@ -23,4 +23,9 @@ Read `SPEC.md`, `ARCHITECTURE.md` and `TODO.md` at the start of every session.
   without checking current official documentation.
 
 ## Commands
-(Fill in after M0: install, run, test, lint, migrate.)
+- install: `uv sync`
+- run: `uv run uvicorn app.main:app --reload` (`app.main:app` is the contract with M0-03)
+- test: `uv run pytest -q --tb=short`
+- lint: `uv run ruff check . && uv run ruff format --check . && uv run mypy app`
+- pre-commit install: `uv run pre-commit install`
+- migrate: not yet available (M1)

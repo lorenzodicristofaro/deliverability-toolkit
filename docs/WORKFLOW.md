@@ -61,11 +61,16 @@ Files in scope: app/parsers/spf.py, app/checks/spf.py, tests/checks/test_spf.py
 Out of scope: UI, i18n files other than the keys listed below
 Depends on: M3-01
 Parallel-safe: yes | no
+Model: sonnet | opus
 Acceptance criteria:
 - ...
 New i18n keys: SPF_TOO_MANY_LOOKUPS.title/detail/remediation (en + it)
 Status: todo | in-progress | in-review | changes-requested | done
 ```
+
+Model rule: `opus` for authentication, permissions and tenant isolation, secret encryption,
+the anti-SSRF network client, ReDoS protection, SPF logic, and parsers for raw messages and DMARC reports;
+`sonnet` for everything else.
 
 ## 4. Loop
 

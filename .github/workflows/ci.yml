@@ -1,0 +1,112 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [dev, qa, main]
+
+# Read-only token, no secrets, nothing is pushed anywhere.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Third-party actions are pinned to a full commit SHA; the tag in the comment is the release
+# the SHA belongs to (tags and SHAs checked with `git ls-remote` against each official repo).
+
+jobs:
+  lint-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+      # Same commands as CLAUDE.md "Commands". `--frozen` makes CI fail if uv.lock is stale.
+      - run: uv sync --frozen
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run mypy app
+      # TODO(M1): ARCHITECTURE section 13 also wants pytest on PostgreSQL. Deferred to M1,
+      # when a database layer exists. Until then tests run on the default SQLite config only.
+      - run: uv run pytest -q --tb=short
+
+  secret-scan:
+    runs-on: ubuntu-latest
+    env:
+      # Same scanner and version as the pre-commit hook (.pre-commit-config.yaml, rev v8.30.1).
+      # The official gitleaks-action needs a GITLEAKS_LICENSE secret for organization repos, so
+      # the pinned release binary is used instead. sha256 from the release's checksums file.
+      GITLEAKS_VERSION: 8.30.1
+      GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0  # scan full history, not only the tip
+      - name: Install gitleaks
+        run: |
+          curl -sSfL -o gitleaks.tar.gz \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "${GITLEAKS_SHA256}  gitleaks.tar.gz" | sha256sum --check -
+          tar -xzf gitleaks.tar.gz gitleaks
+      # The pre-commit hook only scans staged changes, so CI scans the git history instead.
+      - run: ./gitleaks git --redact --verbose .
+
+  docker-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+        with:
+          platforms: arm64
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      # Build check only: no registry login, no push, no load (multi-platform results stay in cache).
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: false
+      # Unbound image (docker/unbound): multi-arch build check, no push. Maintenance: docs/UNBOUND.md.
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: docker/unbound
+          platforms: linux/amd64,linux/arm64
+          push: false
+      # Smoke test on the native platform. Default profiles only (app + SQLite, no postgres/unbound).
+      # `--wait` blocks until the compose healthcheck of the app reports healthy.
+      - name: Compose up and wait for healthy
+        run: docker compose up -d --build --wait --wait-timeout 120
+      - name: Check /healthz
+        run: curl --fail --silent --show-error --max-time 10 http://127.0.0.1:8000/healthz
+      - name: Show logs on failure
+        if: failure()
+        run: docker compose logs --no-color
+      - name: Compose down
+        if: always()
+        run: docker compose down -v
+
+  # Unbound profile against the real image: DNSSEC (AD, SERVFAIL on bad signature), NXDOMAIN,
+  # REFUSED from outside the subnet, DNSBL test entry, KSK-2024 anchor, root.key persistence,
+  # hardening. Run locally: `uv run pytest -m integration`. Excluded from lint-test by marker.
+  # The DNSBL test skips (not fails) on a provider-side block. See docs/UNBOUND.md.
+  integration-unbound:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+      - run: uv sync --frozen
+      - run: uv run pytest -m integration -q --tb=short -rs
+
+  # arm64 smoke test under QEMU (build, start, resolve a signed name, require AD). QEMU is slow:
+  # the script retries (12 x 10 s); a name that never validates fails the job.
+  unbound-arm64-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+        with:
+          platforms: arm64
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - run: scripts/unbound-arm64-smoke.sh

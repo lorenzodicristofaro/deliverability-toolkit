@@ -1,0 +1,17 @@
+.git
+.claude
+.venv
+.env
+.env.*
+!.env.example
+data/
+*.db
+*.sqlite
+__pycache__/
+*.pyc
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+tests/
+docs/
+scripts/

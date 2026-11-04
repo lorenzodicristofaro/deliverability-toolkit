@@ -1,0 +1,91 @@
+# Default `docker compose up` starts only the app (SQLite, zero config).
+#   docker compose --profile postgres up   adds PostgreSQL
+#   docker compose --profile unbound up    adds a local validating resolver (own image)
+# Rule: no bind mounts of folders outside the project into containers.
+# Secrets come from the environment or a gitignored .env (see .env.example).
+# Nothing here is required for the default run: all interpolations have empty defaults,
+# so a missing .env or unset variables never break the app-only start.
+
+services:
+  app:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-sqlite:////data/app.db}
+      SECRET_KEY: ${SECRET_KEY:-}          # not consumed until M1
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-}  # not consumed until M1
+    volumes:
+      - app-data:/data
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=4).status == 200 else 1)"
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+    restart: unless-stopped
+
+  postgres:
+    profiles: ["postgres"]
+    image: postgres:17  # tag verified 2026-11-04 with `docker buildx imagetools inspect` (amd64 + arm64)
+    environment:
+      # Required by the image. Deliberately `:-` and not `:?`: the Compose docs do not say
+      # whether `:?` is evaluated for services in inactive profiles (UNVERIFIED), and it
+      # could break the default `docker compose up`. With an empty value the postgres
+      # image itself refuses to start, which is the loud failure we want.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}
+      POSTGRES_USER: ${POSTGRES_USER:-deliverability}
+      POSTGRES_DB: ${POSTGRES_DB:-deliverability}
+    volumes:
+      # 17 and earlier mount at /var/lib/postgresql/data (Docker Hub page). 18+ differs.
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  unbound:
+    profiles: ["unbound"]
+    # Own image (docker/unbound/Dockerfile, Debian slim, non-root). Maintenance: docs/UNBOUND.md.
+    # No fixed `image:` name: compose names it <project>-unbound.
+    build: ./docker/unbound
+    networks:
+      default: {}   # egress to the internet for recursion
+      dns:
+        ipv4_address: 172.28.53.2  # must match interface/access-control in unbound.conf
+    # No "ports:": the resolver (port 5353, udp+tcp) is never published on the host.
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    volumes:
+      # root.key must stay writable (RFC 5011 updates). Seeded from the image on first use
+      # (named-volume copy-up), kept across down/up without -v. See docs/UNBOUND.md.
+      - unbound-data:/var/lib/unbound
+    healthcheck:
+      # Own timing here as well; the command comes from the image (validates AD on `. SOA`).
+      interval: 30s
+      timeout: 10s
+      start_period: 30s
+      retries: 3
+    restart: unless-stopped
+
+networks:
+  # Internal network for DNS clients of the unbound profile (no outside access, nothing
+  # published). The subnet is fixed here and repeated in docker/unbound/unbound.conf.
+  # To use the resolver, attach a service to "dns" and point it at 172.28.53.2 port 5353.
+  dns:
+    internal: true
+    ipam:
+      config:
+        - subnet: 172.28.53.0/24
+
+volumes:
+  app-data:
+  postgres-data:
+  unbound-data:

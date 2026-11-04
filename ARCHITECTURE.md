@@ -33,7 +33,8 @@
   /web             UI routers, templates, static, SSE endpoints
   /cli             Typer-based CLI
 /profiles/esp      YAML ESP profiles (schema validated)
-/data              seed: dkim_selectors.yaml, content_rules.yaml, dnsbl.yaml, provider_requirements.yaml
+/seeds             seed data (versioned): dkim_selectors.yaml, content_rules.yaml, dnsbl.yaml,
+                   provider_requirements.yaml; shipped in the image at /app/seeds
 /migrations        Alembic
 /tests             unit, integration, tenancy, e2e
 /docs
@@ -125,7 +126,9 @@ and DNS snapshots are kept longer.
 ## 7. DNS layer
 
 - Interface `Resolver` with implementations: system, custom nameservers,
-  DoH (optional). Default in compose: bundled Unbound.
+  DoH (optional). Unbound is bundled as an optional compose profile (`unbound`):
+  our own Debian-slim image, recursive from the root with DNSSEC, reachable only on
+  the compose network (see docs/UNBOUND.md for the maintenance rule).
 - Per-query timeout, retry policy, TTL-aware cache, response size caps.
 - Distinguish NXDOMAIN, NODATA, SERVFAIL, timeout, REFUSED explicitly in the
   result type; checks must handle each.
@@ -184,7 +187,8 @@ missing-key test in CI; user and tenant language preference.
 ## 11. Configuration (env)
 
 `DATABASE_URL` (default `sqlite:////data/app.db`), `SECRET_KEY`,
-`ENCRYPTION_KEY`, `RESOLVER_MODE` (`system|custom|unbound`), `RESOLVER_ADDRS`,
+`ENCRYPTION_KEY`, `RESOLVER_MODE` (`system|custom|unbound`), `RESOLVER_ADDRS` (comma-separated `host:port`,
+IP literals, IPv6 as `[::1]:5353`, default port 53),
 `ROLE`, `ALLOW_SMTP_CHECKS` (default false), `ALLOW_REGISTRATION` (default false),
 `BASE_URL`, `SMTP_*` for notifications, `LOG_LEVEL`.
 
