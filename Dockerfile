@@ -2,11 +2,12 @@
 # Single multi-arch image (linux/amd64 + linux/arm64). No arch-specific instructions:
 # the base images below are multi-arch manifests, buildx picks the right variant.
 
-# Tag from Docker Hub "python" page (lists 3.12-slim-trixie, amd64 + arm64v8).
+# Tag verified 2026-11-04 with `docker buildx imagetools inspect` (exists, amd64 + arm64).
 FROM python:3.12-slim-trixie
 
 # uv install pattern and version pin: docs.astral.sh/uv/guides/integration/docker/
-# (0.13.7 is the version shown there and the one used in development).
+# (0.13.7 is the version shown there and the one used in development). Tag verified
+# 2026-11-04 with `docker buildx imagetools inspect` (exists, amd64 + arm64).
 COPY --from=ghcr.io/astral-sh/uv:0.13.7 /uv /uvx /bin/
 
 ENV UV_COMPILE_BYTECODE=1 \

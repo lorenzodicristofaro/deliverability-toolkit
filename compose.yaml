@@ -1,6 +1,7 @@
 # Default `docker compose up` starts only the app (SQLite, zero config).
 #   docker compose --profile postgres up   adds PostgreSQL
-#   docker compose --profile unbound up    adds a local validating resolver
+#   docker compose --profile unbound up    adds a local validating resolver (own image)
+# Rule: no bind mounts of folders outside the project into containers.
 # Secrets come from the environment or a gitignored .env (see .env.example).
 # Nothing here is required for the default run: all interpolations have empty defaults,
 # so a missing .env or unset variables never break the app-only start.
@@ -30,7 +31,7 @@ services:
 
   postgres:
     profiles: ["postgres"]
-    image: postgres:17  # tag from Docker Hub "postgres" page (17 listed as supported)
+    image: postgres:17  # tag verified 2026-11-04 with `docker buildx imagetools inspect` (amd64 + arm64)
     environment:
       # Required by the image. Deliberately `:-` and not `:?`: the Compose docs do not say
       # whether `:?` is evaluated for services in inactive profiles (UNVERIFIED), and it
@@ -51,14 +52,28 @@ services:
 
   unbound:
     profiles: ["unbound"]
-    # UNVERIFIED: NLnet Labs publishes no official image that we could confirm. This is a
-    # community multi-arch image (Docker Hub klutchell/unbound); tag not verified, so it
-    # must be pinned and reviewed by the maintainer before release.
-    image: klutchell/unbound:latest
-    volumes:
-      # UNVERIFIED path: the image README mentions /etc/unbound/custom.conf.d.
-      - ./docker/unbound:/etc/unbound/custom.conf.d:ro
+    # Own image (docker/unbound/Dockerfile, Debian slim, non-root). Maintenance: docs/UNBOUND.md.
+    build: ./docker/unbound
+    image: deliverability-toolkit-unbound:local
+    networks:
+      default: {}   # egress to the internet for recursion
+      dns:
+        ipv4_address: 172.28.53.2  # must match interface/access-control in unbound.conf
+    # No "ports:": port 53 is never published on the host.
+    sysctls:
+      # Lets the non-root unbound user bind port 53 inside the container's own netns.
+      net.ipv4.ip_unprivileged_port_start: 0
     restart: unless-stopped
+
+networks:
+  # Internal network for DNS clients of the unbound profile (no outside access, nothing
+  # published). The subnet is fixed here and repeated in docker/unbound/unbound.conf.
+  # To use the resolver, attach a service to "dns" and point it at 172.28.53.2.
+  dns:
+    internal: true
+    ipam:
+      config:
+        - subnet: 172.28.53.0/24
 
 volumes:
   app-data:
