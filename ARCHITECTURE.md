@@ -97,6 +97,12 @@ Isolation strategy (defense in depth):
 4. PostgreSQL deployments may additionally enable row-level security.
 5. Mandatory automated tests: for each endpoint, a user from tenant A must get
    404 on tenant B resources; a client viewer must not see unassigned domains.
+6. The instance admin manages tenants and instance settings but has NO access to
+   tenant data (domains, results, reports) through the admin flag alone. With a
+   membership in a tenant they see that tenant's data exactly as their membership
+   role and domain access allow, like any other member; the admin flag neither
+   adds nor removes anything there (maintainer decision 2026-11-04). Audited impersonation may be
+   evaluated later; it is not planned.
 
 ## 5. Data model (core tables)
 

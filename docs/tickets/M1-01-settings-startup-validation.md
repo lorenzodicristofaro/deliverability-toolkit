@@ -22,7 +22,7 @@ Status: todo
 - Q2: disable /docs, /redoc, /openapi.json (M1-02 as proposed); revisit with auth/API keys in M10.
 - Q3: server-side session rows + signed opaque cookie (revocable), consistent with ARCHITECTURE "signed session cookies" + "session revocation".
 - Q4a: active tenant stored in the session; instance admin = `users.is_instance_admin`.
-- Q4b: instance-admin access to tenant data: ESCALATED to the maintainer. Until answered, implement deny (M1-11 as written).
+- Q4b: instance admin has NO access to tenant data without a membership (maintainer 2026-11-04, ARCHITECTURE §4 item 6). Impersonation is a possible future feature, out of scope.
 - Q5: `app` always joins `dns`.
 - Q6: yes, a one-time setup token is logged at first start and invalidated after setup.
 - Q7: active-tenant based `/api/v1/domains`.
