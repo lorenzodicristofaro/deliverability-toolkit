@@ -6,6 +6,7 @@ requires-python = ">=3.12"
 license = "AGPL-3.0-or-later"
 dependencies = [
     "fastapi>=0.162.0",
+    "pydantic-settings>=2.16.2",
     "uvicorn>=0.54.0",
 ]
 
