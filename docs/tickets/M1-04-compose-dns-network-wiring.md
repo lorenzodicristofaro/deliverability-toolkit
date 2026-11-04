@@ -14,4 +14,4 @@ Acceptance criteria:
 - `docker compose config` stays valid with no .env and default profile still starts app only (default `docker compose up` unchanged).
 - Unverified: whether Docker honours `gateway` with `internal: true` networks on all engines. Mark `unverified`, check locally with `docker network inspect`, report result.
 New i18n keys: none
-Status: todo
+Status: done (merged into dev, QA APPROVE after fix round 1, 147 tests; gateway on internal network verified on Docker 29.9.2 locally only)
