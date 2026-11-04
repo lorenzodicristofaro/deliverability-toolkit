@@ -12,4 +12,6 @@ Acceptance criteria:
 - tests/test_health.py: TestClient/httpx test asserting 200 and body; no network. Tenancy/permission test not applicable (unauthenticated, no tenant data); state this in the summary.
 - ruff, mypy, pytest green; run command from CLAUDE.md works and serves /healthz.
 New i18n keys: none
-Status: todo
+Status: done (QA APPROVE, merged to dev in 96b5141)
+
+Follow-up for M1: FastAPI currently exposes /docs, /redoc and /openapi.json without auth. M1 must decide whether to disable them (docs_url/openapi_url=None) or put them behind auth.
