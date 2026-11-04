@@ -28,6 +28,7 @@ All TODO.md items ticked. Milestone acceptance still **pending**:
 - No bind mounts of folders outside the project into containers (applies to all services).
 - ruff excludes `*.md` explicitly with `force-exclude = true` (verified on ruff 0.17.3).
 - QA reviewer runs on opus; coder model per ticket `Model:` line (default sonnet).
+- DNSBL for the M0-07 integration test: Spamhaus ZEN (test entry 127.0.0.2), skip on provider block/NXDOMAIN/timeout (maintainer 2026-11-04). M7 open: production DNSBL list and Spamhaus free-use terms (non-commercial, low volume) to be settled in `dnsbl.yaml` with `verified_on`.
 
 ## Open items for the maintainer
 1. ~~Fix Docker daemon access in WSL~~ RESOLVED 2026-11-04 (M0-04 runtime verification passed, see ticket).
