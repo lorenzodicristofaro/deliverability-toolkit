@@ -10,7 +10,7 @@ Mark items `[x]` when done. Acceptance criteria are the definition of done.
 - [x] M0-07 own Unbound image — REWORK round 2 (maintainer 2026-11-04): KSK-2024 anchor test + persistent root.key volume, AD healthcheck, port 5353 + RESOLVER_ADDRS host:port, config audit, integration tests, arm64, hardening (round 1 merged into dev, QA APPROVE)
 - [x] M0-09 Unbound hardening nits — superseded, folded into M0-07 round 2
 - Accept: `docker compose up` serves a health page; CI green.
-  Status: pending — CI not yet run on GitHub (needs push of dev); local Docker daemon unavailable.
+  Status: **accepted 2026-11-04** — `/healthz` 200 via compose (local), CI green on GitHub at 3f2db2b (incl. integration-unbound, unbound-arm64-smoke). Report: docs/reports/M0.md
 
 ## M1 — Core platform (auth + multi-tenancy skeleton)
 Carried over from M0-07 QA:
