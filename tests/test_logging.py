@@ -1,10 +1,12 @@
 import json
 import logging
 from collections.abc import Iterator
+from types import MappingProxyType
 from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
+from starlette.datastructures import Headers
 
 from app.core.config import Settings
 from app.core.logging import JsonFormatter, configure_logging
@@ -19,11 +21,18 @@ SECRETS = [SECRET, ENC]
 def _restore_logging() -> Iterator[None]:
     root = logging.getLogger()
     handlers, level = list(root.handlers), root.level
+    saved = {
+        n: (lg.handlers[:], lg.filters[:], lg.propagate, lg.level)
+        for n in ("uvicorn", "uvicorn.error", "uvicorn.access")
+        for lg in [logging.getLogger(n)]
+    }
     yield
     root.handlers[:] = handlers
     root.setLevel(level)
-    for name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
-        logging.getLogger(name).setLevel(logging.NOTSET)
+    for n, (hs, fs, prop, lvl) in saved.items():
+        lg = logging.getLogger(n)
+        lg.handlers[:], lg.filters[:], lg.propagate = hs, fs, prop
+        lg.setLevel(lvl)
 
 
 def _lines(capsys: pytest.CaptureFixture[str]) -> list[dict[str, Any]]:
@@ -197,3 +206,50 @@ def test_formatter_ignores_empty_secret() -> None:
     fmt = JsonFormatter(["", SECRET])
     record = logging.LogRecord("n", logging.INFO, "f", 1, "plain text", None, None)
     assert json.loads(fmt.format(record))["message"] == "plain text"
+
+
+def test_mapping_types_scrubbed(capsys: pytest.CaptureFixture[str]) -> None:
+    configure_logging("INFO", SECRETS)
+    headers = Headers({"Authorization": "Bearer tok123", "Cookie": "a=b", "accept": "x"})
+    logging.getLogger("m").info(
+        "m",
+        extra={
+            "headers": headers,
+            "proxy": MappingProxyType({"password": "pw-1", "ok": "fine"}),
+            "tagged": {"nested": [{"api_key": "k-1"}]},
+            "bag": {"a"},
+        },
+    )
+    out = capsys.readouterr().err
+    for leaked in ("tok123", "a=b", "pw-1", "k-1"):
+        assert leaked not in out
+    assert "fine" in out
+    assert '"accept": "x"' in out
+
+
+def test_cyclic_and_deep_structures_do_not_crash(capsys: pytest.CaptureFixture[str]) -> None:
+    configure_logging("INFO", SECRETS)
+    cyc: dict[str, Any] = {"a": 1}
+    cyc["self"] = cyc
+    deep: Any = "end"
+    for _ in range(50):
+        deep = [deep]
+    logging.getLogger("c").info("c", extra={"cyc": cyc, "deep": deep})
+    (rec,) = _lines(capsys)
+    assert rec["cyc"]["self"] == "[CYCLE]"
+    assert "[TOO DEEP]" in json.dumps(rec["deep"])
+
+
+@pytest.mark.parametrize("key", ["database_url", "encryption_key", "api_key", "sentry_dsn"])
+def test_more_sensitive_keys(capsys: pytest.CaptureFixture[str], key: str) -> None:
+    configure_logging("INFO", SECRETS)
+    logging.getLogger("k").info("k", extra={key: "postgresql://u:pw@h/db"})
+    (rec,) = _lines(capsys)
+    assert rec[key] == "[REDACTED]"
+
+
+@pytest.mark.parametrize("short", ["a", "1", "info", "request", "abcdefg"])
+def test_short_secrets_not_value_masked(short: str) -> None:
+    fmt = JsonFormatter([short])
+    record = logging.LogRecord("n", logging.INFO, "f", 1, "plain request info 1 a", None, None)
+    assert json.loads(fmt.format(record))["message"] == "plain request info 1 a"

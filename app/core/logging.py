@@ -9,7 +9,7 @@ import re
 import sys
 import time
 import uuid
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from datetime import UTC, datetime
 from typing import Any
 
@@ -20,7 +20,16 @@ REQUEST_ID_HEADER = "X-Request-ID"
 # An incoming request id is only accepted if it matches this strict charset and length.
 _REQUEST_ID_RE = re.compile(r"[A-Za-z0-9._-]{8,64}")
 _REDACTED = "[REDACTED]"
-_SENSITIVE_KEYS = ("authorization", "cookie", "password", "secret", "token")
+_SENSITIVE_KEYS = (
+    "authorization",
+    "cookie",
+    "password",
+    "secret",
+    "token",
+    "key",
+    "dsn",
+    "database_url",
+)
 _HANDLER_MARK = "_deliverability_json_handler"
 _STANDARD_ATTRS = frozenset(logging.makeLogRecord({}).__dict__) | {"message", "asctime", "taskName"}
 
@@ -34,22 +43,40 @@ def _is_sensitive(key: str) -> bool:
     return any(s in lowered for s in _SENSITIVE_KEYS)
 
 
-def _scrub(value: Any) -> Any:
-    if isinstance(value, dict):
-        return {str(k): _REDACTED if _is_sensitive(str(k)) else _scrub(v) for k, v in value.items()}
-    if isinstance(value, list | tuple):
-        return [_scrub(v) for v in value]
+_MAX_DEPTH = 8
+_CYCLE = "[CYCLE]"
+_TOO_DEEP = "[TOO DEEP]"
+_MIN_MASKED_SECRET_LEN = 8
+
+
+def _scrub(value: Any, _seen: frozenset[int] = frozenset()) -> Any:
+    if isinstance(value, Mapping | list | tuple | set | frozenset):
+        if id(value) in _seen:
+            return _CYCLE
+        if len(_seen) >= _MAX_DEPTH:
+            return _TOO_DEEP
+        seen = _seen | {id(value)}
+        if isinstance(value, Mapping):
+            return {
+                str(k): _REDACTED if _is_sensitive(str(k)) else _scrub(v, seen)
+                for k, v in value.items()
+            }
+        return [_scrub(v, seen) for v in value]
     return value
 
 
 class JsonFormatter(logging.Formatter):
-    """One JSON object per line. Known secret values are masked in the final output."""
+    """One JSON object per line. Known secret values are masked in the final output.
+
+    Extra fields are key-scrubbed; values interpolated via format args (``log.info("%s", x)``)
+    are only value-masked (known secrets of at least 8 characters), not key-scrubbed.
+    """
 
     def __init__(self, secrets: Iterable[str] = ()) -> None:
         super().__init__()
         needles: set[str] = set()
         for secret in secrets:
-            if secret:
+            if len(secret) >= _MIN_MASKED_SECRET_LEN:  # shorter would corrupt the JSON
                 needles.add(secret)
                 needles.add(json.dumps(secret)[1:-1])  # JSON-escaped form
         # Longest first so a secret containing another is fully masked.
