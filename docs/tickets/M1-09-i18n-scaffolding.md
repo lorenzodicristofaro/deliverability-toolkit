@@ -13,4 +13,4 @@ Acceptance criteria:
 - Keys declared by earlier code are added: `config.resolver_addr.invalid` (used by app/core/config.py), plus M1-01 keys.
 - Locale files are a hotspot: later tickets append keys only; keys sorted alphabetically to minimise merge conflicts.
 New i18n keys: config.resolver_addr.invalid, config.missing, config.invalid_value, config.resolver_addrs_required (en + it)
-Status: todo
+Status: done (merged into dev, QA APPROVE, 204 tests; eager catalogue validation deferred to M1-16)
