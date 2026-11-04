@@ -12,4 +12,4 @@ Acceptance criteria:
 - Existing integration tests unchanged otherwise; `uv run pytest -m integration` still passes on a clean host.
 - Not verifiable here without an avahi host: the coder states how it was simulated (e.g. a local UDP listener on 5353).
 New i18n keys: none
-Status: todo
+Status: done (merged into dev, QA APPROVE, 156 unit + 11 integration; avahi simulated with a silent UDP listener on 127.0.0.1:5353, a replying avahi not tested; unit test in tests/ by GM-accepted deviation)
