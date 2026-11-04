@@ -18,6 +18,7 @@ from app.core.db import (
 )
 from app.main import create_app, log_secrets
 from app.models import Base
+from tests.conftest import refusal_reason
 
 ROOT = Path(__file__).resolve().parent.parent
 KEY = "k" * 40
@@ -157,9 +158,35 @@ def test_database_password_masked_in_logs(capsys: pytest.CaptureFixture[str]) ->
 def test_migrations_do_not_log_database_password(
     db_url: str, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
+    password = make_url(db_url).password
+    if not password:
+        pytest.skip("no password on this backend (SQLite)")
     set_env(monkeypatch, db_url)
     with caplog.at_level(logging.DEBUG):
         command.upgrade(alembic_cfg(), "head")
-    password = make_url(db_url).password
-    if password:
-        assert password not in caplog.text
+    assert password not in caplog.text
+
+
+SAME = "postgresql://u:p@h/app_test"
+
+
+@pytest.mark.parametrize(
+    ("test_url", "app_url", "refused"),
+    [
+        ("postgresql://u:p@h/ci_test", None, False),
+        ("postgresql://u:p@h/t_test", "postgresql://u:p@h/app", False),
+        ("postgresql://u:p@h/app_test", "", False),
+        ("postgresql://u:p@h/app", None, True),
+        ("postgresql://u:p@h/postgres", None, True),
+        ("postgresql://u:p@h/prod", None, True),
+        ("postgresql://u:p@h/", None, True),
+        ("", None, True),
+        ("not a url", None, True),
+        (SAME, SAME, True),
+    ],
+)
+def test_refusal_reason(test_url: str, app_url: str | None, refused: bool) -> None:
+    reason = refusal_reason(test_url, app_url)
+    assert (reason is not None) is refused
+    if reason:
+        assert "u:p" not in reason

@@ -79,14 +79,14 @@ def test_configure_is_idempotent(capsys: pytest.CaptureFixture[str]) -> None:
 
 def test_request_logged_with_generated_id(capsys: pytest.CaptureFixture[str]) -> None:
     with _client() as client:
-        response = client.get("/healthz?token=abc&x=1")
+        response = client.get("/healthz?token=zq-sentinel&x=1")
     (rec,) = _request_records(_lines(capsys))
     assert rec["method"] == "GET"
     assert rec["path"] == "/healthz"
     assert rec["status"] == 200
     assert rec["duration_ms"] >= 0
     assert rec["request_id"] == response.headers["X-Request-ID"]
-    assert "abc" not in json.dumps(rec)
+    assert "zq-sentinel" not in json.dumps(rec)
     assert "?" not in json.dumps(rec)
 
 
