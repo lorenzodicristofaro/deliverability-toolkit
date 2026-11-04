@@ -29,3 +29,8 @@ def test_healthz_head_ok() -> None:
 def test_healthz_sets_no_cookie() -> None:
     response = client.get("/healthz")
     assert "set-cookie" not in response.headers
+
+
+def test_healthz_ok_with_docs_disabled() -> None:
+    assert client.get("/docs").status_code == 404
+    assert client.get("/healthz").status_code == 200

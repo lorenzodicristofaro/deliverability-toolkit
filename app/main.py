@@ -17,7 +17,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.settings = settings if settings is not None else Settings()
         yield
 
-    web_app = FastAPI(lifespan=lifespan)
+    # Interactive docs and the OpenAPI schema are disabled: they would be served unauthenticated.
+    # M10 (Docs site, OpenAPI) re-exposes OpenAPI behind authentication.
+    web_app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
     web_app.include_router(health_router)
     return web_app
 
