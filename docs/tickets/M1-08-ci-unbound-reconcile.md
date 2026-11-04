@@ -14,4 +14,4 @@ Acceptance criteria:
 - Job timeouts and pinned actions unchanged in style.
 - GitHub run is unverified until the GM pushes `dev`.
 New i18n keys: none
-Status: todo
+Status: done (merged into dev, QA APPROVE after fix round 1; ci.yml unchanged, all four checks already covered; 12 integration tests)
