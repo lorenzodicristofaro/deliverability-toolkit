@@ -14,4 +14,4 @@ Acceptance criteria:
 - Deny by default; inactive user denied.
 - GM decision Q4b (2026-11-04): instance-admin access to tenant data is escalated to the maintainer. Until answered, implement deny for tenant data (manage tenants only); keep the rule in one place so it is easy to change.
 New i18n keys: none
-Status: todo
+Status: done (merged into dev, QA APPROVE incl. should-fix delta, 1470 tests; GM-accepted: instance.manage = tenant lifecycle, admin has user.manage, toggles deny-only keyed by action, None toggles deny all)
