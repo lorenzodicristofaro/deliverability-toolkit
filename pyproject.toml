@@ -4,10 +4,14 @@ version = "0.1.0"
 description = "Self-hosted email deliverability toolkit"
 requires-python = ">=3.12"
 license = "AGPL-3.0-or-later"
-dependencies = []
+dependencies = [
+    "fastapi>=0.162.0",
+    "uvicorn>=0.54.0",
+]
 
 [dependency-groups]
 dev = [
+    "httpx>=0.28.1",
     "mypy",
     "pre-commit",
     "pytest",
