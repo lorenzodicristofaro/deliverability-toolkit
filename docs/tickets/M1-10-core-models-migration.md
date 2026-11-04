@@ -14,4 +14,4 @@ Acceptance criteria:
 - Tests: constraint violations (duplicate domain per tenant allowed across tenants, cross-tenant domain_access rejected, null tenant_id rejected).
 - Instance admin = `users.is_instance_admin` (GM decision Q4a in M1-01).
 New i18n keys: none
-Status: todo
+Status: done (merged into dev, QA APPROVE incl. should-fix delta; SQLite 318 passed, PG models+db 150 passed)
