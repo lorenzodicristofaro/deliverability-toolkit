@@ -14,6 +14,7 @@ Start of every session:
 
 Running the work:
 - Default concurrency: 1 coder at a time. 2 in parallel only for tickets touching different directories and only if no usage warning has appeared.
+- When delegating to `coder`, use the model given in the ticket's `Model:` line; default to Sonnet if missing.
 - Per ticket: `coder` implements on its own branch/worktree → `qa-reviewer` reviews → if CHANGES REQUESTED, back to `coder` (max 2 rounds) → you merge into `dev` when APPROVE, then ask `pm` to update ticket status and `TODO.md`.
 - Never merge a ticket without a QA APPROVE and green tests.
 - At milestone end: run the full suite on `dev`; if green, you may merge `dev` into `qa`. Write a short milestone report in `docs/reports/`.
