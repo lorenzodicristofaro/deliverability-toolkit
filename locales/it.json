@@ -1,3 +1,6 @@
 {
-  "config.resolver_addr.invalid": "Voce RESOLVER_ADDRS non valida \"{entry}\": atteso un indirizzo IPv4 o un indirizzo IPv6 tra parentesi quadre, seguito facoltativamente da :porta (1-65535)."
+  "config.invalid_value": "Valore non valido per {name}.",
+  "config.missing": "L'impostazione obbligatoria {name} è assente o vuota.",
+  "config.resolver_addr.invalid": "Voce RESOLVER_ADDRS non valida \"{entry}\": atteso un indirizzo IPv4 o un indirizzo IPv6 tra parentesi quadre, seguito facoltativamente da :porta (1-65535).",
+  "config.resolver_addrs_required": "RESOLVER_ADDRS è obbligatorio quando RESOLVER_MODE è \"{mode}\"."
 }
