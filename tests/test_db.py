@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 from alembic import command
 from alembic.config import Config
+from alembic.script import ScriptDirectory
 from fastapi.testclient import TestClient
 from sqlalchemy import Column, ForeignKey, Integer, MetaData, Table, inspect, text
 from sqlalchemy.engine import make_url
@@ -100,7 +101,8 @@ def test_migration_roundtrip(db_url: str, monkeypatch: pytest.MonkeyPatch) -> No
     command.downgrade(cfg, "base")
     command.upgrade(cfg, "head")
     with engine.connect() as conn:
-        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar() == "0001"
+        head = ScriptDirectory.from_config(cfg).get_current_head()
+        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar() == head
 
 
 def test_migrations_fail_without_settings(monkeypatch: pytest.MonkeyPatch) -> None:
