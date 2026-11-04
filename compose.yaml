@@ -95,6 +95,9 @@ networks:
           # unverified: that every engine honours `gateway` on an `internal: true` network
           # (checked on one local Docker engine only, see docs/UNBOUND.md).
           gateway: 172.28.53.1
+          # Auto-assigned addresses (the app) come only from the upper half, so they never
+          # take .1 (gateway) or .2 (unbound, static) before the unbound profile starts.
+          ip_range: 172.28.53.128/25
 
 volumes:
   app-data:

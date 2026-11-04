@@ -1,5 +1,6 @@
 """Static checks of compose.yaml (no Docker needed)."""
 
+import ipaddress
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +28,20 @@ def test_dns_network_internal_with_gateway() -> None:
     assert cfg["subnet"] == "172.28.53.0/24"
     assert cfg["gateway"] == "172.28.53.1"
     assert f"access-control: {cfg['gateway']}/32 refuse" in UNBOUND_CONF
+
+
+def test_static_addresses_outside_ip_range() -> None:
+    cfg = COMPOSE["networks"]["dns"]["ipam"]["config"][0]
+    subnet = ipaddress.ip_network(cfg["subnet"])
+    ip_range = ipaddress.ip_network(cfg["ip_range"])
+    assert ip_range.subnet_of(subnet)
+    unbound_ip = ipaddress.ip_address(
+        COMPOSE["services"]["unbound"]["networks"]["dns"]["ipv4_address"]
+    )
+    gateway = ipaddress.ip_address(cfg["gateway"])
+    for addr in (unbound_ip, gateway):
+        assert addr in subnet
+        assert addr not in ip_range
 
 
 def test_unbound_ip_matches_conf() -> None:
