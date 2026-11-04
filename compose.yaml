@@ -53,22 +53,32 @@ services:
   unbound:
     profiles: ["unbound"]
     # Own image (docker/unbound/Dockerfile, Debian slim, non-root). Maintenance: docs/UNBOUND.md.
+    # No fixed `image:` name: compose names it <project>-unbound.
     build: ./docker/unbound
-    image: deliverability-toolkit-unbound:local
     networks:
       default: {}   # egress to the internet for recursion
       dns:
         ipv4_address: 172.28.53.2  # must match interface/access-control in unbound.conf
-    # No "ports:": port 53 is never published on the host.
-    sysctls:
-      # Lets the non-root unbound user bind port 53 inside the container's own netns.
-      net.ipv4.ip_unprivileged_port_start: 0
+    # No "ports:": the resolver (port 5353, udp+tcp) is never published on the host.
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    volumes:
+      # root.key must stay writable (RFC 5011 updates). Seeded from the image on first use
+      # (named-volume copy-up), kept across down/up without -v. See docs/UNBOUND.md.
+      - unbound-data:/var/lib/unbound
+    healthcheck:
+      # Own timing here as well; the command comes from the image (validates AD on `. SOA`).
+      interval: 30s
+      timeout: 10s
+      start_period: 30s
+      retries: 3
     restart: unless-stopped
 
 networks:
   # Internal network for DNS clients of the unbound profile (no outside access, nothing
   # published). The subnet is fixed here and repeated in docker/unbound/unbound.conf.
-  # To use the resolver, attach a service to "dns" and point it at 172.28.53.2.
+  # To use the resolver, attach a service to "dns" and point it at 172.28.53.2 port 5353.
   dns:
     internal: true
     ipam:
@@ -78,3 +88,4 @@ networks:
 volumes:
   app-data:
   postgres-data:
+  unbound-data:

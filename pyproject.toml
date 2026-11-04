@@ -48,3 +48,8 @@ files = ["app"]
 testpaths = ["tests"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
+# Integration tests need Docker + network: excluded by default, run with `-m integration`.
+addopts = "-m 'not integration'"
+markers = [
+    "integration: needs Docker and network (tests/integration); run with -m integration",
+]

@@ -101,3 +101,31 @@ Review: security-relevant (isolation, caps, trust anchor); opus QA required for 
 - Teardown: `docker compose --profile unbound down -v`, test container and network removed.
 - `seeds/` does not exist yet; Dockerfile/.dockerignore unchanged for it (check only).
 - Not run here: GitHub Actions (ci.yml unbound step, rebuild.yml); YAML syntax only.
+
+## Round 2 verification record (2026-11-04, Docker 29.9.2, Linux/WSL2, run locally)
+Branch fix/M0-07-unbound-r2. New i18n keys: `config.resolver_addr.invalid` (en + it, `locales/`).
+The parser raises `ConfigError` (carries the key and the offending entry) at startup for the
+operator; there is no end-user UI path, so the message is not translated at raise time.
+Parser lives in new `app/core/config.py` (no config module existed); default port 53.
+- `docker compose --profile unbound config -q`: OK. `uv run ruff check . && ruff format --check . && mypy app`: clean.
+  `uv run pytest -q`: 59 passed, 11 deselected (integration), 0.2 s.
+- `uv run pytest -m integration -q -rs`: 11 passed (~40 s), run 3 times; one run skipped the DNSBL
+  test (cold-cache SERVFAIL), now retried before skipping.
+- `docker compose -p dtkr2 --profile unbound up -d --build --wait`: unbound healthy; `ps` shows
+  `5353/tcp, 5353/udp` without host mapping; `PortBindings` `{}`; ReadonlyRootfs true, CapDrop ALL,
+  no sysctls, user unbound; no tmpfs needed.
+- A2: `lastchange` of both KSKs in the volume's root.key identical after `down`/`up` (without -v);
+  after `down -v` it changes (1793828196 -> 1793828205): the test discriminates.
+- A1: key tag 38696 (and 20326) computed from the image's /var/lib/unbound/root.key and
+  /usr/share/dns/root.key.
+- A3: offline behaviour reproduced with a container on an `internal` network: `unhealthy`.
+- Variant runs (read-only rootfs, volume on /var/lib/unbound): chroot, do-ip6 not needed;
+  username "" avoids an initgroups warning; pidfile "" avoids a read-only error; use-syslog no
+  needed for stderr logs.
+- E: `scripts/unbound-arm64-smoke.sh` under QEMU: aarch64, NOERROR + AD on attempt 1 (32 s).
+- DNSBL: Spamhaus ZEN proposed (docs/UNBOUND.md); real answers received locally.
+- Not run here: GitHub Actions (jobs `integration-unbound`, `unbound-arm64-smoke`).
+- G: after my teardown (`down -v --rmi local` of my projects) `docker ps -a` is empty. Pre-existing,
+  not created by this work and left untouched: volume `deliverability-toolkit_app-data`, network
+  `deliverability-toolkit_default`, images `deliverability-toolkit-unbound:local`,
+  `deliverability-toolkit-app:latest`, `agent-ac664accc510354ee-app:latest`.

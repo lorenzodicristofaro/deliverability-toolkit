@@ -187,7 +187,8 @@ missing-key test in CI; user and tenant language preference.
 ## 11. Configuration (env)
 
 `DATABASE_URL` (default `sqlite:////data/app.db`), `SECRET_KEY`,
-`ENCRYPTION_KEY`, `RESOLVER_MODE` (`system|custom|unbound`), `RESOLVER_ADDRS`,
+`ENCRYPTION_KEY`, `RESOLVER_MODE` (`system|custom|unbound`), `RESOLVER_ADDRS` (comma-separated `host:port`,
+IP literals, IPv6 as `[::1]:5353`, default port 53),
 `ROLE`, `ALLOW_SMTP_CHECKS` (default false), `ALLOW_REGISTRATION` (default false),
 `BASE_URL`, `SMTP_*` for notifications, `LOG_LEVEL`.
 
