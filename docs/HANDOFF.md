@@ -1,4 +1,4 @@
-# HANDOFF — 2026-11-05
+# HANDOFF — 2026-11-05 (paused: usage limit reached)
 
 Resume with `/gm`.
 
@@ -8,9 +8,8 @@ Tickets: docs/tickets/M1-01..M1-20. GM decisions recorded in M1-01 ("GM decision
 ## Ticket status
 | Ticket | Status |
 |---|---|
-| M1-01..M1-10 | done (merged into dev, QA APPROVE, pushed, CI green up to M1-08; M1-10 push CI pending at time of writing) |
-| M1-11 can() permission layer | in progress (opus coder) |
-| M1-12 TenantContext + repositories | in progress (opus coder, parallel with M1-11) |
+| M1-01..M1-11 | done (merged into dev, QA APPROVE, pushed, CI green at d7d394a) |
+| M1-12 TenantContext + repositories | changes-requested, fix round 1 in progress when the session paused (branch feature/m1-12-tenant-context-repos). QA blocker: update/add accepted SQL expressions (cross-tenant read reproduced); plus AST-based static check, has_identity guard, filter User.is_active. Check the branch for a new commit after 4bbbdd2; if present send it to qa-reviewer (round 1 delta), else resume the coder with the QA findings. |
 | M1-13..M1-20 | todo |
 
 Suggested order after 11/12: 13, 14, 16, 15, 17, 18, 19, 20.
@@ -32,6 +31,6 @@ Suggested order after 11/12: 13, 14, 16, 15, 17, 18, 19, 20.
 - Local `docker compose up` needs SECRET_KEY and ENCRYPTION_KEY (>= 32 chars) in `.env`.
 
 ## Next 3 steps
-1. QA M1-11 and M1-12, merge, push, check CI.
+1. Finish M1-12 fix round 1 → QA delta → merge, push, check CI (poll with gh run view).
 2. M1-13 (argon2 + sessions, opus), then M1-14 (CSRF + headers).
 3. M1-16 templates/dark mode (includes the M1-09 follow-up), then M1-15 login.
