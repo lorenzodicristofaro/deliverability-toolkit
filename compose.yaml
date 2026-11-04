@@ -15,6 +15,13 @@ services:
       DATABASE_URL: ${DATABASE_URL:-sqlite:////data/app.db}
       SECRET_KEY: ${SECRET_KEY:-}          # required since M1; the app refuses to start if empty
       ENCRYPTION_KEY: ${ENCRYPTION_KEY:-}  # required since M1; the app refuses to start if empty
+      # Resolver wiring (M1-01 settings). Defaults keep the system resolver. For the unbound
+      # profile use RESOLVER_MODE=unbound and RESOLVER_ADDRS=172.28.53.2:5353 (docs/UNBOUND.md).
+      RESOLVER_MODE: ${RESOLVER_MODE:-system}
+      RESOLVER_ADDRS: ${RESOLVER_ADDRS:-}
+    networks:
+      - default  # internet access
+      - dns      # reach the unbound profile at 172.28.53.2; internal, no outside access
     volumes:
       - app-data:/data
     healthcheck:
@@ -78,12 +85,16 @@ services:
 networks:
   # Internal network for DNS clients of the unbound profile (no outside access, nothing
   # published). The subnet is fixed here and repeated in docker/unbound/unbound.conf.
-  # To use the resolver, attach a service to "dns" and point it at 172.28.53.2 port 5353.
+  # The app is always attached to "dns"; point it at 172.28.53.2 port 5353 via RESOLVER_*.
   dns:
     internal: true
     ipam:
       config:
         - subnet: 172.28.53.0/24
+          # Pinned to match `access-control: 172.28.53.1/32 refuse` (unbound.conf line 26).
+          # unverified: that every engine honours `gateway` on an `internal: true` network
+          # (checked on one local Docker engine only, see docs/UNBOUND.md).
+          gateway: 172.28.53.1
 
 volumes:
   app-data:
