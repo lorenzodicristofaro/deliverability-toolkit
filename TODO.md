@@ -7,7 +7,7 @@ Mark items `[x]` when done. Acceptance criteria are the definition of done.
 - [x] Repo, AGPL-3.0 LICENSE, README stub, CONTRIBUTING (DCO), CODE_OF_CONDUCT
 - [x] uv project, ruff, mypy, pytest, pre-commit, GitHub Actions CI
 - [x] Dockerfile (multi-arch) + compose.yaml with optional `unbound` / `postgres` profiles
-- [ ] M0-07 own Unbound image — REWORK round 2 (maintainer 2026-11-04): KSK-2024 anchor test + persistent root.key volume, AD healthcheck, port 5353 + RESOLVER_ADDRS host:port, config audit, integration tests, arm64, hardening (round 1 merged into dev, QA APPROVE)
+- [x] M0-07 own Unbound image — REWORK round 2 (maintainer 2026-11-04): KSK-2024 anchor test + persistent root.key volume, AD healthcheck, port 5353 + RESOLVER_ADDRS host:port, config audit, integration tests, arm64, hardening (round 1 merged into dev, QA APPROVE)
 - [x] M0-09 Unbound hardening nits — superseded, folded into M0-07 round 2
 - Accept: `docker compose up` serves a health page; CI green.
   Status: pending — CI not yet run on GitHub (needs push of dev); local Docker daemon unavailable.
@@ -15,8 +15,8 @@ Mark items `[x]` when done. Acceptance criteria are the definition of done.
 ## M1 — Core platform (auth + multi-tenancy skeleton)
 Carried over from M0-07 QA:
 - [ ] Attach app to the `dns` network and point the guarded client at 172.28.53.2
-- [ ] CI runtime check of the `unbound` profile (up, healthy, AD flag, port 53 unpublished)
-- Note: the Unbound healthcheck only proves the process is up, not that resolution works.
+- [ ] CI runtime check of the `unbound` profile (up, healthy, AD flag, port 5353 unpublished) — largely covered by M0-07 r2 CI jobs; reconcile
+- [ ] M0-07 QA nits (small): (a) pin `gateway: 172.28.53.1` in compose.yaml IPAM so the `access-control 172.28.53.1/32 refuse` rule is explicitly tied; (b) host-side test probe on 127.0.0.1:5353 may false-fail on hosts with an mDNS responder (avahi): use another probe or skip/handle
 - [ ] Config, logging, DB, Alembic migrations (SQLite + PostgreSQL)
 - [ ] Users, tenants, memberships, roles, permission layer `can()`
 - [ ] Login (argon2), sessions, CSRF, first-run setup wizard (creates instance admin)

@@ -37,7 +37,7 @@ Verification and reporting
 - Docker runtime checks (up, healthcheck, ownership) are covered by CI in M0-05.
 
 New i18n keys: none
-Status: rework (round 2). Round 1: done on branch feat/M0-07-unbound, QA APPROVE (opus), merged into dev locally (not pushed). Round 1 history is not reopened; round 2 is a new branch from dev.
+Status: done (round 2 merged into dev locally 2026-11-04, QA APPROVE opus 2nd round; tests 62 passed, lint clean; not pushed). Round 1: branch feat/M0-07-unbound, QA APPROVE, merged. Round 2: branch fix/M0-07-unbound-r2.
 
 ## Rework round 2 — maintainer 2026-11-04
 Branch: fix/M0-07-unbound-r2 (from dev). Model: sonnet. Parallel-safe: no (compose.yaml, ci.yml, app config shared).
@@ -77,6 +77,7 @@ New i18n keys (round 2): only if the RESOLVER_ADDRS parser surfaces a user-facin
 Review: security-relevant (isolation, caps, trust anchor); opus QA required for round 2.
 
 ## M1 follow-ups (from QA)
+- Round 2 optional QA nits (tracked in TODO.md under M1): (a) compose.yaml IPAM should pin `gateway: 172.28.53.1` so the `access-control 172.28.53.1/32 refuse` rule is explicitly tied; (b) host-side test probe on 127.0.0.1:5353 may false-fail on hosts with an mDNS responder (avahi).
 - Attach the app service to the `dns` network and point the guarded client at 172.28.53.2.
 - Add a CI runtime check of the `unbound` profile (up, healthy, AD flag, port 53 unpublished).
 - Awareness: the healthcheck (`unbound-control`) only proves the process is up, not that resolution works.
