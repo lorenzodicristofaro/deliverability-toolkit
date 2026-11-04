@@ -14,4 +14,8 @@ Acceptance criteria:
 New i18n keys: none
 Status: done (QA APPROVE, merged to dev in af1620c)
 
-Runtime UNVERIFIED: no access to the Docker daemon, so none of these were run: image build, `docker compose up`, /healthz, container healthcheck, volume ownership of /data, postgres/unbound profile startup. CI verifies this in M0-05. Follow-ups in M0-07.
+Runtime verification PASSED on 2026-11-04 (local WSL, Docker 29.9.2, Compose v5.6.1):
+- `docker compose up -d --build --wait` -> app container healthy.
+- `curl localhost:8000/healthz` -> HTTP 200 `{"status":"ok"}`.
+- Container runs as non-root: uid=999(app).
+Still not run locally: postgres/unbound profile startup (unbound covered by M0-07). Follow-ups in M0-07.

@@ -6,7 +6,7 @@ Resume with `/gm`.
 ## Current milestone: M0 — Project setup
 All TODO.md items ticked. Milestone acceptance still **pending**:
 - CI has never run on GitHub (needs the human to push `dev`).
-- `docker compose up` → `/healthz` 200 not verified locally (daemon socket: permission denied).
+- ~~`docker compose up` → `/healthz` 200 not verified locally~~ — verified 2026-11-04 (see M0-04).
 `dev` is NOT yet merged into `qa`. No milestone report written yet.
 
 ## Tickets
@@ -15,7 +15,7 @@ All TODO.md items ticked. Milestone acceptance still **pending**:
 | M0-01 governance docs | done | CoC contact placeholder (CODE_OF_CONDUCT.md:41): maintainer fills in before public release |
 | M0-02 uv toolchain | done | |
 | M0-03 /healthz | done | M1 follow-ups in ticket: /docs + /openapi.json unauthenticated; empty SECRET_KEY/ENCRYPTION_KEY must be treated as missing |
-| M0-04 Dockerfile + compose | done | runtime unverified (no daemon) |
+| M0-04 Dockerfile + compose | done | runtime verified 2026-11-04 (app only; postgres/unbound profiles not run) |
 | M0-05 GitHub Actions CI | done | never run on GitHub; optional nits listed in ticket |
 | M0-06 toolchain/health fixes | done | `data/` item resolved by maintainer decision (seeds/) |
 | M0-07 Docker follow-ups (own Unbound image) | **todo** | rewritten with maintainer decisions; PM flags network isolation for opus-level review |
@@ -29,11 +29,11 @@ All TODO.md items ticked. Milestone acceptance still **pending**:
 - QA reviewer runs on opus; coder model per ticket `Model:` line (default sonnet).
 
 ## Open items for the maintainer
-1. Fix Docker daemon access in WSL (docker group or Docker Desktop WSL integration).
-2. Push `dev` to GitHub so CI runs (agents never push).
+1. ~~Fix Docker daemon access in WSL~~ RESOLVED 2026-11-04 (M0-04 runtime verification passed, see ticket).
+2. ~~Push `dev` to GitHub so CI runs~~ DONE 2026-11-04; CI result still to be confirmed by the maintainer.
 3. CoC enforcement contact: before public release.
 
 ## Next 3 steps
-1. Check Docker works (`docker compose up --wait`, `curl localhost:8000/healthz`); record the result in M0-04.
+1. ~~Check Docker works~~ — done 2026-11-04 (/healthz 200, recorded in M0-04).
 2. Run M0-07 (coder → QA on opus, with focus on network isolation and verified Debian/Unbound facts) → merge.
 3. After the maintainer's push and green CI: full suite on `dev`, merge `dev` → `qa`, write `docs/reports/M0.md`.
