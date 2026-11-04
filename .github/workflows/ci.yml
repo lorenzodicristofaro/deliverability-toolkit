@@ -66,6 +66,12 @@ jobs:
           context: .
           platforms: linux/amd64,linux/arm64
           push: false
+      # Unbound image (docker/unbound): multi-arch build check, no push. Maintenance: docs/UNBOUND.md.
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: docker/unbound
+          platforms: linux/amd64,linux/arm64
+          push: false
       # Smoke test on the native platform. Default profiles only (app + SQLite, no postgres/unbound).
       # `--wait` blocks until the compose healthcheck of the app reports healthy.
       - name: Compose up and wait for healthy

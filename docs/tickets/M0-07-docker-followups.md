@@ -1,6 +1,6 @@
 # M0-07 Docker follow-ups: own Unbound image, tag verification, seeds
 Milestone: M0
-Branch: feature/m0-07-docker-followups
+Branch: feat/M0-07-unbound
 Files in scope: docker/unbound/Dockerfile (new), docker/unbound/unbound.conf, compose.yaml, .github/workflows/ci.yml, .github/workflows/rebuild.yml (new, optional: may be folded into ci.yml), docs/UNBOUND.md (new), Dockerfile and .dockerignore (seeds item only)
 Out of scope: app code, ARCHITECTURE.md and SPEC.md (read-only; ARCHITECTURE §7 already updated by the GM: Unbound is an optional compose profile, own image, maintenance rule in docs/UNBOUND.md)
 Depends on: M0-04, M0-05, M0-06
@@ -37,4 +37,25 @@ Verification and reporting
 - Docker runtime checks (up, healthcheck, ownership) are covered by CI in M0-05.
 
 New i18n keys: none
-Status: todo
+Status: done (branch feat/M0-07-unbound; QA pending)
+
+## Verification record (2026-11-04, Docker 29.9.2, Linux/WSL2, run locally)
+- `docker compose --profile unbound config -q`: OK.
+- `docker compose --profile unbound up -d --build --wait --wait-timeout 180`: app and unbound both Healthy;
+  `docker compose ps` shows unbound `53/tcp, 53/udp` (no host mapping); `docker port` empty;
+  HostConfig PortBindings `{}`.
+- Non-root: `id` in container = `uid=100(unbound) gid=101(unbound)`; `/var/lib/unbound/root.key` owned by unbound.
+- From a throwaway debian container (bind9-dnsutils) attached only to the `dns` network:
+  - `dig @172.28.53.2 +dnssec ietf.org A`: NOERROR, flags `qr rd ra ad`.
+  - `dig @172.28.53.2 example.net A`: NOERROR, `ad`.
+  - `dig @172.28.53.2 dnssec-failed.org A`: SERVFAIL (validation failure); with `+cd`: NOERROR (confirms it is validation).
+- Host side: `127.0.0.1:53` connection refused (the only :53 listeners on the host are WSL's own
+  127.0.0.53/127.0.0.54/10.255.255.254 stubs, not Docker); `172.28.53.2:53` not reachable from the host.
+- `unbound-control get_option qname-minimisation` in container: `yes`. `dig/drill/curl` are not in the image;
+  the healthcheck uses `unbound-control` (from the `unbound` package).
+- `docker buildx build --platform linux/arm64` of docker/unbound: succeeded (QEMU, build only).
+- Tags verified with `docker buildx imagetools inspect`: python:3.12-slim-trixie, uv:0.13.7, postgres:17 (amd64 + arm64);
+  debian:trixie-slim digest sha256:f6b08b09...c3ec4.
+- Teardown: `docker compose --profile unbound down -v`, test container and network removed.
+- `seeds/` does not exist yet; Dockerfile/.dockerignore unchanged for it (check only).
+- Not run here: GitHub Actions (ci.yml unbound step, rebuild.yml); YAML syntax only.
