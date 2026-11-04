@@ -141,6 +141,14 @@ class Principal:
     memberships: tuple[MembershipGrant, ...] = ()
 
 
+def _freeze_toggles(toggles: object) -> Any:
+    """Read-only copy of a mapping; anything else is passed through unchanged so that
+    `_toggle_denies` denies every action for it (fail closed, no coercion)."""
+    if isinstance(toggles, Mapping):
+        return MappingProxyType(dict(toggles))
+    return toggles
+
+
 def principal_from_models(
     user: User,
     memberships: Iterable[Membership],
@@ -153,14 +161,14 @@ def principal_from_models(
     tenant_of = {m.id: m.tenant_id for m in own}
     domains: dict[int, set[int]] = {m.id: set() for m in own}
     for da in domain_access:
-        if tenant_of.get(da.membership_id) == da.tenant_id:
+        if da.membership_id in domains and tenant_of[da.membership_id] == da.tenant_id:
             domains[da.membership_id].add(da.domain_id)
     grants = tuple(
         MembershipGrant(
             tenant_id=m.tenant_id,
             role=m.role,
             domain_ids=frozenset(domains[m.id]),
-            feature_toggles=MappingProxyType(dict(m.feature_toggles or {})),
+            feature_toggles=_freeze_toggles(m.feature_toggles),
         )
         for m in own
     )
@@ -257,7 +265,10 @@ def _domain_allowed(grant: MembershipGrant, role: MembershipRole, domain_id: int
     if role not in _DOMAIN_RESTRICTED_ROLES:
         return True
     ids = grant.domain_ids
-    return isinstance(ids, frozenset | set) and domain_id in ids
+    if not isinstance(ids, frozenset | set):
+        return False
+    # Compare only well-formed ids: True == 1 must not match domain 1.
+    return any(_is_id(d) and d == domain_id for d in ids)
 
 
 def can(principal: object, action: object, resource: object) -> bool:

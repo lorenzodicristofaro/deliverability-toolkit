@@ -184,6 +184,13 @@ def test_unknown_or_malformed_action_denied(action: object) -> None:
         DomainResource(A, 0),
         DomainResource(A, None),  # type: ignore[arg-type]
         DomainResource(None, ASSIGNED),  # type: ignore[arg-type]
+        TenantResource(1.0),  # type: ignore[arg-type]
+        DomainResource(A, 10.0),  # type: ignore[arg-type]
+        DomainResource(1.0, ASSIGNED),  # type: ignore[arg-type]
+        DomainResource(A, -1),
+        DomainResource(A, "10"),  # type: ignore[arg-type]
+        DomainResource(-1, ASSIGNED),
+        DomainResource(A, True),  # type: ignore[arg-type]
     ],
 )
 def test_malformed_resource_denied(resource: object) -> None:
@@ -368,3 +375,60 @@ def test_principal_from_models_inactive_user_denied() -> None:
     p = principal_from_models(user, [m], [], active_tenant_id=A)
     for action, resource in itertools.product(Action, SITUATIONS.values()):
         assert can(p, action, resource) is False
+
+
+def test_instance_admin_with_membership_tenant_none_gets_no_tenant_data() -> None:
+    p = _p(
+        is_instance_admin=True,
+        memberships=(MembershipGrant(None, MembershipRole.OWNER),),  # type: ignore[arg-type]
+    )
+    for action, situation in itertools.product(Action, SITUATIONS):
+        expected = action is Action.INSTANCE_MANAGE and situation == "instance"
+        assert can(p, action, SITUATIONS[situation]) is expected
+
+
+@pytest.mark.parametrize(
+    ("domain_ids", "domain_id", "expected"),
+    [
+        (frozenset({True}), 1, False),  # bool must not match domain 1
+        (frozenset({1.0}), 1, False),
+        (frozenset({"1"}), 1, False),
+        (frozenset({0, -1}), 1, False),
+        ([1], 1, False),  # not a set
+        (frozenset({1}), 1, True),
+        ({1}, 1, True),
+    ],
+)
+def test_client_viewer_domain_ids_are_validated(
+    domain_ids: object, domain_id: int, expected: bool
+) -> None:
+    grant = MembershipGrant(A, MembershipRole.CLIENT_VIEWER, domain_ids=domain_ids)  # type: ignore[arg-type]
+    assert (
+        can(_p(memberships=(grant,)), Action.DOMAIN_READ, DomainResource(A, domain_id)) is expected
+    )
+
+
+def test_principal_from_models_ignores_access_for_unknown_membership() -> None:
+    user = User(id=7, email="u@example.com", is_active=True, is_instance_admin=False)
+    m = Membership(
+        id=1, user_id=7, tenant_id=A, role=MembershipRole.CLIENT_VIEWER, feature_toggles={}
+    )
+    access = [
+        DomainAccess(membership_id=42, domain_id=ASSIGNED, tenant_id=None),
+        DomainAccess(membership_id=None, domain_id=ASSIGNED, tenant_id=None),
+    ]
+    p = principal_from_models(user, [m], access, active_tenant_id=A)
+    assert p.memberships[0].domain_ids == frozenset()
+    assert can(p, Action.DOMAIN_READ, DomainResource(A, ASSIGNED)) is False
+
+
+@pytest.mark.parametrize("toggles", [["ab"], "ab", 1, None])
+def test_principal_from_models_non_mapping_toggles_deny_all(toggles: object) -> None:
+    user = User(id=7, email="u@example.com", is_active=True, is_instance_admin=False)
+    m = Membership(id=1, user_id=7, tenant_id=A, role=MembershipRole.OWNER)
+    m.feature_toggles = toggles  # type: ignore[assignment]
+    p = principal_from_models(user, [m], [], active_tenant_id=A)
+    assert p.memberships[0].feature_toggles == toggles  # passed through, not coerced
+    for action, situation in itertools.product(Action, SITUATIONS):
+        if situation != "instance":
+            assert can(p, action, SITUATIONS[situation]) is False
