@@ -33,7 +33,7 @@ Carried over from M0-07 QA:
   - [x] M2-02 result states + Resolver protocol
   - [x] M2-03 DNS egress policy (opus; decided by GM 2026-11-05, ARCHITECTURE section 7)
   - [x] M2-04 recorded-zone fixtures + fake resolver
-  - [ ] M2-05 backends system/custom/Unbound (dnspython dependency, opus)
+  - [x] M2-05 backends system/custom/Unbound (dnspython dependency, opus)
   - [x] M2-06 TTL cache
   - [ ] M2-07 public resolver list + root hints data files (unverified entries flagged)
   - [ ] M2-08 lookup + reverse service

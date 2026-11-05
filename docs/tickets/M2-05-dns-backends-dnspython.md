@@ -15,7 +15,7 @@ Acceptance criteria:
 - Tests: NO network, NO sockets. The query transport is injected (a callable returning `dns.message.Message` or raising) so tests feed canned wire messages, including truncated, oversized, garbage bytes, ID mismatch, wrong question section, and a response from an unexpected source if the transport exposes it.
 - `uv sync` and `uv run pytest -q` pass; mypy clean (dnspython ships typing information: coder verifies, else adds a narrow override).
 New i18n keys: none
-Status: todo
+Status: done
 
 GM note 2026-11-05 (from M2-03/M2-04 QA):
 - Backends implement `query_server(addr, question) -> ServerReply(result, referral)` as in tests/support/dns_zones.py. Callers MUST check `reply.referral` before `result.state`; a referral is never surfaced as "missing". `resolve()` is for recursive servers only.
