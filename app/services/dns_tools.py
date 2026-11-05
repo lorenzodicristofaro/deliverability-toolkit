@@ -296,14 +296,19 @@ async def reverse(
                 )
             )
         )
-        if any(t is None for t in targets):
-            state, detail = FcrdnsState.could_not_verify, "invalid_ptr_name"
-        elif len(distinct) > MAX_PTR_NAMES:
-            state, detail = FcrdnsState.could_not_verify, "too_many_ptr_names"
-        elif any(f.matches is None for f in forward):
-            state, detail = FcrdnsState.could_not_verify, "forward_not_evaluated"
-        elif any(f.matches for f in forward):
-            state = FcrdnsState.confirmed
+        problem = (
+            "invalid_ptr_name"
+            if any(t is None for t in targets)
+            else "too_many_ptr_names"
+            if len(distinct) > MAX_PTR_NAMES
+            else "forward_not_evaluated"
+            if any(f.matches is None for f in forward)
+            else None
+        )
+        if any(f.matches for f in forward):
+            state, detail = FcrdnsState.confirmed, problem  # a match wins; failures recorded
+        elif problem is not None:
+            state, detail = FcrdnsState.could_not_verify, problem
         else:
             state = FcrdnsState.mismatch
     return ReverseReport(
@@ -326,13 +331,14 @@ async def _forward_check(
     results = tuple(
         await asyncio.gather(*(_query(resolver, name, t, bypass_cache, sem) for t in ("A", "AAAA")))
     )
-    if any(r.state.is_failure for r in results):
-        return ForwardCheck(name, results, None)
     addrs: set[IPAddress] = set()
+    unusable = any(r.state.is_failure for r in results)
     for r in results:
         for rec in r.records:
             try:
                 addrs.add(ipaddress.ip_address(rec.rdata_text))
             except ValueError:
-                return ForwardCheck(name, results, None)
-    return ForwardCheck(name, results, ip in addrs)
+                unusable = True
+    if ip in addrs:
+        return ForwardCheck(name, results, True)
+    return ForwardCheck(name, results, None if unusable else False)

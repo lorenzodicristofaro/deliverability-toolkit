@@ -330,15 +330,64 @@ async def test_fcrdns_forward_failure_is_could_not_verify(state: str, which: str
     assert rep.evaluated is False and rep.detail_code == "forward_not_evaluated"
 
 
-async def test_fcrdns_failure_on_one_name_beats_match_on_another() -> None:
-    fake = fz(
-        rec("a.example.com", "A", ["192.0.2.10"]),
-        fail("b.example.com", "A", "timeout"),
-        ptr=["a.example.com.", "b.example.com."],
-    )
-    rep = await fc(fake)
-    assert rep.fcrdns is FcrdnsState.could_not_verify
-    assert [f.matches for f in rep.forward] == [True, None]
+@pytest.mark.parametrize(
+    ("extra", "ptr", "expected", "detail", "matches"),
+    [
+        # match + failure elsewhere -> pass, failure recorded
+        (
+            [rec("a.example.com", "A", ["192.0.2.10"]), fail("b.example.com", "A", "timeout")],
+            ["a.example.com.", "b.example.com."],
+            FcrdnsState.confirmed,
+            "forward_not_evaluated",
+            [True, None],
+        ),
+        # match on A, AAAA of same name failed -> still pass
+        (
+            [rec("a.example.com", "A", ["192.0.2.10"]), fail("a.example.com", "AAAA", "servfail")],
+            ["a.example.com."],
+            FcrdnsState.confirmed,
+            None,
+            [True],
+        ),
+        # match + invalid PTR name -> pass, recorded
+        (
+            [rec("a.example.com", "A", ["192.0.2.10"])],
+            ["a.example.com.", "bad name.example.com"],
+            FcrdnsState.confirmed,
+            "invalid_ptr_name",
+            [True],
+        ),
+        # no match + failure -> could not verify
+        (
+            [rec("a.example.com", "A", ["192.0.2.99"]), fail("b.example.com", "A", "timeout")],
+            ["a.example.com.", "b.example.com."],
+            FcrdnsState.could_not_verify,
+            "forward_not_evaluated",
+            [False, None],
+        ),
+        # all ok, no match -> mismatch
+        (
+            [rec("a.example.com", "A", ["192.0.2.99"]), rec("b.example.com", "A", ["192.0.2.98"])],
+            ["a.example.com.", "b.example.com."],
+            FcrdnsState.mismatch,
+            None,
+            [False, False],
+        ),
+    ],
+)
+async def test_fcrdns_match_wins(
+    extra: list[dict[str, Any]],
+    ptr: list[str],
+    expected: FcrdnsState,
+    detail: str | None,
+    matches: list[bool | None],
+) -> None:
+    rep = await fc(fz(*extra, ptr=ptr))
+    assert rep.fcrdns is expected
+    assert rep.detail_code == detail
+    assert [f.matches for f in rep.forward][: len(matches)] == matches
+    if expected is FcrdnsState.confirmed:
+        assert rep.evaluated is True
 
 
 @pytest.mark.parametrize("state", ["servfail", "timeout", "refused", "malformed"])
