@@ -6,7 +6,9 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.exc import ArgumentError
 
 from app.core.config import Settings
+from app.core.csrf import CSRFMiddleware
 from app.core.logging import RequestLoggingMiddleware, configure_logging
+from app.core.security_headers import SecurityHeadersMiddleware
 from app.web.health import router as health_router
 
 _MIN_MASKED_LEN = 8  # same threshold as app.core.logging: shorter values are not masked
@@ -39,6 +41,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # Interactive docs and the OpenAPI schema are disabled: they would be served unauthenticated.
     # M10 (Docs site, OpenAPI) re-exposes OpenAPI behind authentication.
     web_app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
+    # The last added middleware is the outermost: RequestLogging -> SecurityHeaders -> CSRF -> app,
+    # so CSRF 403s are logged and carry the security headers too.
+    web_app.add_middleware(CSRFMiddleware)
+    web_app.add_middleware(SecurityHeadersMiddleware)
     web_app.add_middleware(RequestLoggingMiddleware)
     web_app.include_router(health_router)
     return web_app
