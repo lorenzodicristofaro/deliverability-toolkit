@@ -31,3 +31,4 @@ Outcome (merged into dev, QA APPROVE after round 1):
 - Session rotation on login and on tenant switch; the switch keeps the absolute expiry and revokes before it creates.
 - Extra i18n key: auth.required.
 - The default active tenant is the first membership by tenant name.
+- Fix: hotfix 73f62f1 rejects NUL/control characters and over-long (>254) emails in normalize_email, found by PG CI.

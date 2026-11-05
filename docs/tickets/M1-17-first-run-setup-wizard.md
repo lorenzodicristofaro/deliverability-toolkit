@@ -12,4 +12,10 @@ Acceptance criteria:
 - Setup does not require login but requires CSRF (M1-14). GM decision Q6: a one-time setup token is logged at first start (only the token hash is stored) and required by the form, so an exposed fresh instance cannot be claimed by a stranger; it is invalidated after setup (test).
 - Tests: validation errors, already-initialised 404, concurrent setup, redirect-to-setup behaviour, no password in logs.
 New i18n keys: setup.title, setup.email, setup.password, setup.password_confirm, setup.tenant_name, setup.submit, setup.error.password_short, setup.error.password_mismatch, setup.error.email_invalid, setup.token_required (en + it)
-Status: todo
+Status: done
+Outcome (merged into dev, QA APPROVE + 2 delta reviews):
+- Race handling: a single-row instance_setup table (CHECK id=1) with a conditional-UPDATE claim; migration 0004.
+- Setup token: 256-bit, only its SHA-256 stored, regenerated at each start while setup is pending, logged on app.setup.token whatever LOG_LEVEL is; wrong tries are throttled.
+- Password: 15 to 128 code points, no composition rules (NIST SP 800-63B-4 §3.1.1.2, verified by QA at pages.nist.gov); blocklist of the email, its local part, the app name and a bundled SecLists list (MIT, notice in app/services/password_lists/THIRD_PARTY_NOTICES).
+- The gate fails open when the DB is unreadable, while /setup itself fails closed.
+- Known gap: setup redirects to "/", which 404s until M1-19 adds the route.

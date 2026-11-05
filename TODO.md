@@ -19,7 +19,7 @@ Carried over from M0-07 QA:
 - [x] M0-07 QA nits (small) (M1-04 gateway + ip_range, M1-05 mDNS probe): (a) pin `gateway: 172.28.53.1` in compose.yaml IPAM so the `access-control 172.28.53.1/32 refuse` rule is explicitly tied; (b) host-side test probe on 127.0.0.1:5353 may false-fail on hosts with an mDNS responder (avahi): use another probe or skip/handle
 - [x] Config, logging, DB, Alembic migrations (SQLite + PostgreSQL) (M1-01..03, M1-06, M1-07; PG in CI)
 - [ ] Users, tenants, memberships, roles, permission layer `can()`
-- [ ] Login (argon2), sessions, CSRF, first-run setup wizard (creates instance admin)
+- [x] Login (argon2), sessions, CSRF, first-run setup wizard (creates instance admin)
 - [ ] Tenant-scoped repositories + tenancy test matrix
 - [ ] Domain CRUD, tenant landing page, i18n (en/it) scaffolding, dark mode
 - Accept: user from tenant A cannot read tenant B data (tests prove it); client viewer limited to assigned domains.
@@ -89,4 +89,8 @@ Carried over from M0-07 QA:
 - [ ] Trusted-proxy setting for the client IP (needed before any reverse-proxy deployment)
 - [ ] `services.auth.rotate_session` helper (`_switch` reads the sessions row directly)
 - [ ] Dispose of the DB engine at shutdown via the lifespan
+- [ ] A breached-password corpus check, offline
+- [ ] MAINTAINER TO CONFIRM before the public release: the terms of the original xato.net dataset behind the SecLists password list are unverified
+- [ ] A TenantMembershipRepository.create() helper (setup uses memberships.add(model(...)))
+- [ ] NFC normalisation of email and password (login and setup together)
 - [ ] HTMX under CSP `script-src 'self'` is unverified, maintainer to confirm against https://htmx.org/docs/ (set includeIndicatorStyles=false and allowEval=false when vendored)
