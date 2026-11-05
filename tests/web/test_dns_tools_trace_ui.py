@@ -404,6 +404,21 @@ def test_propagation_too_many_ids_and_oversized(world: World) -> None:  # noqa: 
     assert post(world, "analyst", PROP, {"name": "a" * 5000}).status_code == 413
 
 
+def test_propagation_too_many_targets_has_its_own_message(
+    world: World,  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import app.services.dns_propagation as svc
+
+    monkeypatch.setattr(svc, "MAX_TARGETS", 1)
+    r = post(world, "analyst", PROP, {"name": "example.com", "type": "A", "resolver_ids": "google"})
+    assert r.status_code == 422
+    assert 'data-testid="propagation-error"' in r.text
+    assert t("tools.dns.propagation.too_many_targets", "en") in r.text
+    assert t("api.error.invalid_request", "en") not in r.text
+    assert "propagation-result" not in r.text
+
+
 def test_propagation_request_deadline(
     world: World,  # noqa: F811
     monkeypatch: pytest.MonkeyPatch,

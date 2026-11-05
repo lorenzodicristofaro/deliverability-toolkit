@@ -29,7 +29,7 @@ from app.core.permissions import Action, Principal, TenantResource, can
 from app.dns.knowledge import list_public_resolvers
 from app.dns.trace import DEFAULT_LIMITS, TraceReport, trace
 from app.dns.types import ALLOWED_RDTYPES, DnsQuestion
-from app.services.dns_propagation import PropagationReport, check_propagation
+from app.services.dns_propagation import MAX_RESOLVERS, PropagationReport, check_propagation
 from app.services.dns_tools import (
     ALL_TYPES,
     InvalidLookupInput,
@@ -134,6 +134,8 @@ def _error_key(exc: InvalidLookupInput) -> str:
         return "tools.dns.invalid_name"
     if exc.field == "ip":
         return "tools.dns.invalid_ip"
+    if exc.field == "resolver" and exc.reason == "too_many_targets":
+        return "tools.dns.propagation.too_many_targets"
     return "api.error.invalid_request"
 
 
@@ -209,8 +211,6 @@ async def dns_reverse_form(request: Request, auth: CurrentSession, backend: Back
 
 # --- trace and propagation (M2-14) --------------------------------------------------------------
 
-_MAX_RESOLVER_IDS = 8  # same cap as the service; more is rejected there as well
-
 
 def _tool_page(
     request: Request,
@@ -251,7 +251,7 @@ def _name_type(form: dict[str, list[str]]) -> dict[str, str] | None:
 def _resolver_ids(form: dict[str, list[str]]) -> tuple[str, ...] | None:
     """The checked resolver ids; None if any is over-long, has controls or there are too many."""
     raw = form.get("resolver_ids", [])
-    if len(raw) > _MAX_RESOLVER_IDS:
+    if len(raw) > MAX_RESOLVERS:
         return None
     out: list[str] = []
     for item in raw:
@@ -315,9 +315,28 @@ async def dns_trace_form(request: Request, auth: CurrentSession, backend: Backen
     return _tool_page(request, "dns/trace.html", report=report, values=values)
 
 
-def _propagation_page(request: Request, **kw: object) -> HTMLResponse:
+def _propagation_page(
+    request: Request,
+    *,
+    status_code: int = 200,
+    error: str | None = None,
+    deadline: bool = False,
+    values: dict[str, str] | None = None,
+    selected: tuple[str, ...] = (),
+    report: PropagationReport | None = None,
+) -> HTMLResponse:
     catalog = {r.id: r for r in list_public_resolvers()}
-    return _tool_page(request, "dns/propagation.html", catalog=catalog, **kw)  # type: ignore[arg-type]
+    return _tool_page(
+        request,
+        "dns/propagation.html",
+        status_code=status_code,
+        error=error,
+        deadline=deadline,
+        values=values,
+        selected=selected,
+        catalog=catalog,
+        report=report,
+    )
 
 
 @router.get("/propagation", include_in_schema=False)
