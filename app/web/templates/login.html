@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}{{ t("auth.login.title") }} · {{ app_name }}{% endblock %}
+{% block content %}
+<h1>{{ t("auth.login.title") }}</h1>
+{% if error == "throttled" %}
+<p class="form-error" role="alert">{{ t("auth.login.throttled") }}</p>
+{% elif error %}
+<p class="form-error" role="alert">{{ t("auth.login.failed") }}</p>
+{% endif %}
+<form class="login-form" method="post" action="/login">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <input type="hidden" name="next" value="{{ next_path }}">
+  <p>
+    <label for="login-email">{{ t("auth.login.email") }}</label>
+    <input id="login-email" name="email" type="email" autocomplete="username" required
+           maxlength="254" value="{{ email }}">
+  </p>
+  <p>
+    <label for="login-password">{{ t("auth.login.password") }}</label>
+    <input id="login-password" name="password" type="password" autocomplete="current-password"
+           required>
+  </p>
+  <button type="submit">{{ t("auth.login.submit") }}</button>
+</form>
+{% endblock %}

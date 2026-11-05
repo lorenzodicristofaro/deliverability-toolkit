@@ -1,5 +1,26 @@
 {
   "permissions": {
-    "deny": ["Bash(git push:*)"]
+    "allow": [
+      "Bash(git push origin dev)",
+      "Bash(git push origin qa)",
+      "Bash(git push origin dev qa)",
+      "Bash(git push origin qa dev)",
+      "Bash(gh run list *)",
+      "Bash(gh run view *)",
+      "Bash(gh run watch *)"
+    ],
+    "deny": [
+      "Bash(git push *main*)",
+      "Bash(git push *--force*)",
+      "Bash(git push *-f*)",
+      "Bash(git push *+*)",
+      "Bash(git push *--tags*)",
+      "Bash(git push *refs/tags*)",
+      "Bash(git push *--all*)",
+      "Bash(git push *--mirror*)",
+      "Bash(git push *--delete*)",
+      "Bash(git push * -d *)",
+      "Bash(git push * :*)"
+    ]
   }
 }

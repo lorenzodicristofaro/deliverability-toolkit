@@ -28,20 +28,15 @@ Install `pre-commit` and add `.pre-commit-config.yaml` with ruff and a secret sc
 Check the scanner's current recommended hook configuration in its own documentation before pinning a version.
 Add the same scan to CI (M0).
 
-## 3. Stop agents from pushing
-Agents must not be able to push. Two layers:
-1. **No credentials**: do not configure an SSH key or token on the machine/session where agents run.
-   Push from a separate terminal or machine where only you are authenticated.
-2. **Deny rule** in `.claude/settings.json`:
-```json
-{
-  "permissions": {
-    "deny": ["Bash(git push:*)"]
-  }
-}
-```
-The permission-rule syntax can change between Claude Code versions: check the permissions documentation of your
-version, then **test it**: ask Claude Code to run `git push` and confirm it is refused.
+## 3. Push permissions (GM pushes `dev` and `qa` only)
+Decision 2026-11-04: the GM session may push `dev` and `qa`; everything else stays with you (see `docs/WORKFLOW.md`).
+1. **Scoped credentials**: authenticate `gh` with a fine-grained token limited to this repository
+   (Contents: read/write, Actions: read). Do not use a token with access to other repositories.
+2. **Permission rules** in `.claude/settings.json` (checked in): exact allow rules for `git push origin dev`,
+   `git push origin qa` (and both together), `gh run list|view|watch`; deny rules for `main`, tags, force
+   pushes, `--all`, `--mirror` and delete refspecs. Any other push form is not allowed and prompts.
+The permission-rule syntax can change between Claude Code versions: after changes, **test it** by asking
+Claude Code to run `git push origin main` and `git push --force origin dev`, and confirm both are refused.
 
 ## 4. Environments in the home lab
 - `compose.dev.yaml`, `compose.qa.yaml`, `compose.prod.yaml`: different ports, volumes and `.env` files.

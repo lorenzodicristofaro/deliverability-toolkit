@@ -1,0 +1,28 @@
+{% if not rows %}
+<p class="empty-state" data-testid="domains-empty">{{ t("landing.empty") }}</p>
+{% else %}
+<table class="domain-list" data-testid="domain-list">
+  <thead>
+    <tr>
+      <th scope="col">{{ t("landing.domain.name") }}</th>
+      <th scope="col">{{ t("landing.domain.last_check") }}</th>
+      <th scope="col">{{ t("landing.domain.actions") }}</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for row in rows %}
+    <tr data-domain-id="{{ row.id }}">
+      <td>
+        <a href="/domains/{{ row.id }}">{{ row.display_name }}</a>
+        {% include "domains/name_notes.html" %}
+      </td>
+      <td>{{ t("landing.domain.never_checked") }}</td>
+      <td>
+        {% if row.can_rename %}<a href="/domains/{{ row.id }}/rename" data-testid="domain-rename">{{ t("domain.rename") }}</a>{% endif %}
+        {% if row.can_delete %}<a href="/domains/{{ row.id }}/delete" data-testid="domain-delete">{{ t("domain.delete") }}</a>{% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}

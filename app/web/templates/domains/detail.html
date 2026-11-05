@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}{{ t("domain.detail.title") }} · {{ app_name }}{% endblock %}
+{% block content %}
+<p>{{ t("domain.detail.title") }}</p>
+<h1 data-testid="domain-name">{{ row.display_name }}</h1>
+{% include "domains/name_notes.html" %}
+<h2>{{ t("domain.detail.status") }}</h2>
+<p class="empty-state">{{ t("landing.domain.never_checked") }}</p>
+{% if access_count is not none %}
+<h2>{{ t("domain.access.title") }}</h2>
+<p data-testid="access-count">{{ t("domain.access.count", count=access_count) }}</p>
+{% endif %}
+{% if row.can_rename or row.can_delete %}
+<p>
+  {% if row.can_rename %}<a href="/domains/{{ row.id }}/rename" data-testid="domain-rename">{{ t("domain.rename") }}</a>{% endif %}
+  {% if row.can_delete %}<a href="/domains/{{ row.id }}/delete" data-testid="domain-delete">{{ t("domain.delete") }}</a>{% endif %}
+</p>
+{% endif %}
+{% endblock %}

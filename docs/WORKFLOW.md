@@ -94,11 +94,16 @@ the anti-SSRF network client, ReDoS protection, SPF logic, and parsers for raw m
   with separate ports, volumes, databases and secrets.
 
 ### Push policy (important)
-- **Agents never push to the remote.** They commit and merge locally (`feature/*` → `dev`, and the GM `dev` → `qa`).
-  The human pushes `dev`, `qa` and `main` to GitHub from a session that holds the credentials.
+- **Only the GM pushes, and only `dev` and `qa`** (maintainer decision 2026-11-04). Preconditions: QA APPROVE
+  and green local tests (for `qa`: milestone accepted). After each push the GM watches the run with
+  `gh run watch` and, on failure, sends the ticket back to `coder` with the log (counts toward the 2-round limit).
+- Coder, PM and QA never push. `main`, tags, releases, force pushes and branch deletions stay with the human.
+- Enforced by `.claude/settings.json`: exact allow rules for `git push origin dev|qa`, deny rules for
+  `main`, tags, force, `--all`, `--mirror`, delete refspecs. `gh` uses a fine-grained token scoped to this
+  repository (Contents read/write, Actions read).
 - Reason: branch protection on private repositories may not be available on the free GitHub plan
   (reported by users, not confirmed by official documentation: check your plan). Do not rely on it;
-  rely on agents having no push credentials and on a deny rule for `git push` (see `docs/SETUP.md`).
+  rely on the permission rules above (see `docs/SETUP.md`).
 - If you later get branch protection (paid plan), enable it for `qa` and `main` as a second layer.
 
 ### Credentials and permissions

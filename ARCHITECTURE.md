@@ -97,6 +97,16 @@ Isolation strategy (defense in depth):
 4. PostgreSQL deployments may additionally enable row-level security.
 5. Mandatory automated tests: for each endpoint, a user from tenant A must get
    404 on tenant B resources; a client viewer must not see unassigned domains.
+6. The instance admin manages tenants and instance settings but has NO access to
+   tenant data (domains, results, reports) through the admin flag alone. With a
+   membership in a tenant they see that tenant's data exactly as their membership
+   role and domain access allow, like any other member; the admin flag neither
+   adds nor removes anything there (maintainer decision 2026-11-04). Audited impersonation may be
+   evaluated later; it is not planned.
+7. Deletes: deleting a tenant cascades to its memberships, domains and domain access
+   (deliberate admin action). Users are never hard-deleted while they hold memberships
+   (FK RESTRICT); they are deactivated with `is_active = false`. Cross-tenant
+   `domain_access` rows are impossible by composite FKs on (id, tenant_id) (M1-10).
 
 ## 5. Data model (core tables)
 
@@ -190,7 +200,9 @@ missing-key test in CI; user and tenant language preference.
 `ENCRYPTION_KEY`, `RESOLVER_MODE` (`system|custom|unbound`), `RESOLVER_ADDRS` (comma-separated `host:port`,
 IP literals, IPv6 as `[::1]:5353`, default port 53),
 `ROLE`, `ALLOW_SMTP_CHECKS` (default false), `ALLOW_REGISTRATION` (default false),
-`BASE_URL`, `SMTP_*` for notifications, `LOG_LEVEL`.
+`BASE_URL`, `SMTP_*` for notifications, `LOG_LEVEL`,
+`SESSION_IDLE_TIMEOUT_MINUTES` (default 30) and `SESSION_ABSOLUTE_TIMEOUT_MINUTES`
+(default 720 = 12 h): both must be > 0 and idle <= absolute, otherwise startup fails.
 
 ## 12. Observability
 

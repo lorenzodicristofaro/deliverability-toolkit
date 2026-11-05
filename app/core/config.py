@@ -4,10 +4,22 @@ from __future__ import annotations
 
 import ipaddress
 from dataclasses import dataclass
+from typing import Any, Literal
+
+from pydantic import Field, SecretStr, ValidationError, field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 DEFAULT_RESOLVER_PORT = 53
+MIN_SECRET_LENGTH = 32
+# Session expiry defaults (M1-13): project choice, not taken from an external source.
+DEFAULT_SESSION_IDLE_TIMEOUT_MINUTES = 30
+DEFAULT_SESSION_ABSOLUTE_TIMEOUT_MINUTES = 12 * 60
 
 RESOLVER_ADDR_INVALID_KEY = "config.resolver_addr.invalid"
+# i18n keys; the locale files are created by M1-09, until then these are constants only.
+CONFIG_MISSING_KEY = "config.missing"
+CONFIG_INVALID_VALUE_KEY = "config.invalid_value"
+CONFIG_RESOLVER_ADDRS_REQUIRED_KEY = "config.resolver_addrs_required"
 
 
 class ConfigError(ValueError):
@@ -93,3 +105,80 @@ def parse_resolver_addrs(value: str) -> list[ResolverAddr]:
     if value.strip() == "":
         return []
     return [_parse_entry(raw.strip()) for raw in value.split(",")]
+
+
+_SECRET_FIELDS = ("secret_key", "encryption_key")
+
+
+class Settings(BaseSettings):
+    """Operator configuration from the environment (ARCHITECTURE section 11).
+
+    Construction validates everything and raises ConfigError (never pydantic's ValidationError,
+    whose messages echo input values). ConfigError params carry variable names, never secret
+    values; secrets are SecretStr so repr/str mask them. SMTP_* is out of scope until M7.
+    """
+
+    model_config = SettingsConfigDict(extra="ignore", frozen=True)
+
+    # SecretStr: a PostgreSQL URL carries the password; repr/str mask it.
+    database_url: SecretStr = SecretStr("sqlite:////data/app.db")
+    secret_key: SecretStr
+    encryption_key: SecretStr
+    resolver_mode: Literal["system", "custom", "unbound"] = "system"
+    resolver_addrs: str = ""
+    role: Literal["web", "worker", "all"] = "all"
+    allow_smtp_checks: bool = False
+    allow_registration: bool = False
+    base_url: str = "http://localhost:8000"
+    log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
+    # Login sessions: idle timeout (since last request) and absolute lifetime, in minutes.
+    # Both must be > 0 and idle <= absolute.
+    session_idle_timeout_minutes: int = Field(default=DEFAULT_SESSION_IDLE_TIMEOUT_MINUTES, gt=0)
+    session_absolute_timeout_minutes: int = Field(
+        default=DEFAULT_SESSION_ABSOLUTE_TIMEOUT_MINUTES, gt=0
+    )
+
+    @field_validator("secret_key", "encryption_key", mode="after")
+    @classmethod
+    def _not_blank(cls, value: SecretStr) -> SecretStr:
+        if value.get_secret_value().strip() == "":
+            raise ValueError("blank")
+        return value
+
+    @field_validator("secret_key", "encryption_key", mode="after")
+    @classmethod
+    def _min_length(cls, value: SecretStr) -> SecretStr:
+        # Very short secrets would make log value-masking match arbitrary text.
+        if len(value.get_secret_value()) < MIN_SECRET_LENGTH:
+            raise ValueError("too short")
+        return value
+
+    @field_validator("log_level", mode="before")
+    @classmethod
+    def _upper(cls, value: Any) -> Any:
+        return value.strip().upper() if isinstance(value, str) else value
+
+    @field_validator("resolver_mode", "role", mode="before")
+    @classmethod
+    def _lower(cls, value: Any) -> Any:
+        return value.strip().lower() if isinstance(value, str) else value
+
+    def __init__(self, **values: Any) -> None:
+        try:
+            super().__init__(**values)
+        except ValidationError as exc:
+            err = exc.errors(include_input=False, include_url=False)[0]
+            name = str(err["loc"][0]) if err["loc"] else "settings"
+            # Drop the pydantic exception: its repr would include input values (secrets).
+            if name in _SECRET_FIELDS and "too short" not in err["msg"]:
+                raise ConfigError(CONFIG_MISSING_KEY, name=name.upper()) from None
+            raise ConfigError(CONFIG_INVALID_VALUE_KEY, name=name.upper()) from None
+        if not self.base_url.startswith(("http://", "https://")):
+            raise ConfigError(CONFIG_INVALID_VALUE_KEY, name="BASE_URL")
+        if self.session_idle_timeout_minutes > self.session_absolute_timeout_minutes:
+            raise ConfigError(CONFIG_INVALID_VALUE_KEY, name="SESSION_IDLE_TIMEOUT_MINUTES")
+        if not self.parsed_resolver_addrs() and self.resolver_mode in ("custom", "unbound"):
+            raise ConfigError(CONFIG_RESOLVER_ADDRS_REQUIRED_KEY, mode=self.resolver_mode)
+
+    def parsed_resolver_addrs(self) -> list[ResolverAddr]:
+        return parse_resolver_addrs(self.resolver_addrs)
