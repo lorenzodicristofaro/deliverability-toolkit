@@ -18,7 +18,7 @@ Carried over from M0-07 QA:
 - [x] CI runtime check of the `unbound` profile (M1-08: coverage mapped in docs/tickets/M1-08, app→unbound test added) (up, healthy, AD flag, port 5353 unpublished) — largely covered by M0-07 r2 CI jobs; reconcile
 - [x] M0-07 QA nits (small) (M1-04 gateway + ip_range, M1-05 mDNS probe): (a) pin `gateway: 172.28.53.1` in compose.yaml IPAM so the `access-control 172.28.53.1/32 refuse` rule is explicitly tied; (b) host-side test probe on 127.0.0.1:5353 may false-fail on hosts with an mDNS responder (avahi): use another probe or skip/handle
 - [x] Config, logging, DB, Alembic migrations (SQLite + PostgreSQL) (M1-01..03, M1-06, M1-07; PG in CI)
-- [ ] Users, tenants, memberships, roles, permission layer `can()`
+- [x] Users, tenants, memberships, roles, permission layer `can()`
 - [x] Login (argon2), sessions, CSRF, first-run setup wizard (creates instance admin)
 - [ ] Tenant-scoped repositories + tenancy test matrix
 - [ ] Domain CRUD, tenant landing page, i18n (en/it) scaffolding, dark mode
@@ -93,4 +93,5 @@ Carried over from M0-07 QA:
 - [ ] MAINTAINER TO CONFIRM before the public release: the terms of the original xato.net dataset behind the SecLists password list are unverified
 - [ ] A TenantMembershipRepository.create() helper (setup uses memberships.add(model(...)))
 - [ ] NFC normalisation of email and password (login and setup together)
+- [ ] A dedicated permission action for domain access management, replacing the USER_MANAGE+DOMAIN_UPDATE combination on PUT /domains/{id}/access
 - [ ] HTMX under CSP `script-src 'self'` is unverified, maintainer to confirm against https://htmx.org/docs/ (set includeIndicatorStyles=false and allowEval=false when vendored)

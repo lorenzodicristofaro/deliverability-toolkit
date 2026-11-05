@@ -16,4 +16,11 @@ Acceptance criteria:
 - Mutations require CSRF when cookie-authenticated; responses carry no other-tenant data in errors.
 - Audit log is not in M1; leave a TODO comment referencing M10 only.
 New i18n keys: api.error.not_found, api.error.forbidden, api.error.conflict, domain.error.invalid_name (en + it)
-Status: todo
+Status: done (merged into dev, QA APPROVE)
+Outcome:
+- IDNA library: idna 3.20 (BSD-3), called with encode(uts46=True, std3_rules=True, transitional=False). The two flags come from the library signature, not its docs; their behaviour is verified by tests.
+- Rejected names: single-label, all-numeric TLD, underscores, surrounding whitespace. MAINTAINER TO CONFIRM these rules.
+- PUT /api/v1/domains/{id}/access needs USER_MANAGE + DOMAIN_UPDATE, replace-set semantics, client viewers only.
+- Tenancy matrix: 100 generated cases.
+- Only constraint uq_domains_tenant_id_name maps to 409 (DomainNameTaken).
+- Extra i18n keys beyond the list above: api.error.invalid_request, api.error.payload_too_large.
