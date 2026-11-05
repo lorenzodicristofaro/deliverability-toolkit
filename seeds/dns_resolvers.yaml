@@ -1,0 +1,35 @@
+# Public recursive resolvers offered for propagation checks (M2-10). Addresses are copied
+# from each operator's own documentation page; re-verify before release (ARCHITECTURE s.8).
+resolvers:
+  - id: google
+    name: Google Public DNS
+    operator: Google
+    addresses: [8.8.8.8, 8.8.4.4, "2001:4860:4860::8888", "2001:4860:4860::8844"]
+    port: 53
+    verified_on: 2026-11-05
+    sources: [https://developers.google.com/speed/public-dns/docs/using]
+    status: verified
+  - id: cloudflare
+    name: Cloudflare 1.1.1.1
+    operator: Cloudflare
+    addresses: [1.1.1.1, 1.0.0.1, "2606:4700:4700::1111", "2606:4700:4700::1001"]
+    port: 53
+    verified_on: 2026-11-05
+    sources: [https://developers.cloudflare.com/1.1.1.1/ip-addresses/]
+    status: verified
+  - id: quad9
+    name: Quad9 (malware blocking, DNSSEC validation)
+    operator: Quad9
+    addresses: [9.9.9.9, 149.112.112.112, "2620:fe::fe", "2620:fe::9"]
+    port: 53
+    verified_on: 2026-11-05
+    sources: [https://quad9.net/service/service-addresses-and-features/]
+    status: verified
+  - id: opendns
+    name: OpenDNS (standard)
+    operator: Cisco OpenDNS
+    addresses: [208.67.222.222, 208.67.220.220]
+    port: 53
+    verified_on: 2026-11-05
+    sources: [https://www.opendns.com/setupguide/]
+    status: verified
