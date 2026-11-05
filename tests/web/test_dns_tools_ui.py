@@ -130,8 +130,6 @@ def test_nav_link_on_every_kind_of_page(world: World, who: str, visible_link: bo
         "/",  # landing
         f"/domains/{world.domains['assigned']}",  # domain page
         f"/domains/{world.domains['other']}",  # 404 error page (foreign domain)
-        "/no-such-page",  # 404 without any dependency resolved
-        "/login",
     ]
     if who != "viewer":
         paths.append("/tools/dns")
@@ -144,6 +142,25 @@ def test_nav_link_on_every_kind_of_page(world: World, who: str, visible_link: bo
             path,
             r.status_code,
         )
+
+
+@pytest.mark.parametrize("path", ["/no-such-page", "/login"])
+def test_pages_without_resolved_session_show_no_link_and_do_not_touch_session(
+    world: World, path: str
+) -> None:
+    from sqlalchemy import select
+
+    from app.models import UserSession as SessionRow
+
+    get(world, "analyst", "/")  # creates and uses the session
+    world.db.expire_all()
+    before = [(r.id, r.last_seen_at) for r in world.db.scalars(select(SessionRow)).all()]
+    assert before
+    r = get(world, "analyst", path)
+    assert 'href="/tools/dns"' not in r.text
+    world.db.expire_all()
+    after = [(r.id, r.last_seen_at) for r in world.db.scalars(select(SessionRow)).all()]
+    assert after == before
 
 
 def test_viewer_denied_page_uses_dns_key(world: World) -> None:

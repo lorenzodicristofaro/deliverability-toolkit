@@ -26,7 +26,7 @@ from starlette.types import Scope
 from app.core.config import Settings
 from app.core.csrf import csrf_token_for
 from app.core.i18n import SUPPORTED_LANGUAGES, resolve_language, t
-from app.core.security import SESSION_COOKIE_NAME, session_cookie_settings
+from app.core.security import session_cookie_settings
 
 WEB_DIR: Final = Path(__file__).resolve().parent
 TEMPLATES_DIR: Final = WEB_DIR / "templates"
@@ -94,24 +94,13 @@ def request_language(scope: Scope) -> str:
 def dns_tools_nav(request: Request) -> bool:
     """Whether the nav shows the DNS tools link: the request's session principal holds
     `dns.tools` in its active tenant. False for anonymous, without a tenant, and on any error
-    (fail closed). Uses the session resolved by `optional_session` when it ran; otherwise (e.g.
-    an unknown-path 404) resolves it once here."""
+    (fail closed). Uses only the session already resolved by `optional_session` for this request;
+    it never touches the DB (pages that resolve no session, e.g. /login or an unknown-path 404,
+    show no link and must not extend idle sessions)."""
     from app.core.permissions import Action, TenantResource, can  # lazy: deps imports this module
 
     try:
-        state = request.state
-        if hasattr(state, "auth_session"):
-            auth = state.auth_session
-        else:
-            from app.web import deps
-
-            if request.cookies.get(SESSION_COOKIE_NAME) is None:
-                return False
-            db = deps._session_factory(request)()
-            try:
-                auth = deps._resolve(request, db, app_settings(request))
-            finally:
-                db.close()
+        auth = getattr(request.state, "auth_session", None)
         if auth is None or auth.active_tenant_id is None:
             return False
         return bool(can(auth.principal, Action.DNS_TOOLS, TenantResource(auth.active_tenant_id)))
