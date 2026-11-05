@@ -7,6 +7,8 @@ Fail closed everywhere:
 - The session's `active_tenant_id` is honoured only while the user holds a membership there
   (UserMembershipsRepository, which also ignores inactive users); otherwise the request has NO
   TenantContext and `tenant_ctx` answers 404.
+- Client viewers get the DomainAccess grants of their active-tenant membership loaded here
+  (M1-19), so `can()` sees their assigned domains; no rows -> no domains.
 - `require(action, resource)` evaluates `app.core.permissions.can()`; any denial is a 404, so a
   resource of another tenant is indistinguishable from a missing one (ARCHITECTURE section 4).
 
@@ -19,6 +21,7 @@ The DB session factory is created lazily from Settings on first use and cached o
 
 from __future__ import annotations
 
+import dataclasses
 import threading
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
@@ -35,8 +38,13 @@ from app.core.i18n import t
 from app.core.permissions import Action, Principal, Resource, TenantResource, can
 from app.core.security import SESSION_COOKIE_NAME
 from app.core.tenancy import TenantContext
-from app.models import User
-from app.repositories import UserMembershipsRepository, principal_from_models, repo_for
+from app.models import MembershipRole, User
+from app.repositories import (
+    DomainAccessRepository,
+    UserMembershipsRepository,
+    principal_from_models,
+    repo_for,
+)
 from app.services.auth import SessionPolicy, resolve_session
 from app.web.templating import app_settings, request_language, safe_next
 
@@ -97,13 +105,26 @@ def _build(db: Session, user: User, session_id: int, tenant_id: int | None) -> A
     if UserMembershipsRepository(db, user.id).get_for_tenant(tenant_id) is None:
         return anonymous_tenant  # stale or foreign active_tenant_id: no TenantContext
     ctx = TenantContext(tenant_id=tenant_id, principal=user.id)
-    membership = repo_for(ctx, db).memberships.get_by_user(user.id)
+    repos = repo_for(ctx, db)
+    membership = repos.memberships.get_by_user(user.id)
     if membership is None:
         return anonymous_tenant
-    # DomainAccess has no repository yet (domains arrive in M1-18): client viewers get no domain
-    # grants, which denies their domain reads (fail closed).
     principal = principal_from_models(user, [membership], [], tenant_id)
+    if membership.role == MembershipRole.CLIENT_VIEWER:
+        principal = _with_assigned_domains(principal, tenant_id, repos.domain_access, user.id)
     return AuthSession(session_id, user, tenant_id, principal)
+
+
+def _with_assigned_domains(
+    principal: Principal, tenant_id: int, access: DomainAccessRepository, user_id: int
+) -> Principal:
+    """`principal` with the DomainAccess grants of its (single) active-tenant membership loaded.
+    Only domain-restricted roles need them; no rows -> no domains (fail closed)."""
+    grants = [m for m in principal.memberships if m.tenant_id == tenant_id]
+    if len(grants) != 1:
+        return principal
+    loaded = dataclasses.replace(grants[0], domain_ids=access.domain_ids_for_user(user_id))
+    return dataclasses.replace(principal, memberships=(loaded,))
 
 
 def optional_session(request: Request, db: DbDep, settings: SettingsDep) -> AuthSession | None:

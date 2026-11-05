@@ -20,6 +20,8 @@ from sqlalchemy.orm import Session
 
 from app.core.tenancy import TenantContext
 from app.repositories.base import TenantScopedRepository, TenantScopeError
+from app.repositories.domain import DomainRepository
+from app.repositories.domain_access import DomainAccessRepository
 from app.repositories.membership import UserMembershipsRepository, UserTenantMembership
 from app.repositories.principal import principal_from_models
 from app.repositories.tenant import CurrentTenantRepository, TenantMembershipRepository
@@ -27,11 +29,13 @@ from app.repositories.tenant import CurrentTenantRepository, TenantMembershipRep
 
 @dataclass(frozen=True, slots=True)
 class TenantRepositories:
-    """Repositories bound to one tenant (add new tenant repositories here, e.g. domains M1-18)."""
+    """Repositories bound to one tenant (add new tenant repositories here)."""
 
     ctx: TenantContext
     tenant: CurrentTenantRepository
     memberships: TenantMembershipRepository
+    domains: DomainRepository
+    domain_access: DomainAccessRepository
 
 
 def repo_for(ctx: TenantContext, session: Session) -> TenantRepositories:
@@ -42,11 +46,15 @@ def repo_for(ctx: TenantContext, session: Session) -> TenantRepositories:
         ctx=ctx,
         tenant=CurrentTenantRepository(ctx, session),
         memberships=TenantMembershipRepository(ctx, session),
+        domains=DomainRepository(ctx, session),
+        domain_access=DomainAccessRepository(ctx, session),
     )
 
 
 __all__ = [
     "CurrentTenantRepository",
+    "DomainAccessRepository",
+    "DomainRepository",
     "TenantMembershipRepository",
     "TenantRepositories",
     "TenantScopeError",

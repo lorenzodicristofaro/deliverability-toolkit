@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %}{{ t("domain.delete") }} · {{ app_name }}{% endblock %}
+{% block content %}
+<h1>{{ t("domain.delete") }}</h1>
+<p data-testid="delete-confirm">{{ t("domain.delete.confirm", name=row.display_name) }}</p>
+{% include "domains/name_notes.html" %}
+<form class="domain-delete" method="post" action="/domains/{{ row.id }}/delete">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <button type="submit">{{ t("domain.delete.submit") }}</button>
+  <a href="/domains/{{ row.id }}">{{ t("domain.form.cancel") }}</a>
+</form>
+{% endblock %}

@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}{{ t("landing.title") }} · {{ app_name }}{% endblock %}
+{% block content %}
+<h1>{{ t("landing.title") }}</h1>
+{% if tenant is none %}
+<p class="empty-state" data-testid="no-tenant">{{ t("landing.no_tenant") }}</p>
+{% else %}
+<p class="tenant-name" data-testid="tenant-name">{{ t("landing.tenant", name=tenant.tenant_name) }}</p>
+{% if memberships|length > 1 %}
+<form class="tenant-switch" method="post" action="/tenants/switch" data-testid="tenant-switch">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <input type="hidden" name="next" value="/">
+  <label for="tenant-switch-select">{{ t("landing.tenant.switch") }}</label>
+  <select id="tenant-switch-select" name="tenant_id">
+    {% for m in memberships %}
+    <option value="{{ m.tenant_id }}"{% if m.tenant_id == tenant.tenant_id %} selected{% endif %}>{{ m.tenant_name }}</option>
+    {% endfor %}
+  </select>
+  <button type="submit">{{ t("landing.tenant.switch.submit") }}</button>
+</form>
+{% endif %}
+{% if may_create %}
+<p><a class="button" href="/domains/new" data-testid="domain-add">{{ t("domain.add") }}</a></p>
+{% endif %}
+{% if rows is not none %}
+{% include "domains/list.html" %}
+{% endif %}
+{% endif %}
+{% endblock %}
