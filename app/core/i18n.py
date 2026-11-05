@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 
 SUPPORTED_LANGUAGES = ("en", "it")
 DEFAULT_LANGUAGE = "en"
+MAX_ACCEPT_LANGUAGE_LENGTH = 4096
 LOCALES_DIR = Path(__file__).resolve().parents[2] / "locales"
 
 _strict = False
@@ -40,6 +41,12 @@ def load_catalogue(lang: str) -> dict[str, str]:
     if not isinstance(data, dict):
         raise ValueError(f"{path} must contain a JSON object")
     return {str(k): str(v) for k, v in data.items()}
+
+
+def validate_catalogues() -> None:
+    """Eager-load every supported catalogue; a missing or invalid file raises (startup aborts)."""
+    for lang in SUPPORTED_LANGUAGES:
+        load_catalogue(lang)
 
 
 def _missing(key: str, lang: str) -> str:
@@ -85,6 +92,7 @@ def parse_accept_language(header: str | None) -> list[str]:
     """
     if not header:
         return []
+    header = header[:MAX_ACCEPT_LANGUAGE_LENGTH]
     ranked: list[tuple[float, int, str]] = []
     for index, part in enumerate(header.split(",")):
         tag, *attrs = (p.strip() for p in part.split(";"))

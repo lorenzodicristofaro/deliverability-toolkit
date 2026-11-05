@@ -130,7 +130,9 @@ def test_unhandled_exception_500_has_headers_and_no_details(base_url: str, https
         assert response.headers.get_list("strict-transport-security") == [HSTS_VALUE]
     else:
         assert "strict-transport-security" not in response.headers
-    assert response.text == "Internal Server Error"
+    # M1-16: translated HTML page instead of the plain phrase
+    assert response.headers["content-type"].startswith("text/html")
+    assert "<h1>Something went wrong</h1>" in response.text
     assert "secret-detail" not in response.text
     assert "RuntimeError" not in response.text
 

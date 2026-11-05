@@ -3,5 +3,16 @@
   "config.missing": "Required setting {name} is missing or empty.",
   "config.resolver_addr.invalid": "Invalid RESOLVER_ADDRS entry \"{entry}\": expected an IPv4 address or a bracketed IPv6 address, optionally followed by :port (1-65535).",
   "config.resolver_addrs_required": "RESOLVER_ADDRS is required when RESOLVER_MODE is \"{mode}\".",
-  "csrf.invalid": "Invalid or missing security token. Reload the page and try again."
+  "csrf.invalid": "Invalid or missing security token. Reload the page and try again.",
+  "ui.error.not_found.detail": "The page you asked for does not exist or has moved.",
+  "ui.error.not_found.title": "Page not found",
+  "ui.error.server.detail": "An unexpected error occurred. Please try again later.",
+  "ui.error.server.title": "Something went wrong",
+  "ui.language.label": "Language",
+  "ui.nav.home": "Home",
+  "ui.nav.logout": "Log out",
+  "ui.skip_to_content": "Skip to main content",
+  "ui.theme.dark": "Dark",
+  "ui.theme.light": "Light",
+  "ui.theme.toggle": "Toggle colour theme"
 }

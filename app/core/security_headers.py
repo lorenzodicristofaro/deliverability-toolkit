@@ -51,6 +51,16 @@ def _https(scope: Scope) -> bool:
     return isinstance(settings, Settings) and settings.base_url.lower().startswith("https://")
 
 
+def _error_page(scope: Scope) -> tuple[bytes, bytes]:
+    """Translated 500 page (M1-16); the plain response if rendering fails for any reason."""
+    try:
+        from app.web.templating import render_server_error  # lazy: core must not import web
+
+        return render_server_error(scope), b"text/html; charset=utf-8"
+    except Exception:
+        return _ERROR_BODY, b"text/plain; charset=utf-8"
+
+
 class SecurityHeadersMiddleware:
     def __init__(self, app: ASGIApp) -> None:
         self.app = app
@@ -82,12 +92,13 @@ class SecurityHeadersMiddleware:
             # still logged and propagated. ServerErrorMiddleware then sees the response as
             # started and does not send a second one.
             if not started:
+                body, content_type = _error_page(scope)
                 await send_wrapper(
                     {
                         "type": "http.response.start",
                         "status": 500,
-                        "headers": [(b"content-type", b"text/plain; charset=utf-8")],
+                        "headers": [(b"content-type", content_type)],
                     }
                 )
-                await send({"type": "http.response.body", "body": _ERROR_BODY})
+                await send({"type": "http.response.body", "body": body})
             raise
