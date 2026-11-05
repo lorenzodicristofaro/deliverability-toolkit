@@ -329,6 +329,30 @@ def test_throttle_backoff_then_lockout(world: World) -> None:
     assert _login(world, "alice@example.com", PASSWORD).status_code == 303
 
 
+@pytest.mark.parametrize(
+    ("email", "shown"),
+    [
+        ("ghost@example.com", "ghost@example.com"),  # usable input is echoed back
+        ("Jos\u00e9@example.com", "Jos\u00e9@example.com"),
+        ("ghost@example.com\x00", ""),  # unusable input is not
+        ("gh\x01ost@example.com", ""),
+        ("g" * 243 + "@example.com", ""),
+        ("not-an-email", ""),
+    ],
+)
+def test_failure_pages_echo_only_usable_email(world: World, email: str, shown: str) -> None:
+    for _ in range(5):
+        failed = _login(world, email, "x")
+        assert failed.status_code == 401
+        assert f'value="{shown}"' in failed.text
+        assert 'maxlength="254"' in failed.text
+    throttled = _login(world, email, "x")  # rejected input still counts towards the throttle
+    assert throttled.status_code == 429
+    assert f'value="{shown}"' in throttled.text
+    if not shown:
+        assert "\x00" not in throttled.text and "g" * 243 not in throttled.text
+
+
 def test_throttle_is_per_account_and_unknown_accounts_too(world: World) -> None:
     for _ in range(5):
         _login(world, "ghost@example.com", "x")

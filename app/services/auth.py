@@ -16,7 +16,6 @@ SESSION_ABSOLUTE_TIMEOUT_MINUTES, default 720 = 12 h) via `SessionPolicy.from_se
 
 from __future__ import annotations
 
-import unicodedata
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
@@ -41,14 +40,6 @@ from app.core.security import (
 from app.models import User, UserSession
 from app.models.user import normalize_email
 from app.repositories.base import coerce_id
-
-# RFC 5321 caps a forward path at 256 octets including the angle brackets, so an address is at
-# most 254 characters. Longer input cannot be a stored account and is rejected before any query.
-MAX_EMAIL_LENGTH = 254
-# Control characters (Cc: NUL, C0, DEL, C1) and lone surrogates (Cs) never belong in an address.
-# PostgreSQL text rejects NUL and unencodable surrogates outright (a DataError, i.e. a 500), so
-# they must never reach a query.
-_REJECTED_CATEGORIES = frozenset({"Cc", "Cs"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -113,19 +104,14 @@ def _aware(value: datetime) -> datetime:
 
 def lookup_email(email: object) -> str | None:
     """The normalized email to query `users` with, or None when the input cannot be a stored
-    address: not a str, malformed, longer than MAX_EMAIL_LENGTH after stripping, or containing
-    a control character or a surrogate. Callers treat None exactly like an unknown user."""
+    address: not a str, or rejected by `normalize_email` (malformed, longer than
+    MAX_EMAIL_LENGTH, control character or surrogate). Callers treat None like an unknown user."""
     if not isinstance(email, str):
         return None
     try:
-        normalized = normalize_email(email)  # strips surrounding whitespace (\t, \n included)
+        return normalize_email(email)  # the same rule the model validator applies on storage
     except ValueError:
         return None
-    if len(normalized) > MAX_EMAIL_LENGTH:
-        return None
-    if any(unicodedata.category(c) in _REJECTED_CATEGORIES for c in normalized):
-        return None
-    return normalized
 
 
 def authenticate(

@@ -25,6 +25,7 @@ from app.core.config import Settings
 from app.core.db import create_db_engine, create_session_factory
 from app.core.security import hash_password, hash_session_token, unsign_session_token
 from app.models import Tenant, User, UserSession
+from app.models.user import MAX_EMAIL_LENGTH
 from app.services import auth
 from app.services.auth import (
     SessionPolicy,
@@ -131,7 +132,7 @@ def test_unknown_user_runs_dummy_verify(
     assert len(calls) == 1  # same argon2 work as a real account
 
 
-LONG_LOCAL = "a" * (auth.MAX_EMAIL_LENGTH - len("@example.com"))
+LONG_LOCAL = "a" * (MAX_EMAIL_LENGTH - len("@example.com"))
 REJECTED_BEFORE_QUERY = [
     "alice@example.com\x00",  # NUL: PostgreSQL text raises DataError
     "\x00alice@example.com",
@@ -180,6 +181,7 @@ def test_unusable_email_rejected_before_any_query(
         (" alice@example.com\t", "alice@example.com"),  # surrounding whitespace is stripped
         (LONG_LOCAL + "@example.com", LONG_LOCAL + "@example.com"),  # exactly 254: allowed
         ("x@ex\u00e4mple.com", "x@ex\u00e4mple.com"),  # non-ASCII is not a control character
+        ("jos\u00e9@example.com", "jos\u00e9@example.com"),  # Unicode local part
         ("alice@example.com\x00", None),
         ("alice@example.com\x9f", None),
         ("a" + LONG_LOCAL + "@example.com", None),
