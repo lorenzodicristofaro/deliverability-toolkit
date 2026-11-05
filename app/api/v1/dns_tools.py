@@ -55,6 +55,7 @@ from app.dns.trace import (
 )
 from app.dns.types import ALLOWED_RDTYPES, DnsQuestion, DnsRecord, Resolver, ResultState
 from app.services.dns_propagation import (
+    MAX_RESOLVERS,
     AddressFactory,
     PropagationReport,
     PropagationRow,
@@ -79,7 +80,6 @@ router = APIRouter(prefix="/dns", tags=["dns-tools"])
 REQUEST_DEADLINE_S = 20.0  # whole request; above the trace (15 s) and propagation (10 s) budgets
 MAX_RESOLVER_ID_LEN = 64
 MAX_NAME_LEN = 1024  # raw input; the validator enforces the real DNS limits
-MAX_REQUEST_RESOLVERS = 8  # same cap as the service (MAX_RESOLVERS)
 _UNLIMITED_FIELD = "body"
 
 
@@ -183,7 +183,7 @@ class PropagationIn(_Strict):
     resolver_ids: (
         Annotated[
             list[Annotated[StrictStr, Field(max_length=MAX_RESOLVER_ID_LEN)]],
-            Field(max_length=MAX_REQUEST_RESOLVERS),
+            Field(max_length=MAX_RESOLVERS),
         ]
         | None
     ) = None

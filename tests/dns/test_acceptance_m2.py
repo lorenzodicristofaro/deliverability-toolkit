@@ -345,14 +345,17 @@ async def test_m2_layer_lookup_all_types_failure_is_not_absence() -> None:
     assert report.summary.absent == () and report.summary.evaluated is False
 
 
-@pytest.mark.parametrize("state", ZONE_FAILURES)
-async def test_m2_layer_reverse_fcrdns_never_mismatch_or_absent(state: str, acc: Any) -> None:
+async def test_m2_layer_reverse_recorded_failures_are_could_not_verify(acc: Any) -> None:
     _, backend, _ = acc
     # .11: the PTR query itself SERVFAILs; .12: PTR is fine but the forward leg SERVFAILs
     for ip, ptr_state in (("192.0.2.11", S.servfail), ("192.0.2.12", S.ok)):
         report = await reverse(ip, "default", resolvers=backend.lookup, forward_confirm=True)
         assert report.ptr.state is ptr_state
         assert report.fcrdns is FcrdnsState.could_not_verify and report.evaluated is False
+
+
+@pytest.mark.parametrize("state", ZONE_FAILURES)
+async def test_m2_layer_reverse_fcrdns_never_mismatch_or_absent(state: str) -> None:
     stub = stub_backend(S(state))
     report = await reverse("192.0.2.10", "default", resolvers=stub.lookup, forward_confirm=True)
     assert report.ptr.state.value == state and report.evaluated is False
@@ -607,6 +610,7 @@ _NETWORK_FROM = {
     ("dns", "query"),
     ("dns", "asyncquery"),
     ("dns", "asyncresolver"),
+    ("dns", "resolver"),
     ("http", "client"),
     ("urllib", "request"),
 }
@@ -619,6 +623,9 @@ _NETWORK_CALLS = {
     "gethostbyname",
     "start_server",
 }
+
+
+_NETWORK_DNS_ATTRS = {"query", "asyncquery", "resolver", "asyncresolver"}
 
 
 def network_use(source: str) -> list[str]:
@@ -640,6 +647,13 @@ def network_use(source: str) -> list[str]:
                 for a in node.names
                 if (node.module, a.name) in _NETWORK_FROM
             ]
+        elif (
+            isinstance(node, ast.Attribute)
+            and isinstance(node.value, ast.Name)
+            and node.value.id == "dns"
+            and node.attr in _NETWORK_DNS_ATTRS
+        ):
+            found.append(f"dns.{node.attr}")
         elif isinstance(node, ast.Attribute) and node.attr in _NETWORK_CALLS:
             found.append(node.attr)
         elif isinstance(node, ast.Name) and node.id in _NETWORK_CALLS:
@@ -658,7 +672,7 @@ def test_m2_guard_only_the_backend_module_touches_the_network() -> None:
     offenders = {
         str(f.relative_to(ROOT)): hits
         for f in files
-        if f.name != "backends.py" and (hits := network_use(f.read_text()))
+        if f.name not in ("backends.py", "factory.py") and (hits := network_use(f.read_text()))
     }
     assert offenders == {}
 
@@ -671,6 +685,10 @@ def test_m2_guard_only_the_backend_module_touches_the_network() -> None:
         "import dns.query",
         "from dns import asyncquery",
         "import httpx",
+        "import dns.resolver",
+        "from dns import resolver",
+        "import dns\ndns.query.udp(1, 2)",
+        "import dns\nx = dns.asyncquery.tcp",
         "import asyncio\nasyncio.open_connection('x', 1)",
         "x.create_datagram_endpoint()",
     ],
@@ -697,3 +715,26 @@ def test_m2_guard_acceptance_zones_stay_in_reserved_namespaces() -> None:
     names = {e["name"] for entries in acc_zones().values() for e in entries if "name" in e}
     assert names
     assert all(is_reserved_name(n) or n.endswith(".in-addr.arpa") for n in names)
+
+
+def test_m2_guard_factory_may_import_dns_resolver_but_not_open_connections() -> None:
+    source = (ROOT / "app/dns/factory.py").read_text()
+    assert set(network_use(source)) <= {"dns.resolver"}  # resolv.conf parsing only
+
+
+def test_m2_guard_non_loopback_network_is_blocked_loopback_is_allowed() -> None:
+    import socket
+
+    for host in ("example.com", "192.0.2.1", "8.8.8.8"):
+        with pytest.raises(AssertionError, match="network access"):
+            socket.getaddrinfo(host, 53)
+    for host in ("localhost", "127.0.0.1", "::1"):
+        assert socket.getaddrinfo(host, 5432)  # loopback stays resolvable (psycopg, CI DB)
+    s = socket.socket()
+    try:
+        with pytest.raises(AssertionError, match="network access"):
+            s.connect(("203.0.113.9", 5432))
+        with pytest.raises(AssertionError, match="network access"):
+            s.connect(("10.0.0.1", 5432))
+    finally:
+        s.close()
