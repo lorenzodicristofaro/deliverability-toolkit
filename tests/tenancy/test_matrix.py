@@ -202,6 +202,10 @@ MATRIX: dict[tuple[str, str], Entry] = {
     ("PATCH", "/api/v1/domains/{domain_id}"): Entry(Kind.DOMAIN, body=_rename),
     ("DELETE", "/api/v1/domains/{domain_id}"): Entry(Kind.DOMAIN),
     ("PUT", "/api/v1/domains/{domain_id}/access"): Entry(Kind.DOMAIN, body=_access),
+    # DNS tools UI (app.web.dns_tools)
+    ("GET", "/tools/dns"): Entry(Kind.DNS, own=_DNS_OWN),
+    ("POST", "/tools/dns/lookup"): Entry(Kind.DNS, body=_dns_lookup, own=_DNS_OWN),
+    ("POST", "/tools/dns/reverse"): Entry(Kind.DNS, body=_dns_reverse, own=_DNS_OWN),
     # DNS tools API (app.api.v1.dns_tools)
     ("POST", "/api/v1/dns/lookup"): Entry(Kind.DNS, body=_dns_lookup, own=_DNS_OWN),
     ("POST", "/api/v1/dns/reverse"): Entry(Kind.DNS, body=_dns_reverse, own=_DNS_OWN),

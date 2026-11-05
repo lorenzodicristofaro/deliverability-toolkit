@@ -20,6 +20,7 @@ from app.repositories import UserMembershipsRepository
 from app.repositories.base import MAX_LIMIT
 from app.services.domains import DomainService, DomainServiceError
 from app.web.deps import CurrentSession, DbDep, tenant_ctx
+from app.web.dns_tools import dns_tools_allowed
 from app.web.domains import DomainRow, can_create, domain_row
 from app.web.templating import render
 
@@ -50,4 +51,5 @@ def landing(request: Request, auth: CurrentSession, db: DbDep) -> HTMLResponse:
         memberships=memberships,
         rows=rows,
         may_create=may_create,
+        show_dns_tools=active is not None and dns_tools_allowed(auth.principal, tenant_id),
     )

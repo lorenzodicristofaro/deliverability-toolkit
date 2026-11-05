@@ -13,4 +13,4 @@ Acceptance criteria:
 - All text via i18n keys, en + it, both rendered in a test; all record data (TXT contents, names) HTML-escaped (test with `<script>` in a TXT record from the fake). Long TXT values wrapped, not truncated silently.
 - Underscore names and IDN input accepted; validation error displayed with a key (not the raw validator text).
 New i18n keys (en + it): tools.dns.title, tools.dns.name, tools.dns.type, tools.dns.type.all, tools.dns.resolver, tools.dns.resolver.default, tools.dns.resolver.unverified, tools.dns.no_cache, tools.dns.submit, tools.dns.reverse.title, tools.dns.reverse.ip, tools.dns.reverse.fcrdns.match, tools.dns.reverse.fcrdns.mismatch, tools.dns.reverse.fcrdns.not_evaluated, tools.dns.state.ok, tools.dns.state.nxdomain, tools.dns.state.nodata, tools.dns.state.servfail, tools.dns.state.refused, tools.dns.state.timeout, tools.dns.state.truncated, tools.dns.state.malformed, tools.dns.state.network_error, tools.dns.state.blocked, tools.dns.state.error, tools.dns.invalid_name, tools.dns.invalid_ip, tools.dns.denied, nav.tools.dns
-Status: todo
+Status: done
