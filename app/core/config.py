@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ipaddress
+import logging
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -16,6 +17,8 @@ DEFAULT_SESSION_IDLE_TIMEOUT_MINUTES = 30
 DEFAULT_SESSION_ABSOLUTE_TIMEOUT_MINUTES = 12 * 60
 
 RESOLVER_ADDR_INVALID_KEY = "config.resolver_addr.invalid"
+
+config_logger = logging.getLogger("app.config")
 # i18n keys; the locale files are created by M1-09, until then these are constants only.
 CONFIG_MISSING_KEY = "config.missing"
 CONFIG_INVALID_VALUE_KEY = "config.invalid_value"
@@ -182,3 +185,21 @@ class Settings(BaseSettings):
 
     def parsed_resolver_addrs(self) -> list[ResolverAddr]:
         return parse_resolver_addrs(self.resolver_addrs)
+
+    def log_resolver_config(self, logger: logging.Logger | None = None) -> None:
+        """Log the resolver mode and the parsed (trusted) addresses at INFO for startup.
+
+        Call after logging is configured. Addresses are operator config, not secrets. In
+        ``system`` mode the resolv.conf nameservers are used and cannot be policy-checked
+        (ARCHITECTURE section 7); RESOLVER_ADDRS is still parsed, so a malformed value fails.
+        """
+        addrs = self.parsed_resolver_addrs()
+        rendered = ",".join(
+            f"[{a.host}]:{a.port}" if ":" in a.host else f"{a.host}:{a.port}" for a in addrs
+        )
+        (logger or config_logger).info(
+            "resolver mode=%s addrs=%s",
+            self.resolver_mode,
+            rendered or "-",
+            extra={"event": "config.resolver"},
+        )

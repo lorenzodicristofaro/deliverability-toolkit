@@ -1,19 +1,18 @@
-# HANDOFF — 2026-11-05 (end of M1)
+# HANDOFF — 2026-11-06 (end of M2)
 
 Resume with `/gm`.
 
 ## State
-- M1 accepted 2026-11-05: all of M1-01..M1-20 done, CI green on PG at d2e5e4a, `dev` merged into `qa`. Report: docs/reports/M1.md.
-- Next milestone: M2 — DNS engine (not yet split into tickets).
+- M2 accepted 2026-11-06: M2-01..M2-15 done, CI green on PG at 8083cc5, `dev` merged into `qa`. Report: docs/reports/M2.md.
+- Next milestone: M3 — SPF, DKIM, DMARC (not yet split into tickets).
 
 ## Open maintainer decisions
-- Domain name rules (M1-18): single-label, all-numeric TLD, underscore and surrounding whitespace are rejected. Confirm.
-- SecLists password list: the xato.net dataset terms are unverified (before public release).
-- HTMX under CSP `script-src 'self'`: unverified (M1-16).
-- `qa` → `main` promotion of M1: maintainer only.
-- Cleanup: stale worktrees in .claude/worktrees/ and local branch feature/m1-13-auth-core (the auto-mode classifier denied removal).
+- `qa` → `main` promotion of M1 and M2: maintainer only.
+- SecLists password list: xato.net dataset terms unverified (before public release).
+- HTMX under CSP `script-src 'self'`: unverified (M1-16); M2 UI uses no JS.
+- Cleanup: stale worktrees in .claude/worktrees/ and old local branches (agent worktrees start at origin/main, see memory worktree-base-stale).
 
 ## Next 3 steps
-1. `/gm` → have pm split M2 into tickets; review them.
-2. Prioritise the post-M1 follow-ups before any reverse-proxy or multi-process deployment (trusted proxy, DB throttle).
+1. `/gm` → have pm split M3 into tickets (SPF/DKIM/DMARC parsers build on app/dns lookup service; TXT via join_txt_strings, latin-1 lossless).
+2. Schedule the DNS-tools follow-ups before any shared deployment: per-user rate limit + global concurrency cap.
 3. Ask the maintainer to start Docker locally, so PG tests run before merge (memory pg-tests-ci-only).

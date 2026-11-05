@@ -17,6 +17,7 @@ from app.core.i18n import validate_catalogues
 from app.core.logging import RequestLoggingMiddleware, configure_logging
 from app.core.security_headers import SecurityHeadersMiddleware
 from app.web.auth import router as auth_router
+from app.web.dns_tools import router as dns_tools_router
 from app.web.domains import router as domains_router
 from app.web.health import router as health_router
 from app.web.landing import router as landing_router
@@ -51,6 +52,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.settings = settings if settings is not None else Settings()
         cfg = app.state.settings
         configure_logging(cfg.log_level, log_secrets(cfg))
+        cfg.log_resolver_config()
         # First-run setup: logs the one-time setup token (WARNING) while no user exists.
         await run_in_threadpool(prepare_setup, app)
         yield
@@ -71,6 +73,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     web_app.include_router(setup_router)
     web_app.include_router(landing_router)
     web_app.include_router(domains_router)
+    web_app.include_router(dns_tools_router)
     web_app.include_router(api_router)
     web_app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 

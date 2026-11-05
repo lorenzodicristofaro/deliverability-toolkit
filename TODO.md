@@ -26,9 +26,26 @@ Carried over from M0-07 QA:
   Status: **accepted 2026-11-05** — tenancy matrix + named acceptance tests (tests/tenancy/test_acceptance_m1.py). CI green at d2e5e4a incl. PostgreSQL (4393 passed). Report: docs/reports/M1.md
 
 ## M2 — DNS engine
-- [ ] Resolver abstraction (system / custom / Unbound), cache, timeouts, explicit result states
-- [ ] Free DNS tool: all record types, trace, reverse, propagation across resolvers
+- [x] Resolver abstraction (system / custom / Unbound), cache, timeouts, explicit result states
+- [x] Free DNS tool: all record types, trace, reverse, propagation across resolvers
+- Tickets (docs/tickets/):
+  - [x] M2-01 trim whitespace in `to_ascii_domain` + DNS record-name validator (underscores) — also closes the post-M1 follow-up
+  - [x] M2-02 result states + Resolver protocol
+  - [x] M2-03 DNS egress policy (opus; decided by GM 2026-11-05, ARCHITECTURE section 7)
+  - [x] M2-04 recorded-zone fixtures + fake resolver
+  - [x] M2-05 backends system/custom/Unbound (dnspython dependency, opus)
+  - [x] M2-06 TTL cache
+  - [x] M2-07 public resolver list + root hints data files (unverified entries flagged)
+  - [x] M2-08 lookup + reverse service
+  - [x] M2-09 trace (opus)
+  - [x] M2-10 propagation
+  - [x] M2-11 `dns.tools` permission (opus)
+  - [x] M2-12 REST endpoints
+  - [x] M2-13 UI lookup/reverse
+  - [x] M2-14 UI trace/propagation
+  - [x] M2-15 acceptance tests + docs/DNS.md
 - Accept: tests pass against recorded zones; SERVFAIL/timeout never reported as "record missing".
+  Status: **accepted 2026-11-06** — tests/dns/test_acceptance_m2.py; CI green at 8083cc5 incl. PostgreSQL (6577 passed). Report: docs/reports/M2.md
 
 ## M3 — SPF, DKIM, DMARC
 - [ ] Parsers + checks with Finding codes, remediation texts (en/it)
@@ -82,6 +99,14 @@ Carried over from M0-07 QA:
 - [ ] Security review checklist, dependency/license audit, v0.1.0 release
 
 ## Follow-ups (post-M1)
+- [ ] Extend the tests/dns network guard (loopback-only) to the DNS tests in tests/api and tests/web (M2-15 QA)
+- [ ] Import guard: forbid network calls via dns.resolver in app/dns/factory.py (it may only read resolv.conf) (M2-15 QA nit)
+- [ ] Use a translated label for the FCrDNS no_ptr case instead of omitting the line (M2-13 QA nit)
+- [ ] Global cap on concurrent DNS tool requests (per-request caps only in M2-12); pair with the per-user rate limit
+- [ ] M7: DNS egress cannot detect an operator NAT64 prefix inside 2000::/3 embedding a private IPv4 (app/dns/egress.py); handle in the guarded client
+- [ ] Per-user rate limiting for free tools (DNS trace/propagation); M2 has per-request caps only
+- [ ] Seed staleness: a host clock behind a seed `verified_on` makes the knowledge loader raise at runtime; consider a tolerance (M2-07 QA nit)
+- [x] (M2-01) Domain names: trim surrounding whitespace in `to_ascii_domain` instead of rejecting it (maintainer decision 2026-11-05); update the M1-18 tests. Underscores stay rejected for tenant domains, but the M2 DNS tool must accept them in record names.
 - [ ] Public `security.mac(label, msg, key)` helper, to replace csrf.py's import of private helpers
 - [ ] CSRF exemption for future bearer-token API routes
 - [ ] Throttle the `last_seen_at` write in resolve_session

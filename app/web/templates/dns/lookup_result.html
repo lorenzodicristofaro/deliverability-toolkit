@@ -1,0 +1,6 @@
+{% from "dns/_result.html" import type_result with context %}
+<section class="dns-report" data-testid="lookup-result">
+  <h3>{{ report.name|visible }}</h3>
+  <p class="dns-meta">{{ t("tools.dns.resolver_used") }}: <code>{{ report.resolver_identity|visible }}</code></p>
+  {% for r in report.results %}{{ type_result(r) }}{% endfor %}
+</section>

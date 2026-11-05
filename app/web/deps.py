@@ -135,7 +135,14 @@ def _with_assigned_domains(
 
 
 def optional_session(request: Request, db: DbDep, settings: SettingsDep) -> AuthSession | None:
-    """The request's live session, or None (anonymous)."""
+    """The request's live session, or None (anonymous). Remembered on `request.state.auth_session`
+    so the shared render path (nav links) never resolves it twice."""
+    auth = _resolve(request, db, settings)
+    request.state.auth_session = auth
+    return auth
+
+
+def _resolve(request: Request, db: DbDep, settings: SettingsDep) -> AuthSession | None:
     cookie = request.cookies.get(SESSION_COOKIE_NAME)
     if cookie is None:
         return None

@@ -1,0 +1,8 @@
+# Two servers that disagree (propagation): 192.0.2.53 has the new record, 198.51.100.53 the old one.
+zones:
+  192.0.2.53:
+    - {name: example.com, type: A, ttl: 300, rdata: [192.0.2.99]}
+  198.51.100.53:
+    - {name: example.com, type: A, ttl: 300, rdata: [192.0.2.10]}
+  203.0.113.53:
+    - {name: example.com, type: A, state: servfail}

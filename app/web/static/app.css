@@ -108,3 +108,14 @@ button[aria-current="true"] {
 
 main { max-width: 64rem; margin: 0 auto; padding: 1.5rem 1rem; }
 main:focus { outline: none; }
+
+/* DNS tools (M2-13): every state has a text label; colour is only a secondary cue. */
+.dns-form p { margin: 0.5rem 0; }
+.dns-state { margin: 0.5rem 0; padding: 0.4rem 0.75rem; border-left: 0.35rem solid var(--border); background: var(--surface); }
+.dns-state-absent { border-left-style: dashed; }
+.dns-state-failure { border-left-style: double; border-left-width: 0.5rem; font-weight: 600; }
+.dns-state-referral { border-left-style: dotted; }
+.dns-reason { margin-left: 0.5rem; font-weight: 400; color: var(--muted); }
+.dns-records { border-collapse: collapse; width: 100%; table-layout: fixed; }
+.dns-records th, .dns-records td { border: 1px solid var(--border); padding: 0.25rem 0.5rem; text-align: left; vertical-align: top; }
+.dns-wrap { overflow-wrap: anywhere; white-space: pre-wrap; }

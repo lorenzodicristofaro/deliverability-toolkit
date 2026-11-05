@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+{% from "dns/_result.html" import state_box with context %}
+{% block title %}{{ t("tools.dns.propagation.title") }} · {{ app_name }}{% endblock %}
+{% macro who(row) %}
+  {% set entry = catalog.get(row.resolver_id) %}
+  {% if row.resolver_id == "default" %}{{ t("tools.dns.resolver.default") }}{% elif entry %}{{ entry.name|visible }}{% else %}{{ row.resolver_id|visible }}{% endif %}
+  {% if row.unverified %}({{ t("tools.dns.resolver.unverified") }}){% endif %}
+{% endmacro %}
+{% macro operator(row) %}{% set entry = catalog.get(row.resolver_id) %}{% if entry %}{{ entry.operator|visible }}{% else %}—{% endif %}{% endmacro %}
+{% block content %}
+<h1>{{ t("tools.dns.propagation.title") }}</h1>
+{% include "dns/_subnav.html" %}
+
+<form class="dns-form" method="post" action="/tools/dns/propagation" data-testid="propagation-form">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <p>
+    <label for="dns-name">{{ t("tools.dns.name") }}</label>
+    <input id="dns-name" name="name" type="text" required autocomplete="off" spellcheck="false" maxlength="1024" value="{{ values.get('name', '') }}">
+  </p>
+  <p>
+    <label for="dns-type">{{ t("tools.dns.type") }}</label>
+    <select id="dns-type" name="type">
+      {% for ty in types %}<option value="{{ ty }}"{% if values.get("type", "A") == ty %} selected{% endif %}>{{ ty }}</option>{% endfor %}
+    </select>
+  </p>
+  <fieldset>
+    <legend>{{ t("tools.dns.propagation.resolvers") }}</legend>
+    {% for r in catalog.values() %}
+    <label><input type="checkbox" name="resolver_ids" value="{{ r.id }}"{% if r.id in selected %} checked{% endif %}> {{ r.name|visible }}{% if r.status != "verified" %} ({{ t("tools.dns.resolver.unverified") }}){% endif %}</label><br>
+    {% endfor %}
+  </fieldset>
+  {% if error %}<p class="form-error" role="alert" data-testid="propagation-error">{{ t(error) }}</p>{% endif %}
+  <button type="submit">{{ t("tools.dns.propagation.submit") }}</button>
+</form>
+{% if deadline %}
+<p class="dns-state dns-state-failure" role="alert" data-state="timeout">{{ t("tools.dns.state.timeout") }} <code class="dns-reason">request_deadline</code></p>
+{% endif %}
+{% if report is defined and report is not none %}
+<section class="dns-report" data-testid="propagation-result" data-verdict="{{ report.verdict.value }}">
+  <h3>{{ report.name|visible }} {{ report.rdtype }}</h3>
+  {% set v = report.verdict.value %}
+  <p class="dns-state dns-state-{{ 'ok' if v == 'consistent' else ('absent' if v == 'inconsistent' else 'failure') }}" data-verdict="{{ v }}">
+    {% if v == "consistent" %}{{ t("tools.dns.propagation.consistent", n=report.evaluated_count) }}
+    {% elif v == "inconsistent" %}{{ t("tools.dns.propagation.differing") }}
+    {% else %}{{ t("tools.dns.propagation.inconclusive", min=report.min_evaluated) }}{% endif %}
+  </p>
+  {% if report.includes_unverified %}<p class="dns-meta">{{ t("tools.dns.propagation.includes_unverified") }}</p>{% endif %}
+
+  <table class="dns-records" data-testid="propagation-rows">
+    <thead><tr>
+      <th scope="col">{{ t("tools.dns.propagation.resolver") }}</th>
+      <th scope="col">{{ t("tools.dns.propagation.operator") }}</th>
+      <th scope="col">{{ t("tools.dns.propagation.state") }}</th>
+      <th scope="col">{{ t("tools.dns.propagation.records") }}</th>
+      <th scope="col">{{ t("tools.dns.col.ttl") }}</th>
+    </tr></thead>
+    <tbody>
+    {% for row in report.rows if row.evaluated %}
+      <tr data-resolver="{{ row.resolver_id|visible }}" data-state="{{ row.state.value }}">
+        <td class="dns-wrap">{{ who(row) }}{% if row.address %} <code>{{ row.address|visible }}</code>{% endif %}</td>
+        <td class="dns-wrap">{{ operator(row) }}</td>
+        <td>{{ state_box(row.state, row.detail_code) }}</td>
+        <td class="dns-wrap dns-rdata">{% for n, ty, rd, ttl in row.records %}<div>{{ n|visible }} {{ ty }} {{ rd|visible }}</div>{% endfor %}</td>
+        <td>{{ row.ttl_min if row.ttl_min is not none else "—" }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+
+  {% if report.not_evaluated_count %}
+  <h3>{{ t("tools.dns.propagation.not_evaluated") }} ({{ report.not_evaluated_count }})</h3>
+  <p class="dns-meta">{{ t("tools.dns.propagation.not_evaluated_note") }}</p>
+  <ul class="dns-not-evaluated" data-testid="propagation-not-evaluated">
+    {% for row in report.rows if not row.evaluated %}
+    <li data-resolver="{{ row.resolver_id|visible }}" data-state="{{ row.state.value }}">
+      {{ who(row) }}{% if row.address %} <code>{{ row.address|visible }}</code>{% endif %}
+      {{ state_box(row.state, row.detail_code) }}
+    </li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+</section>
+{% endif %}
+{% endblock %}

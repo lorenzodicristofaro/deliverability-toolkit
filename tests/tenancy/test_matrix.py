@@ -123,6 +123,7 @@ class Kind(Enum):
     LANDING = "landing"  # the tenant landing page (lists domains)
     SESSION = "session"  # session only, no tenant data (logout)
     SWITCH = "switch"  # changes the active tenant
+    DNS = "dns"  # raw DNS tools: tenant-level `dns.tools`, no tenant data (M2-12)
 
 
 Body = Callable[[World, str], Any]
@@ -164,6 +165,24 @@ def _switch_to_b(w: World, _role: str) -> dict[str, str]:
     return {"tenant_id": str(w.tenants["b"]), "next": "/"}
 
 
+def _dns_lookup(_w: World, _role: str) -> dict[str, Any]:
+    return {"name": "example.com", "type": "A"}
+
+
+def _dns_reverse(_w: World, _role: str) -> dict[str, Any]:
+    return {"ip": "192.0.2.10"}
+
+
+def _dns_propagation(_w: World, _role: str) -> dict[str, Any]:
+    return {"name": "example.com", "type": "A", "resolver_ids": ["google"]}
+
+
+def _dns_propagation_form(_w: World, _role: str) -> dict[str, Any]:
+    return {"name": "example.com", "type": "A", "resolver_ids": "google"}
+
+
+_DNS_OWN = {**_by_role(200, 200), "viewer": 403}  # client viewers never get raw DNS tools
+
 MATRIX: dict[tuple[str, str], Entry] = {
     # session / tenant switch (app.web.auth)
     ("POST", "/logout"): Entry(Kind.SESSION),
@@ -187,6 +206,19 @@ MATRIX: dict[tuple[str, str], Entry] = {
     ("PATCH", "/api/v1/domains/{domain_id}"): Entry(Kind.DOMAIN, body=_rename),
     ("DELETE", "/api/v1/domains/{domain_id}"): Entry(Kind.DOMAIN),
     ("PUT", "/api/v1/domains/{domain_id}/access"): Entry(Kind.DOMAIN, body=_access),
+    # DNS tools UI (app.web.dns_tools)
+    ("GET", "/tools/dns"): Entry(Kind.DNS, own=_DNS_OWN),
+    ("POST", "/tools/dns/lookup"): Entry(Kind.DNS, body=_dns_lookup, own=_DNS_OWN),
+    ("POST", "/tools/dns/reverse"): Entry(Kind.DNS, body=_dns_reverse, own=_DNS_OWN),
+    ("GET", "/tools/dns/trace"): Entry(Kind.DNS, own=_DNS_OWN),
+    ("POST", "/tools/dns/trace"): Entry(Kind.DNS, body=_dns_lookup, own=_DNS_OWN),
+    ("GET", "/tools/dns/propagation"): Entry(Kind.DNS, own=_DNS_OWN),
+    ("POST", "/tools/dns/propagation"): Entry(Kind.DNS, body=_dns_propagation_form, own=_DNS_OWN),
+    # DNS tools API (app.api.v1.dns_tools)
+    ("POST", "/api/v1/dns/lookup"): Entry(Kind.DNS, body=_dns_lookup, own=_DNS_OWN),
+    ("POST", "/api/v1/dns/reverse"): Entry(Kind.DNS, body=_dns_reverse, own=_DNS_OWN),
+    ("POST", "/api/v1/dns/trace"): Entry(Kind.DNS, body=_dns_lookup, own=_DNS_OWN),
+    ("POST", "/api/v1/dns/propagation"): Entry(Kind.DNS, body=_dns_propagation, own=_DNS_OWN),
 }
 
 # Public routes by (method, path): a new method on an exempt path is NOT exempt. Keep this
@@ -212,6 +244,7 @@ TARGETS: dict[Kind, tuple[str, ...]] = {
     Kind.LANDING: ("own", "b_session"),
     Kind.SESSION: ("own", "b_session"),
     Kind.SWITCH: ("own", "b_session"),
+    Kind.DNS: ("own", "b_session"),
 }
 
 
@@ -393,6 +426,8 @@ def _expected(case: Case) -> int:
             return 404
         table = entry.own if case.target == "own" else entry.smuggle
         return table[case.role]
+    if entry.kind is Kind.DNS:
+        return 404 if case.target == "b_session" else entry.own[case.role]
     if entry.kind is Kind.LANDING:
         return 200
     if entry.kind is Kind.SESSION:

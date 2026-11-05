@@ -16,6 +16,9 @@
       <ul class="nav-links">
         <li><a href="/">{{ t("ui.nav.home") }}</a></li>
         {% block nav %}{% endblock %}
+        {% if show_dns_tools is defined and show_dns_tools %}
+        <li><a href="/tools/dns" data-testid="nav-dns">{{ t("nav.tools.dns") }}</a></li>
+        {% endif %}
         {% if logged_in is defined and logged_in and csrf_token is not none %}
         <li>
           <form class="logout" method="post" action="/logout">
