@@ -554,6 +554,26 @@ def test_switch_malformed_or_unknown_tenant(world: World, tenant_id: str) -> Non
     assert world.client.get("/t/tenant").json()["tenant_id"] == world.tenant_a
 
 
+def test_switch_losing_a_concurrent_revoke_creates_no_session(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _login(world, "carol@example.com")
+    token = _session_token(world)
+    cookie = world.client.cookies[SESSION_COOKIE_NAME]
+    real_revoke = web_auth.revoke_session
+
+    def raced(db: Session, session_id: object, **kw: Any) -> bool:
+        real_revoke(db, session_id, **kw)  # the concurrent request revoked it first
+        return bool(real_revoke(db, session_id, **kw))  # ...so this request's revoke finds none
+
+    monkeypatch.setattr(web_auth, "revoke_session", raced)
+    assert _switch(world, str(world.tenant_b), token).status_code == 404
+    assert world.client.cookies[SESSION_COOKIE_NAME] == cookie
+    rows = _sessions(world, "carol")
+    assert len(rows) == 1  # no new session was issued
+    assert rows[0].revoked_at is None  # rolled back: the race simulation left nothing behind
+
+
 def test_switch_anonymous_is_denied(world: World) -> None:
     token = _csrf(world.client.get("/login").text)
     response = world.client.post(

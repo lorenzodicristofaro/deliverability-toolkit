@@ -148,7 +148,9 @@ async def login(request: Request, db: DbDep, settings: SettingsDep) -> Response:
     ip = _client_ip(request)
     throttle = login_throttle(request)
 
-    wait = throttle.retry_after(ip, email)
+    # Atomic check-and-reserve: the attempt is counted as a failure before the password is
+    # verified, so parallel requests cannot all slip through; success clears the key.
+    wait = throttle.acquire(ip, email)
     if wait > 0:
         logger.warning("login throttled", extra={"event": "auth.login_throttled"})
         page = _login_page(
@@ -160,8 +162,7 @@ async def login(request: Request, db: DbDep, settings: SettingsDep) -> Response:
     issued = await run_in_threadpool(
         _login, db, settings, email, password, request.cookies.get(SESSION_COOKIE_NAME)
     )
-    if issued is None:
-        throttle.record_failure(ip, email)
+    if issued is None:  # the failure was already counted by acquire()
         logger.info("login failed", extra={"event": "auth.login_failed"})
         return _login_page(
             request, status_code=401, next_path=next_path, email=email, error="failed"
@@ -211,6 +212,9 @@ def _switch(
     if UserMembershipsRepository(db, auth.user.id).get_for_tenant(tenant_id) is None:
         return None
     old = db.scalars(select(UserSession).where(UserSession.id == auth.session_id)).one()
+    if not revoke_session(db, auth.session_id):
+        db.rollback()  # already revoked (e.g. a concurrent switch or logout won): no new session
+        return None
     issued = create_session(
         db,
         auth.user,
@@ -220,7 +224,6 @@ def _switch(
     )
     new = db.scalars(select(UserSession).where(UserSession.id == issued.session_id)).one()
     new.expires_at = old.expires_at  # rotation never extends the absolute lifetime
-    revoke_session(db, auth.session_id)
     db.commit()
     logger.info(
         "tenant switched",

@@ -151,14 +151,90 @@ def test_memory_is_bounded() -> None:
     assert throttle.retry_after(IP, "user4@example.com") > 0
 
 
-def test_expired_entries_are_pruned_before_eviction() -> None:
-    throttle, clock = _throttle(max_keys=2)
+def test_expired_locked_key_is_dropped_to_make_room() -> None:
+    throttle, clock = _throttle(max_keys=1)
     _fail(throttle, 10, IP, "locked@example.com")
-    throttle.record_failure(IP, "old@example.com")
-    clock.now += 15 * 60  # both expire...
-    throttle.record_failure(IP, "a@example.com")
-    throttle.record_failure(IP, "b@example.com")
-    assert len(throttle) == 2
+    assert throttle.acquire(IP, "new@example.com") > 0  # full of a live lock
+    clock.now += 15 * 60
+    assert throttle.acquire(IP, "new@example.com") == 0.0
+    assert len(throttle) == 1
+
+
+# --- atomic reservation (QA round 1, blocker) ------------------------------------------------
+
+
+@pytest.mark.parametrize("workers", [6, 32])
+def test_concurrent_attempts_only_free_attempts_pass(workers: int) -> None:
+    throttle, _ = _throttle()  # the clock does not move: no backoff can elapse
+    barrier = threading.Barrier(workers)
+    results: list[float] = []
+    lock = threading.Lock()
+
+    def attempt() -> None:
+        barrier.wait()
+        wait = throttle.acquire(IP, ACCOUNT)
+        with lock:
+            results.append(wait)
+
+    threads = [threading.Thread(target=attempt) for _ in range(workers)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert sum(1 for w in results if w == 0.0) == throttle.policy.free_attempts
+    assert throttle._entries[throttle_key(IP, ACCOUNT)].failures == 5  # refusals not counted
+
+
+def test_acquire_counts_up_front_and_success_clears() -> None:
+    throttle, clock = _throttle()
+    for _ in range(5):
+        assert throttle.acquire(IP, ACCOUNT) == 0.0
+    assert throttle.acquire(IP, ACCOUNT) == pytest.approx(1.0)
+    clock.now += 1
+    assert throttle.acquire(IP, ACCOUNT) == 0.0  # 6th attempt reserved
+    throttle.record_success(IP, ACCOUNT)
+    assert throttle.retry_after(IP, ACCOUNT) == 0.0
+    assert len(throttle) == 0
+
+
+# --- eviction never frees a locked key (QA round 1) -----------------------------------------
+
+
+def test_flood_of_new_accounts_does_not_evict_a_lockout() -> None:
+    throttle, clock = _throttle(max_keys=50)
+    _fail(throttle, 10, IP, ACCOUNT)
+    for i in range(5000):
+        throttle.acquire(IP, f"random{i}@example.com")
+        clock.now += 0.01
+    assert len(throttle) == 50
+    assert throttle.retry_after(IP, ACCOUNT) > 800
+
+
+def test_low_count_keys_are_evicted_before_backoff_keys() -> None:
+    throttle, clock = _throttle(max_keys=2)
+    _fail(throttle, 8, IP, "backoff@example.com")  # older, but in the backoff tier (8 s)
+    clock.now += 1
+    throttle.record_failure(IP, "free@example.com")
+    clock.now += 1
+    assert throttle.acquire(IP, "new@example.com") == 0.0
+    assert throttle.retry_after(IP, "backoff@example.com") > 0
+    keys = set(throttle._entries)
+    assert throttle_key(IP, "free@example.com") not in keys
+    assert throttle_key(IP, "backoff@example.com") in keys
+
+
+def test_full_of_locked_keys_fails_closed() -> None:
+    throttle, clock = _throttle(max_keys=3)
+    for name in ("a", "b", "c"):
+        _fail(throttle, 10, IP, f"{name}@example.com")
+    wait = throttle.acquire(IP, "new@example.com")
+    assert wait == pytest.approx(900.0)
+    assert throttle_key(IP, "new@example.com") not in throttle._entries
+    throttle.record_failure(IP, "other@example.com")  # dropped, does not evict a lock
+    assert len(throttle) == 3
+    assert all(throttle.retry_after(IP, f"{n}@example.com") > 0 for n in "abc")
+    clock.now += 900
+    assert throttle.acquire(IP, "new@example.com") == 0.0
 
 
 @pytest.mark.parametrize(
