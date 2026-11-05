@@ -98,6 +98,7 @@ Carried over from M0-07 QA:
 - [ ] Security review checklist, dependency/license audit, v0.1.0 release
 
 ## Follow-ups (post-M1)
+- [ ] Global cap on concurrent DNS tool requests (per-request caps only in M2-12); pair with the per-user rate limit
 - [ ] M7: DNS egress cannot detect an operator NAT64 prefix inside 2000::/3 embedding a private IPv4 (app/dns/egress.py); handle in the guarded client
 - [ ] Per-user rate limiting for free tools (DNS trace/propagation); M2 has per-request caps only
 - [ ] Seed staleness: a host clock behind a seed `verified_on` makes the knowledge loader raise at runtime; consider a tolerance (M2-07 QA nit)
