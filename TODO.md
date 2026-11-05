@@ -29,8 +29,8 @@ Carried over from M0-07 QA:
 - [ ] Resolver abstraction (system / custom / Unbound), cache, timeouts, explicit result states
 - [ ] Free DNS tool: all record types, trace, reverse, propagation across resolvers
 - Tickets (docs/tickets/):
-  - [ ] M2-01 trim whitespace in `to_ascii_domain` + DNS record-name validator (underscores) — also closes the post-M1 follow-up
-  - [ ] M2-02 result states + Resolver protocol
+  - [x] M2-01 trim whitespace in `to_ascii_domain` + DNS record-name validator (underscores) — also closes the post-M1 follow-up
+  - [x] M2-02 result states + Resolver protocol
   - [ ] M2-03 DNS egress policy (opus; open question for maintainer)
   - [ ] M2-04 recorded-zone fixtures + fake resolver
   - [ ] M2-05 backends system/custom/Unbound (dnspython dependency, opus)
@@ -100,7 +100,7 @@ Carried over from M0-07 QA:
 ## Follow-ups (post-M1)
 - [ ] Per-user rate limiting for free tools (DNS trace/propagation); M2 has per-request caps only
 - [ ] MAINTAINER TO CONFIRM: public resolver addresses and root hints in seeds/ marked `unverified` (M2-07)
-- Domain names: trim surrounding whitespace in `to_ascii_domain` instead of rejecting it (maintainer decision 2026-11-05); update the M1-18 tests. Underscores stay rejected for tenant domains, but the M2 DNS tool must accept them in record names.
+- [x] (M2-01) Domain names: trim surrounding whitespace in `to_ascii_domain` instead of rejecting it (maintainer decision 2026-11-05); update the M1-18 tests. Underscores stay rejected for tenant domains, but the M2 DNS tool must accept them in record names.
 - [ ] Public `security.mac(label, msg, key)` helper, to replace csrf.py's import of private helpers
 - [ ] CSRF exemption for future bearer-token API routes
 - [ ] Throttle the `last_seen_at` write in resolve_session
