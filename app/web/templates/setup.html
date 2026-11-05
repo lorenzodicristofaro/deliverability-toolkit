@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}{{ t("setup.title") }} · {{ app_name }}{% endblock %}
+{% block content %}
+<h1>{{ t("setup.title") }}</h1>
+<p>{{ t("setup.intro") }}</p>
+{% for error in errors %}
+<p class="form-error" role="alert">{{ t(error) }}</p>
+{% endfor %}
+<form class="login-form" method="post" action="/setup">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <p>
+    <label for="setup-token">{{ t("setup.token") }}</label>
+    <input id="setup-token" name="setup_token" type="password" autocomplete="off" required
+           maxlength="64">
+  </p>
+  <p>
+    <label for="setup-email">{{ t("setup.email") }}</label>
+    <input id="setup-email" name="email" type="email" autocomplete="username" required
+           maxlength="320" value="{{ email }}">
+  </p>
+  <p>
+    <label for="setup-password">{{ t("setup.password") }}</label>
+    <input id="setup-password" name="password" type="password" autocomplete="new-password"
+           required minlength="{{ password_min }}" maxlength="{{ password_max }}"
+           aria-describedby="setup-password-help">
+    <small id="setup-password-help">{{ t("setup.password_help", min=password_min, max=password_max) }}</small>
+  </p>
+  <p>
+    <label for="setup-password-confirm">{{ t("setup.password_confirm") }}</label>
+    <input id="setup-password-confirm" name="password_confirm" type="password"
+           autocomplete="new-password" required maxlength="{{ password_max }}">
+  </p>
+  <p>
+    <label for="setup-tenant">{{ t("setup.tenant_name") }}</label>
+    <input id="setup-tenant" name="tenant_name" type="text" maxlength="200"
+           value="{{ tenant_name }}">
+  </p>
+  <button type="submit">{{ t("setup.submit") }}</button>
+</form>
+{% endblock %}

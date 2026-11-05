@@ -7,6 +7,7 @@ from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import ArgumentError
+from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.core.config import Settings
@@ -16,6 +17,8 @@ from app.core.logging import RequestLoggingMiddleware, configure_logging
 from app.core.security_headers import SecurityHeadersMiddleware
 from app.web.auth import router as auth_router
 from app.web.health import router as health_router
+from app.web.setup import SetupGateMiddleware, prepare_setup
+from app.web.setup import router as setup_router
 from app.web.templating import STATIC_DIR, render
 from app.web.templating import router as language_router
 
@@ -45,19 +48,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.settings = settings if settings is not None else Settings()
         cfg = app.state.settings
         configure_logging(cfg.log_level, log_secrets(cfg))
+        # First-run setup: logs the one-time setup token (WARNING) while no user exists.
+        await run_in_threadpool(prepare_setup, app)
         yield
 
     # Interactive docs and the OpenAPI schema are disabled: they would be served unauthenticated.
     # M10 (Docs site, OpenAPI) re-exposes OpenAPI behind authentication.
     web_app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
-    # The last added middleware is the outermost: RequestLogging -> SecurityHeaders -> CSRF -> app,
-    # so CSRF 403s are logged and carry the security headers too.
+    # The last added middleware is the outermost:
+    # RequestLogging -> SecurityHeaders -> CSRF -> SetupGate -> app, so CSRF 403s and setup
+    # redirects are logged and carry the security headers too.
+    web_app.add_middleware(SetupGateMiddleware)
     web_app.add_middleware(CSRFMiddleware)
     web_app.add_middleware(SecurityHeadersMiddleware)
     web_app.add_middleware(RequestLoggingMiddleware)
     web_app.include_router(health_router)
     web_app.include_router(language_router)
     web_app.include_router(auth_router)
+    web_app.include_router(setup_router)
     web_app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
     @web_app.exception_handler(StarletteHTTPException)
