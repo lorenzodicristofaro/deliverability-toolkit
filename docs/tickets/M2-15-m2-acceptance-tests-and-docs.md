@@ -13,3 +13,8 @@ Acceptance criteria:
 - docs/DNS.md written; lint, mypy and full suite green.
 New i18n keys: none
 Status: todo
+
+GM note 2026-11-06 (carried from M2-14 QA; scope widened to app/web/dns_tools.py, app/web/templates/dns/trace.html, app/web/static/app.css, locales/en.json, locales/it.json):
+- too_many_targets in the propagation UI shows the generic api.error.invalid_request: add key tools.dns.propagation.too_many_targets (en+it), map it in `_error_key`, test with MAX_TARGETS monkeypatched (422, error testid, no input echo).
+- `dns-state-referral` (trace.html:38) needs a one-line CSS rule in app.css.
+- app/web/dns_tools.py:212 `_MAX_RESOLVER_IDS = 8` duplicates the service's MAX_RESOLVERS: import it. Drop the `# type: ignore[arg-type]` at :320 with a typed signature.

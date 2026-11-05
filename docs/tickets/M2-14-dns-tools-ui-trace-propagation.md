@@ -12,4 +12,4 @@ Acceptance criteria:
 - Permission: same gate as M2-13 (`dns.tools`; client viewer 403, anonymous redirect); tenancy/permission test per route.
 - i18n en + it for all new text, both rendered in tests; all DNS data escaped.
 New i18n keys (en + it): tools.dns.trace.title, tools.dns.trace.hop, tools.dns.trace.zone, tools.dns.trace.server, tools.dns.trace.referral, tools.dns.trace.skipped_blocked, tools.dns.trace.outcome.loop, tools.dns.trace.outcome.depth_exceeded, tools.dns.trace.outcome.all_failed, tools.dns.trace.outcome.lame, tools.dns.propagation.title, tools.dns.propagation.resolver, tools.dns.propagation.consistent, tools.dns.propagation.differing, tools.dns.propagation.inconclusive, tools.dns.propagation.not_evaluated, nav.tools.dns.trace, nav.tools.dns.propagation
-Status: todo
+Status: done
