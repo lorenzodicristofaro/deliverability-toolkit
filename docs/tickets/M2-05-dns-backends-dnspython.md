@@ -20,3 +20,5 @@ Status: todo
 GM note 2026-11-05 (from M2-03/M2-04 QA):
 - Backends implement `query_server(addr, question) -> ServerReply(result, referral)` as in tests/support/dns_zones.py. Callers MUST check `reply.referral` before `result.state`; a referral is never surfaced as "missing". `resolve()` is for recursive servers only.
 - Wire `Settings.log_resolver_config()` (M2-03) into the app lifespan after `configure_logging` if this ticket touches startup; otherwise M2-12 does it.
+
+Outcome (GM, 2026-11-05): dnspython==2.8.0 (ISC licence, AGPL-compatible; confirmed from package metadata by QA). Defaults: 2 s per attempt (wire time only), 5 s total deadline, max 3 attempts (retry on timeout/network error, rotating nameservers), EDNS 1232, response cap 16384 bytes, 100 records/section, CNAME chain 16, 32 in-flight queries per nameserver (GM decision after QA r1; was 1). Custom raw-bytes transport over asyncio UDP/TCP accepted; UDP ignores spoofed/garbage datagrams until timeout.
