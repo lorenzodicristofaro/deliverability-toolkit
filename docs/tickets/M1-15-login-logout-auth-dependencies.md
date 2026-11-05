@@ -16,5 +16,7 @@ Acceptance criteria:
 - Log lines contain no credentials.
 - Validate session active_tenant_id against the user's active membership when building TenantContext, failing closed.
 - Callers pass SessionPolicy.from_settings(settings).
+- Rotate the session on login and on privilege change, so the session-bound CSRF token (HMAC of the session token) changes too; test it.
+- CSRF-protect the login and logout forms using the M1-14 helpers (signed double-submit cookie for login, session-bound token for logout).
 New i18n keys: auth.login.title, auth.login.email, auth.login.password, auth.login.submit, auth.login.failed, auth.login.throttled, auth.logout, auth.tenant_switch.denied (en + it)
 Status: todo

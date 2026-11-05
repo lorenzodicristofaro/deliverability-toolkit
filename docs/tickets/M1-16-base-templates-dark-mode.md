@@ -14,5 +14,8 @@ Acceptance criteria:
 - Language switch via query/POST sets a cookie; resolution order from M1-09.
 - Tests: template renders in en and it, escapes injected markup, no `<script>` without `src`, static files served, missing translation key fails the test.
 - Keyboard focus styles visible; skip-link present.
+- Confirm HTMX works under the CSP `script-src 'self'` with no unsafe-inline, against the official HTMX docs (e.g. its indicator-style config). If it cannot be confirmed, record it as unverified in the ticket outcome.
+- Error pages (404/500) are translated via i18n keys.
+- Templates get the token through `csrf_token_for()` (M1-14).
 New i18n keys: ui.nav.home, ui.nav.logout, ui.theme.toggle, ui.theme.light, ui.theme.dark, ui.language.label, ui.skip_to_content (en + it)
 Status: todo

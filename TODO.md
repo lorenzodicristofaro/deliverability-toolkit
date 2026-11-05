@@ -79,3 +79,8 @@ Carried over from M0-07 QA:
 - [ ] Share links, tenant branding, PDF/CSV/JSON export, audit log UI, TOTP, API keys
 - [ ] Docs site, OpenAPI, install guides (Docker, Unraid/Synology/Proxmox notes), screenshots
 - [ ] Security review checklist, dependency/license audit, v0.1.0 release
+
+## Follow-ups (post-M1)
+- [ ] Public `security.mac(label, msg, key)` helper, to replace csrf.py's import of private helpers
+- [ ] CSRF exemption for future bearer-token API routes
+- [ ] Throttle the `last_seen_at` write in resolve_session

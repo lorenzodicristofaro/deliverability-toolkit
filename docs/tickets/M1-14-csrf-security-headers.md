@@ -13,4 +13,9 @@ Acceptance criteria:
 - Headers on all responses: CSP without inline scripts (`default-src 'self'`, no `unsafe-inline` for script), X-Content-Type-Options, Referrer-Policy, frame-ancestors/X-Frame-Options, Permissions-Policy minimal. HSTS only when BASE_URL is https. Exact values documented in code comments; no claim about browser behaviour beyond what is tested.
 - Table-driven tests: each method x token state x authenticated/anonymous; /healthz stays unaffected.
 New i18n keys: csrf.invalid (en + it)
-Status: todo
+Status: done
+Outcome: merged into dev (QA APPROVE after round 1).
+- Session-bound token is an HMAC of the session token; pre-session forms use a signed double-submit cookie `dt_csrf`.
+- The check denies by default for every method except GET/HEAD/OPTIONS/TRACE.
+- 500 responses carry the security headers.
+- Multipart forms need the `X-CSRF-Token` header (python-multipart is not a dependency).
