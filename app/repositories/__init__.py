@@ -6,6 +6,8 @@ Entry points:
   raw session for tenant data and never construct tenant repositories themselves.
 - `UserMembershipsRepository` (app.repositories.membership) is user-scoped, not tenant-scoped:
   it lists a user's tenants and resolves the membership used to build a TenantContext.
+- `principal_from_models` (app.repositories.principal) builds a permission `Principal` from
+  already-loaded user, membership and DomainAccess rows (no queries).
 
 Cross-tenant ids behave exactly like missing ids (None/False), so upstream maps them to 404.
 """
@@ -19,6 +21,7 @@ from sqlalchemy.orm import Session
 from app.core.tenancy import TenantContext
 from app.repositories.base import TenantScopedRepository, TenantScopeError
 from app.repositories.membership import UserMembershipsRepository, UserTenantMembership
+from app.repositories.principal import principal_from_models
 from app.repositories.tenant import CurrentTenantRepository, TenantMembershipRepository
 
 
@@ -50,5 +53,6 @@ __all__ = [
     "TenantScopedRepository",
     "UserMembershipsRepository",
     "UserTenantMembership",
+    "principal_from_models",
     "repo_for",
 ]
