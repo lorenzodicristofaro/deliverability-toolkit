@@ -1,0 +1,21 @@
+{% from "dns/_result.html" import type_result with context %}
+<section class="dns-report" data-testid="reverse-result">
+  <h3>{{ report.ip|visible }}</h3>
+  <p class="dns-meta">{{ t("tools.dns.reverse.ptr_name") }}: <code>{{ report.ptr_name|visible }}</code></p>
+  <p class="dns-meta">{{ t("tools.dns.resolver_used") }}: <code>{{ report.resolver_identity|visible }}</code></p>
+  {{ type_result(report.ptr) }}
+  {% set f = report.fcrdns.value %}
+  {% if f == "confirmed" %}
+  <p class="dns-state dns-state-ok" data-fcrdns="{{ f }}">{{ t("tools.dns.reverse.fcrdns.match") }}</p>
+  {% elif f == "mismatch" %}
+  <p class="dns-state dns-state-absent" data-fcrdns="{{ f }}">{{ t("tools.dns.reverse.fcrdns.mismatch") }}</p>
+  {% elif f == "could_not_verify" %}
+  <p class="dns-state dns-state-failure" role="alert" data-fcrdns="{{ f }}">{{ t("tools.dns.reverse.fcrdns.not_evaluated") }}{% if report.detail_code %} <code class="dns-reason">{{ report.detail_code|visible }}</code>{% endif %}</p>
+  {% endif %}
+  {% for fc in report.forward %}
+  <section class="dns-forward">
+    <h4>{{ fc.ptr_name|visible }}</h4>
+    {% for r in fc.results %}{{ type_result(r) }}{% endfor %}
+  </section>
+  {% endfor %}
+</section>

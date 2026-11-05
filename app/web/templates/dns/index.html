@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block title %}{{ t("tools.dns.title") }} · {{ app_name }}{% endblock %}
+{% macro resolver_select(id) %}
+<select id="{{ id }}" name="resolver">
+  <option value="default"{% if values.get("resolver", "default") == "default" %} selected{% endif %}>{{ t("tools.dns.resolver.default") }}</option>
+  {% for r in resolvers %}
+  <option value="{{ r.selector }}"{% if values.get("resolver") == r.selector %} selected{% endif %}>{{ r.label }}{% if r.unverified %} ({{ t("tools.dns.resolver.unverified") }}){% endif %}</option>
+  {% endfor %}
+</select>
+{% endmacro %}
+{% block content %}
+{% set is_rev = error_form == "reverse" or reverse_report is not none or deadline == "reverse" %}
+<h1>{{ t("tools.dns.title") }}</h1>
+
+<form class="dns-form" method="post" action="/tools/dns/lookup" data-testid="lookup-form">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <p>
+    <label for="dns-name">{{ t("tools.dns.name") }}</label>
+    <input id="dns-name" name="name" type="text" required autocomplete="off" spellcheck="false" maxlength="1024" value="{{ '' if is_rev else values.get('name', '') }}">
+  </p>
+  <p>
+    <label for="dns-type">{{ t("tools.dns.type") }}</label>
+    <select id="dns-type" name="type">
+      <option value="ALL"{% if values.get("type", "ALL") == "ALL" %} selected{% endif %}>{{ t("tools.dns.type.all") }}</option>
+      {% for ty in types %}<option value="{{ ty }}"{% if values.get("type") == ty %} selected{% endif %}>{{ ty }}</option>{% endfor %}
+    </select>
+  </p>
+  <p><label for="dns-resolver">{{ t("tools.dns.resolver") }}</label> {{ resolver_select("dns-resolver") }}</p>
+  <p><label><input type="checkbox" name="no_cache" value="1"{% if values.get("no_cache") and not is_rev %} checked{% endif %}> {{ t("tools.dns.no_cache") }}</label></p>
+  {% if error and error_form == "lookup" %}<p class="form-error" role="alert" data-testid="lookup-error">{{ t(error) }}</p>{% endif %}
+  <button type="submit">{{ t("tools.dns.submit") }}</button>
+</form>
+{% if deadline == "lookup" %}
+<p class="dns-state dns-state-failure" role="alert" data-state="timeout">{{ t("tools.dns.state.timeout") }} <code class="dns-reason">request_deadline</code></p>
+{% endif %}
+{% if lookup_report is not none %}{% with report = lookup_report %}{% include "dns/lookup_result.html" %}{% endwith %}{% endif %}
+
+<h2>{{ t("tools.dns.reverse.title") }}</h2>
+<form class="dns-form" method="post" action="/tools/dns/reverse" data-testid="reverse-form">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <p>
+    <label for="dns-ip">{{ t("tools.dns.reverse.ip") }}</label>
+    <input id="dns-ip" name="ip" type="text" required autocomplete="off" spellcheck="false" maxlength="64" value="{{ values.get('ip', '') if is_rev else '' }}">
+  </p>
+  <p><label for="dns-rresolver">{{ t("tools.dns.resolver") }}</label> {{ resolver_select("dns-rresolver") }}</p>
+  <p><label><input type="checkbox" name="no_cache" value="1"{% if values.get("no_cache") and is_rev %} checked{% endif %}> {{ t("tools.dns.no_cache") }}</label></p>
+  {% if error and error_form == "reverse" %}<p class="form-error" role="alert" data-testid="reverse-error">{{ t(error) }}</p>{% endif %}
+  <button type="submit">{{ t("tools.dns.submit") }}</button>
+</form>
+{% if deadline == "reverse" %}
+<p class="dns-state dns-state-failure" role="alert" data-state="timeout">{{ t("tools.dns.state.timeout") }} <code class="dns-reason">request_deadline</code></p>
+{% endif %}
+{% if reverse_report is not none %}{% with report = reverse_report %}{% include "dns/reverse_result.html" %}{% endwith %}{% endif %}
+{% endblock %}
