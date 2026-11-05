@@ -15,3 +15,5 @@ Acceptance criteria:
 - Tests use only the fake server set: normal chain, glueless delegation, lame server then good server, all-fail, loop, deep chain, referral to private/loopback/metadata (as above), malformed referral (NS pointing at non-address data, CNAME at NS name), underscore name.
 New i18n keys: none (hop/detail codes only; UI keys in M2-14)
 Status: todo
+
+GM note 2026-11-05: add a test that a referral never reaches the user as "missing", and use FakeResolver.server_queries to prove no packet was sent to a blocked (e.g. 10.0.0.53) referral address.

@@ -16,3 +16,7 @@ Acceptance criteria:
 - `uv sync` and `uv run pytest -q` pass; mypy clean (dnspython ships typing information: coder verifies, else adds a narrow override).
 New i18n keys: none
 Status: todo
+
+GM note 2026-11-05 (from M2-03/M2-04 QA):
+- Backends implement `query_server(addr, question) -> ServerReply(result, referral)` as in tests/support/dns_zones.py. Callers MUST check `reply.referral` before `result.state`; a referral is never surfaced as "missing". `resolve()` is for recursive servers only.
+- Wire `Settings.log_resolver_config()` (M2-03) into the app lifespan after `configure_logging` if this ticket touches startup; otherwise M2-12 does it.
