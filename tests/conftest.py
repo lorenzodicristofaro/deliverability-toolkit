@@ -2,7 +2,7 @@
 SQLite and, when TEST_DATABASE_URL is set (CI, or a local throwaway container), on PostgreSQL."""
 
 import os
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import pytest
@@ -12,6 +12,7 @@ from sqlalchemy.exc import ArgumentError
 
 from app.core.db import create_db_engine
 from app.models import Base
+from tests.support.dns_zones import FakeServerSet, load_zones
 
 
 def refusal_reason(test_url: str, app_url: str | None) -> str | None:
@@ -69,3 +70,9 @@ def db_url(request: pytest.FixtureRequest, tmp_path: Path) -> Iterator[str]:
     _reset_postgres(url)
     yield url
     _reset_postgres(url)
+
+
+@pytest.fixture
+def fake_dns() -> Callable[[str], FakeServerSet]:
+    """Load a recorded zone fixture by name (tests/fixtures/zones/<name>.yaml); no network."""
+    return lambda name: load_zones(Path(__file__).parent / "fixtures" / "zones" / f"{name}.yaml")
