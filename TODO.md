@@ -84,3 +84,4 @@ Carried over from M0-07 QA:
 - [ ] Public `security.mac(label, msg, key)` helper, to replace csrf.py's import of private helpers
 - [ ] CSRF exemption for future bearer-token API routes
 - [ ] Throttle the `last_seen_at` write in resolve_session
+- [ ] HTMX under CSP `script-src 'self'` is unverified, maintainer to confirm against https://htmx.org/docs/ (set includeIndicatorStyles=false and allowEval=false when vendored)

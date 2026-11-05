@@ -1,7 +1,7 @@
 # M1-15 Login, logout, throttling, auth dependencies, active-tenant switch
 Milestone: M1
 Branch: feature/m1-15-login-logout
-Files in scope: app/web/auth.py, app/web/deps.py, app/web/templates/login.html, app/services/login_throttle.py, app/main.py (router registration), locales/en.json, locales/it.json, tests/web/test_auth_endpoints.py, tests/web/test_login_throttle.py
+Files in scope: app/web/auth.py, app/web/deps.py, app/web/templates/login.html, app/services/login_throttle.py, app/main.py (router registration), locales/en.json, locales/it.json, tests/web/test_auth_endpoints.py, tests/web/test_login_throttle.py, app/web/templating.py, app/web/templates/base.html, tests/web/test_templating.py
 Out of scope: setup wizard (M1-17), TOTP/API keys/share links (M10), OIDC, password reset by email (not in M1 TODO)
 Depends on: M1-11, M1-12, M1-13, M1-14, M1-16
 Parallel-safe: no (router registry app/main.py, locales)
@@ -18,5 +18,9 @@ Acceptance criteria:
 - Callers pass SessionPolicy.from_settings(settings).
 - Rotate the session on login and on privilege change, so the session-bound CSRF token (HMAC of the session token) changes too; test it.
 - CSRF-protect the login and logout forms using the M1-14 helpers (signed double-submit cookie for login, session-bound token for logout).
+- (from M1-16) Logout in base.html is a POST form with a CSRF token, not a link.
+- (from M1-16) Expose the brand name as a single `app_name` template global, replacing the two hardcoded occurrences in base.html (lines 7 and 15).
+- (from M1-16) Replace the runtime `assert isinstance(settings, Settings)` in app/web/templating.py:63 with an explicit check (raise a clear error).
+- (from M1-16) Add test cases: encoded `next` (/%2F%2F, /%5C) rejected as non-local, and an https BASE_URL case asserting the language cookie is Secure.
 New i18n keys: auth.login.title, auth.login.email, auth.login.password, auth.login.submit, auth.login.failed, auth.login.throttled, auth.logout, auth.tenant_switch.denied (en + it)
 Status: todo

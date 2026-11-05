@@ -18,4 +18,10 @@ Acceptance criteria:
 - Error pages (404/500) are translated via i18n keys.
 - Templates get the token through `csrf_token_for()` (M1-14).
 New i18n keys: ui.nav.home, ui.nav.logout, ui.theme.toggle, ui.theme.light, ui.theme.dark, ui.language.label, ui.skip_to_content (en + it)
-Status: todo
+Status: done
+Outcome (merged into dev, QA APPROVE):
+- jinja2 3.1.6 (BSD-3).
+- WCAG AA contrast is enforced by a test that parses app.css (lowest text pair 6.67, lowest border 3.45). No browser audit was run.
+- HTMX is not vendored. Its CSP compatibility under script-src 'self' is UNVERIFIED; source https://htmx.org/docs/ (config: includeIndicatorStyles and allowEval both default true). When it is vendored, set includeIndicatorStyles=false and allowEval=false and ship the indicator CSS in app.css. Maintainer to confirm.
+- 404 renders HTML only for Accept: text/html.
+- The 500 page is translated and falls back to plain text.
