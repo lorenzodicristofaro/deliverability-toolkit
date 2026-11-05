@@ -28,3 +28,8 @@ zones:
 - `FakeResolver` records `questions`, advances a virtual clock by `latency_ms` and never sleeps.
   `FakeServerSet.query_server(addr, question)` is a provisional shape for the M2-05 primitive;
   an address without fixture answers `network_error`.
+- `query_server` callers must check `reply.referral` before `reply.result.state` (a referral
+  reply carries the placeholder state `nodata`). `resolve()` models a recursive server only.
+  `FakeServerSet.server_queries` lists every `query_server` call, unknown addresses included.
+- `rcode` agreement follows `DnsResult`: `nxdomain` = 3, `nodata` = 0, any other failure state
+  must not use 0 or 3. TXT strings must be latin-1 encodable.

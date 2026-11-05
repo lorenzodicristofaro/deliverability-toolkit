@@ -1,4 +1,5 @@
 import ipaddress
+import re
 import socket
 from pathlib import Path
 from typing import Any
@@ -222,12 +223,48 @@ def test_reserved_name_helper(name: str, ok: bool) -> None:
     assert is_reserved_name(name) is ok
 
 
+_DOMAIN_TOKEN = re.compile(r"(?:include:|redirect=|exists:|a:|mx:|mailto:[^@\s]*@)([^\s/;,]+)")
+
+
 def _hostnames(rdtype: str, text: str) -> list[str]:
     if rdtype in ("MX", "NS", "CNAME", "PTR"):
         return [text.split()[-1].rstrip(".")]
     if rdtype == "SOA":
-        return [t.rstrip(".") for t in text.split()[:2]]
+        return [t.rstrip(".") for t in text.replace("@", ".").split()[:2]]
+    if rdtype == "SRV":
+        return [text.split()[-1].rstrip(".")]
+    if rdtype == "CAA":
+        m = re.search(r'"([^";\s]+)', text.split(None, 2)[-1])
+        return [m.group(1)] if m and "." in m.group(1) else []
+    if rdtype in ("TXT", "SPF"):
+        return [m.rstrip(".") for m in _DOMAIN_TOKEN.findall(text)]
     return []
+
+
+def fixture_violations(data: dict[str, Any]) -> list[str]:
+    bad: list[str] = []
+    for server, entries in data["zones"].items():
+        if server != "default" and not is_reserved_addr(server):
+            bad.append(server)
+        for e in entries:
+            if "referral" in e:
+                ref = e["referral"]
+                if not is_reserved_name(ref["zone"]):
+                    bad.append(ref["zone"])
+                for ns in ref["ns"]:
+                    if not is_reserved_name(ns["name"]):
+                        bad.append(ns["name"])
+                    if not is_reserved_addr(ns["addr"]):
+                        bad.append(ns["addr"])
+                continue
+            if not is_reserved_name(e["name"]):
+                bad.append(e["name"])
+            for item in e.get("rdata", []):
+                text = item if isinstance(item, str) else "".join(item)
+                if e["type"] in ("A", "AAAA") and not is_reserved_addr(text):
+                    bad.append(text)
+                bad.extend(h for h in _hostnames(e["type"], text) if not is_reserved_name(h))
+    return bad
 
 
 def test_all_fixtures_use_reserved_names_only() -> None:
@@ -236,21 +273,71 @@ def test_all_fixtures_use_reserved_names_only() -> None:
     for path in files:
         data = yaml.safe_load(path.read_text())
         parse_zones(data, str(path))  # also validates the schema
-        for server, entries in data["zones"].items():
-            if server != "default":
-                assert is_reserved_addr(server), (path, server)
-            for e in entries:
-                if "referral" in e:
-                    ref = e["referral"]
-                    assert is_reserved_name(ref["zone"]), (path, ref["zone"])
-                    for ns in ref["ns"]:
-                        assert is_reserved_name(ns["name"]), (path, ns)
-                        assert is_reserved_addr(ns["addr"]), (path, ns)
-                    continue
-                assert is_reserved_name(e["name"]), (path, e["name"])
-                for item in e.get("rdata", []):
-                    text = item if isinstance(item, str) else "".join(item)
-                    if e["type"] in ("A", "AAAA"):
-                        assert is_reserved_addr(text), (path, text)
-                    for host in _hostnames(e["type"], text.replace("@", ".")):
-                        assert is_reserved_name(host), (path, host)
+        assert fixture_violations(data) == [], path
+
+
+@pytest.mark.parametrize(
+    ("rdtype", "text"),
+    [
+        ("TXT", "v=spf1 include:_spf.google.com -all"),
+        ("TXT", "v=spf1 redirect=spf.real-domain.io"),
+        ("TXT", "v=spf1 exists:%{i}.bl.real-domain.io -all"),
+        ("TXT", "v=spf1 a:mail.real-domain.io mx:mx.real-domain.io -all"),
+        ("TXT", "v=DMARC1; p=none; rua=mailto:dmarc@real-domain.io"),
+        ("CAA", '0 issue "letsencrypt.org"'),
+        ("SRV", "0 5 5060 sip.real-domain.io"),
+        ("MX", "10 mx.real-domain.io"),
+    ],
+)
+def test_guard_rejects_real_domains(rdtype: str, text: str) -> None:
+    data = {
+        "zones": {"default": [{"name": "example.com", "type": rdtype, "ttl": 1, "rdata": [text]}]}
+    }
+    assert fixture_violations(data)
+
+
+def test_guard_accepts_reserved_in_txt() -> None:
+    text = "v=spf1 include:_spf.example.net a:mail.example.com -all"
+    data = {
+        "zones": {"default": [{"name": "example.com", "type": "TXT", "ttl": 1, "rdata": [text]}]}
+    }
+    assert fixture_violations(data) == []
+
+
+async def test_server_queries_recorded(fake_dns: Any) -> None:
+    s = fake_dns("disagree")
+    await s.query_server("192.0.2.53", q("example.com"))
+    await s.query_server("192.0.2.200", q("example.com", "MX"))
+    assert s.server_queries == [
+        ("192.0.2.53", q("example.com")),
+        ("192.0.2.200", q("example.com", "MX")),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("state", "rcode"),
+    [
+        ("servfail", 0),
+        ("servfail", 3),
+        ("refused", 3),
+        ("nxdomain", 0),
+        ("nxdomain", 2),
+        ("nodata", 3),
+    ],
+)
+def test_rcode_state_disagreement(state: str, rcode: int) -> None:
+    with pytest.raises(ZoneFixtureError, match="inconsistent"):
+        parse_zones(entry(name="example.com", type="A", state=state, rcode=rcode))
+
+
+@pytest.mark.parametrize(
+    ("state", "rcode"), [("nxdomain", 3), ("nodata", 0), ("servfail", 2), ("refused", 5)]
+)
+def test_rcode_state_agreement(state: str, rcode: int) -> None:
+    parse_zones(entry(name="example.com", type="A", state=state, rcode=rcode))
+
+
+@pytest.mark.parametrize("rdata", [["caf\u20ac"], [["ok", "\u4e2d"]]])
+def test_txt_non_latin1_rejected(rdata: list[Any]) -> None:
+    with pytest.raises(ZoneFixtureError, match="latin-1"):
+        parse_zones(entry(name="example.com", type="TXT", ttl=1, rdata=rdata))

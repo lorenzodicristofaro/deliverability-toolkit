@@ -53,8 +53,7 @@ _RESERVED_NETWORKS = tuple(
         "198.51.100.0/24",
         "203.0.113.0/24",
         "2001:db8::/32",
-        "10.0.0.0/8",  # private: only for the private-referral fixture
-        "127.0.0.0/8",
+        "10.0.0.53/32",  # private: only for the private-referral fixture (M2-09)
     )
 )
 _ROOT_AND_TLDS = frozenset({".", "com", "net", "org"})
@@ -121,9 +120,17 @@ def _fail(source: str, where: str, msg: str) -> ZoneFixtureError:
 
 def _parse_rdata(source: str, where: str, rdtype: str, raw: Any) -> str:
     if isinstance(raw, list) and rdtype == "TXT" and raw and all(isinstance(s, str) for s in raw):
-        return join_txt_strings(s.encode("latin-1") for s in raw)
+        try:
+            return join_txt_strings(s.encode("latin-1") for s in raw)
+        except UnicodeEncodeError:
+            raise _fail(source, where, "TXT strings must be latin-1 encodable") from None
     if not isinstance(raw, str):
         raise _fail(source, where, f"rdata item must be a string, got {type(raw).__name__}")
+    if rdtype == "TXT" and not raw.isascii():
+        try:
+            raw.encode("latin-1")
+        except UnicodeEncodeError:
+            raise _fail(source, where, "TXT strings must be latin-1 encodable") from None
     return raw
 
 
@@ -189,6 +196,9 @@ def _parse_entry(source: str, where: str, raw: Any, zone: ZoneData) -> None:
             isinstance(rcode, bool) or not isinstance(rcode, int) or not 0 <= rcode <= 15
         ):
             raise _fail(source, where, f"rcode must be an integer 0..15, got {rcode!r}")
+        expected = {ResultState.nxdomain: 3, ResultState.nodata: 0}.get(state)
+        if rcode is not None and (rcode != expected if expected is not None else rcode in (0, 3)):
+            raise _fail(source, where, f"rcode {rcode} inconsistent with state {state.value!r}")
         zone.entries[key] = _Entry(state=state, rcode=rcode, ad=ad)
         return
     ttl = _parse_ttl(source, where, raw.get("ttl"))
@@ -244,6 +254,10 @@ class FakeResolver:
     Lookup: explicit entry for (name, type) wins; otherwise a name delegated by a referral entry
     (and without own data) yields a referral; otherwise `nodata` if the name has records of any
     type or is an empty non-terminal (a name with descendants that have records), else `nxdomain`.
+
+    `resolve()` models a recursive server only (it never returns referrals). Callers of
+    `FakeServerSet.query_server` must check `reply.referral` BEFORE `reply.result.state`: a
+    referral reply carries the placeholder state `nodata`.
     """
 
     def __init__(
@@ -313,6 +327,7 @@ class FakeServerSet:
 
     def __init__(self, servers: Mapping[str, FakeResolver]) -> None:
         self.servers = dict(servers)
+        self.server_queries: list[tuple[str, DnsQuestion]] = []  # every query_server call
 
     def resolver(self, server: str = DEFAULT_SERVER) -> FakeResolver:
         return self.servers[server]
@@ -320,6 +335,7 @@ class FakeServerSet:
     async def query_server(self, addr: str, question: DnsQuestion) -> ServerReply:
         """Minimal shape of the M2-05 primitive (to be agreed by the GM): ask one server directly.
         An address with no fixture is unreachable (`network_error`)."""
+        self.server_queries.append((addr, question))
         server = self.servers.get(addr)
         if server is None:
             return ServerReply(
