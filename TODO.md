@@ -84,4 +84,9 @@ Carried over from M0-07 QA:
 - [ ] Public `security.mac(label, msg, key)` helper, to replace csrf.py's import of private helpers
 - [ ] CSRF exemption for future bearer-token API routes
 - [ ] Throttle the `last_seen_at` write in resolve_session
+- [ ] DB-backed login throttle for multi-process deployments
+- [ ] Per-IP cap on throttle keys, plus a warning log when the table is full (a single IP can fill the table with locked keys and block new logins)
+- [ ] Trusted-proxy setting for the client IP (needed before any reverse-proxy deployment)
+- [ ] `services.auth.rotate_session` helper (`_switch` reads the sessions row directly)
+- [ ] Dispose of the DB engine at shutdown via the lifespan
 - [ ] HTMX under CSP `script-src 'self'` is unverified, maintainer to confirm against https://htmx.org/docs/ (set includeIndicatorStyles=false and allowEval=false when vendored)

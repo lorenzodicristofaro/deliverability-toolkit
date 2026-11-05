@@ -23,4 +23,11 @@ Acceptance criteria:
 - (from M1-16) Replace the runtime `assert isinstance(settings, Settings)` in app/web/templating.py:63 with an explicit check (raise a clear error).
 - (from M1-16) Add test cases: encoded `next` (/%2F%2F, /%5C) rejected as non-local, and an https BASE_URL case asserting the language cookie is Secure.
 New i18n keys: auth.login.title, auth.login.email, auth.login.password, auth.login.submit, auth.login.failed, auth.login.throttled, auth.logout, auth.tenant_switch.denied (en + it)
-Status: todo
+Status: done
+Outcome (merged into dev, QA APPROVE after round 1):
+- Throttle is in-process, per (IP, account), keyed by SHA-256. 5 free failures, then backoff from 1 s doubling to 300 s; lockout of 15 min at 10 failures; failures forgotten 15 min after the last one; capacity 10k keys.
+- Attempts are reserved atomically before the argon2 verify.
+- Three-tier eviction never drops a live lock and fails closed when full.
+- Session rotation on login and on tenant switch; the switch keeps the absolute expiry and revokes before it creates.
+- Extra i18n key: auth.required.
+- The default active tenant is the first membership by tenant name.
