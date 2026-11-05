@@ -32,7 +32,7 @@ Carried over from M0-07 QA:
   - [x] M2-01 trim whitespace in `to_ascii_domain` + DNS record-name validator (underscores) — also closes the post-M1 follow-up
   - [x] M2-02 result states + Resolver protocol
   - [x] M2-03 DNS egress policy (opus; open question for maintainer)
-  - [ ] M2-04 recorded-zone fixtures + fake resolver
+  - [x] M2-04 recorded-zone fixtures + fake resolver
   - [ ] M2-05 backends system/custom/Unbound (dnspython dependency, opus)
   - [ ] M2-06 TTL cache
   - [ ] M2-07 public resolver list + root hints data files (unverified entries flagged)

@@ -14,4 +14,4 @@ Acceptance criteria:
 - Tests table-driven including malformed fixtures (missing keys, unknown state, bad ttl, duplicate entries, non-string rdata), and proof that no socket is created (monkeypatch socket.socket to raise).
 - Sample zones: healthy domain (A, AAAA, MX, TXT multi-string, NS, SOA, CAA), NXDOMAIN, NODATA (name exists, type does not), SERVFAIL, REFUSED, timeout, a zone where two servers disagree, a delegation chain root -> tld -> example.com for trace, one referral pointing to a private address (for M2-09), underscore names (_dmarc, _domainkey).
 New i18n keys: none
-Status: todo
+Status: done
