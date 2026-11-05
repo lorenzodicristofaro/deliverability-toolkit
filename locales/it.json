@@ -1,4 +1,9 @@
 {
+  "api.error.conflict": "Esiste già un elemento in conflitto.",
+  "api.error.forbidden": "Non hai i permessi per questa operazione.",
+  "api.error.invalid_request": "La richiesta non è valida.",
+  "api.error.not_found": "Non trovato.",
+  "api.error.payload_too_large": "Il corpo della richiesta è troppo grande.",
   "auth.login.email": "Email",
   "auth.login.failed": "Email o password non validi.",
   "auth.login.password": "Password",
@@ -13,6 +18,7 @@
   "config.resolver_addr.invalid": "Voce RESOLVER_ADDRS non valida \"{entry}\": atteso un indirizzo IPv4 o un indirizzo IPv6 tra parentesi quadre, seguito facoltativamente da :porta (1-65535).",
   "config.resolver_addrs_required": "RESOLVER_ADDRS è obbligatorio quando RESOLVER_MODE è \"{mode}\".",
   "csrf.invalid": "Token di sicurezza non valido o mancante. Ricarica la pagina e riprova.",
+  "domain.error.invalid_name": "Inserisci un nome di dominio valido, ad esempio example.com.",
   "setup.email": "Email dell'amministratore",
   "setup.error.email_invalid": "Inserisci un indirizzo email valido.",
   "setup.error.password_common": "Questa password è troppo comune o contiene il tuo indirizzo email o il nome dell'applicazione. Scegline un'altra.",

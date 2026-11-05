@@ -1,4 +1,9 @@
 {
+  "api.error.conflict": "This conflicts with an existing item.",
+  "api.error.forbidden": "You do not have permission to do this.",
+  "api.error.invalid_request": "The request is not valid.",
+  "api.error.not_found": "Not found.",
+  "api.error.payload_too_large": "The request body is too large.",
   "auth.login.email": "Email",
   "auth.login.failed": "Invalid email or password.",
   "auth.login.password": "Password",
@@ -13,6 +18,7 @@
   "config.resolver_addr.invalid": "Invalid RESOLVER_ADDRS entry \"{entry}\": expected an IPv4 address or a bracketed IPv6 address, optionally followed by :port (1-65535).",
   "config.resolver_addrs_required": "RESOLVER_ADDRS is required when RESOLVER_MODE is \"{mode}\".",
   "csrf.invalid": "Invalid or missing security token. Reload the page and try again.",
+  "domain.error.invalid_name": "Enter a valid domain name, for example example.com.",
   "setup.email": "Administrator email",
   "setup.error.email_invalid": "Enter a valid email address.",
   "setup.error.password_common": "This password is too common or contains your email address or the application name. Choose another one.",
