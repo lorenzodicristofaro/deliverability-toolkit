@@ -25,6 +25,8 @@ VARS = [
     "ALLOW_REGISTRATION",
     "BASE_URL",
     "LOG_LEVEL",
+    "SESSION_IDLE_TIMEOUT_MINUTES",
+    "SESSION_ABSOLUTE_TIMEOUT_MINUTES",
 ]
 
 
@@ -51,6 +53,8 @@ def test_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert s.log_level == "INFO"
     assert s.parsed_resolver_addrs() == []
     assert s.secret_key.get_secret_value() == SECRET
+    assert s.session_idle_timeout_minutes == 30
+    assert s.session_absolute_timeout_minutes == 720
 
 
 def test_all_values(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -64,12 +68,15 @@ def test_all_values(monkeypatch: pytest.MonkeyPatch) -> None:
         ALLOW_REGISTRATION="1",
         BASE_URL="https://dt.example.org",
         LOG_LEVEL="debug",
+        SESSION_IDLE_TIMEOUT_MINUTES="15",
+        SESSION_ABSOLUTE_TIMEOUT_MINUTES="15",
     )
     assert s.resolver_mode == "unbound"
     assert s.parsed_resolver_addrs() == [ResolverAddr("172.28.53.2", 5353), ResolverAddr("::1", 53)]
     assert s.role == "worker"
     assert s.allow_smtp_checks and s.allow_registration
     assert s.log_level == "DEBUG"
+    assert (s.session_idle_timeout_minutes, s.session_absolute_timeout_minutes) == (15, 15)
 
 
 @pytest.mark.parametrize("var", ["SECRET_KEY", "ENCRYPTION_KEY"])
@@ -102,6 +109,15 @@ def test_blank_secret_is_missing(
         ("LOG_LEVEL", "loud"),
         ("BASE_URL", "ftp://x"),
         ("BASE_URL", ""),
+        ("SESSION_IDLE_TIMEOUT_MINUTES", "0"),
+        ("SESSION_IDLE_TIMEOUT_MINUTES", "-5"),
+        ("SESSION_IDLE_TIMEOUT_MINUTES", ""),
+        ("SESSION_IDLE_TIMEOUT_MINUTES", "abc"),
+        ("SESSION_IDLE_TIMEOUT_MINUTES", "1.5"),
+        ("SESSION_IDLE_TIMEOUT_MINUTES", "721"),  # idle > default absolute (720)
+        ("SESSION_ABSOLUTE_TIMEOUT_MINUTES", "0"),
+        ("SESSION_ABSOLUTE_TIMEOUT_MINUTES", "-1"),
+        ("SESSION_ABSOLUTE_TIMEOUT_MINUTES", "12h"),
     ],
 )
 def test_invalid_values(monkeypatch: pytest.MonkeyPatch, var: str, value: str) -> None:
@@ -122,6 +138,13 @@ def test_resolver_addrs_required(
     with pytest.raises(ConfigError) as excinfo:
         load(monkeypatch, **env)
     assert excinfo.value.key == CONFIG_RESOLVER_ADDRS_REQUIRED_KEY
+
+
+def test_session_idle_must_not_exceed_absolute(monkeypatch: pytest.MonkeyPatch) -> None:
+    with pytest.raises(ConfigError) as excinfo:
+        load(monkeypatch, SESSION_IDLE_TIMEOUT_MINUTES="61", SESSION_ABSOLUTE_TIMEOUT_MINUTES="60")
+    assert excinfo.value.key == CONFIG_INVALID_VALUE_KEY
+    assert excinfo.value.params == {"name": "SESSION_IDLE_TIMEOUT_MINUTES"}
 
 
 def test_system_mode_without_addrs_ok(monkeypatch: pytest.MonkeyPatch) -> None:
