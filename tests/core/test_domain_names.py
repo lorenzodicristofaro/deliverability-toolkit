@@ -44,9 +44,8 @@ assert len(NAME_253) == 253
         ("example.com ", "example.com"),
         ("example.com\n", "example.com"),
         ("\texample.com\t", "example.com"),
-        ("\u00a0Example.COM\u00a0", "example.com"),  # NBSP
-        ("\u3000münchen.de\u3000", "xn--mnchen-3ya.de"),  # ideographic space
         (" example.com. ", "example.com"),
+        (" \texample.com\r\n", "example.com"),
     ],
 )
 def test_valid_names(raw: str, expected: str) -> None:
@@ -66,6 +65,14 @@ def test_valid_names(raw: str, expected: str) -> None:
         ("x" * (MAX_INPUT_LENGTH + 1), "too_long"),
         # inner whitespace is rejected (surrounding whitespace is trimmed: see test_valid_names)
         ("exa mple.com", "forbidden_character"),
+        # only ASCII space/tab/CR/LF are trimmed; other edge whitespace/control chars are rejected
+        ("example.com\x1f", "forbidden_character"),
+        ("\x1cexample.com", "forbidden_character"),
+        ("example.com\x0b", "forbidden_character"),
+        ("\x0cexample.com", "forbidden_character"),
+        ("\x85example.com", "forbidden_character"),
+        ("\u00a0example.com", "forbidden_character"),
+        ("example.com\u3000", "forbidden_character"),
         ("example .com", "forbidden_character"),  # NBSP
         ("example\u3000.com", "forbidden_character"),  # ideographic space
         ("example\u2028.com", "forbidden_character"),  # line separator
@@ -74,7 +81,7 @@ def test_valid_names(raw: str, expected: str) -> None:
         # whitespace only
         (" ", "empty"),
         ("\t\n", "empty"),
-        ("\u00a0\u3000", "empty"),
+        (" \t\r\n ", "empty"),
         # raw length cap applies before stripping
         (" " * (MAX_INPUT_LENGTH + 1), "too_long"),
         # NUL and other control characters (PostgreSQL rejects NUL in text)
@@ -151,6 +158,9 @@ def test_display_name(stored: str, shown: str) -> None:
         ("example.com", "example.com"),
         ("EXAMPLE.Com.", "example.com"),
         ("  Example.com\t", "example.com"),
+        (" \texample.com\r\n", "example.com"),
+        ("ab--cd.example.com", "ab--cd.example.com"),  # accepted on purpose (LDH only)
+        ("_xn--zz.example.com", "_xn--zz.example.com"),  # accepted on purpose (underscore prefix)
         ("_dmarc.example.com", "_dmarc.example.com"),
         ("s1._domainkey.example.com", "s1._domainkey.example.com"),
         ("_acme-challenge.Example.com", "_acme-challenge.example.com"),
@@ -184,6 +194,11 @@ def test_dns_name_valid(raw: str, expected: str) -> None:
         ("exa\x01mple.com", "forbidden_character"),
         ("\ud800.example.com", "forbidden_character"),
         ("exa mple.com", "forbidden_character"),
+        ("example.com\x1f", "forbidden_character"),
+        ("\x1cexample.com", "forbidden_character"),
+        ("example.com\x0b", "forbidden_character"),
+        ("\x85example.com", "forbidden_character"),
+        ("\u00a0example.com", "forbidden_character"),
         ("a..b", "label"),
         (".example.com", "label"),
         ("example.com..", "label"),
@@ -222,3 +237,22 @@ def test_dns_name_invalid(raw: object, reason: str) -> None:
     assert caught.value.reason == reason
     if isinstance(raw, str) and raw.strip():
         assert raw not in str(caught.value)
+
+
+@pytest.mark.parametrize(
+    ("raw", "reason"),
+    [
+        ("_dmarc.example.com", "label"),
+        ("s1._domainkey.example.com", "label"),
+        ("*._domainkey.example.com", "label"),
+    ],
+)
+def test_dns_name_underscore_disallowed(raw: str, reason: str) -> None:
+    with pytest.raises(InvalidDomainName) as caught:
+        to_dns_name(raw, allow_underscore=False)
+    assert caught.value.reason == reason
+
+
+@pytest.mark.parametrize("raw", ["example.com", "*.example.com", "bücher.example", "."])
+def test_dns_name_without_underscore_matches_default(raw: str) -> None:
+    assert to_dns_name(raw, allow_underscore=False) == to_dns_name(raw)

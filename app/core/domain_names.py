@@ -9,8 +9,8 @@ IDNA 2008 with UTS #46 mapping via the `idna` package (BSD-3-Clause), NOT the st
   to "ss" (IDNA 2003 behaviour);
 - STD3 rules: only letters, digits and hyphen in the ASCII result (so no "_", "*", "/", spaces).
 
-Leading/trailing whitespace (str.strip: space, tab, newline, NBSP, ideographic space, ...) is
-trimmed first; whitespace between characters is rejected. The raw-length cap applies to the raw
+Leading/trailing ASCII space, tab, CR and LF are trimmed first; any other whitespace or control
+character, anywhere, is rejected. The raw-length cap applies to the raw
 (unstripped) input.
 
 On top of that we reject, before IDNA runs: non-strings, over-long input, control characters
@@ -41,6 +41,7 @@ MAX_LABEL_LENGTH: Final = 63
 MAX_INPUT_LENGTH: Final = 1024
 # Control, surrogate, private-use and unassigned code points; format characters (Cf) are left to
 # IDNA, which allows ZWJ/ZWNJ only in their CONTEXTJ contexts.
+_TRIM: Final = " \t\r\n"  # the only surrounding characters that are trimmed
 _REJECTED_CATEGORIES: Final = frozenset({"Cc", "Cs", "Co", "Cn", "Zs", "Zl", "Zp"})
 
 
@@ -70,14 +71,14 @@ def _is_ip_address(value: str) -> bool:
 def to_ascii_domain(value: object) -> str:
     """Return the normalised ASCII form of `value` (lowercase A-labels, no trailing dot).
 
-    Leading/trailing whitespace is trimmed; inner whitespace is rejected. Underscores are rejected
+    Surrounding space/tab/CR/LF is trimmed; other whitespace is rejected. Underscores are rejected
     (tenant domains are host names; use `to_dns_name` for record names).
     Raises InvalidDomainName for anything that is not a valid multi-label host name."""
     if not isinstance(value, str):
         raise InvalidDomainName("not_a_string")
     if len(value) > MAX_INPUT_LENGTH:
         raise InvalidDomainName("too_long")
-    value = value.strip()
+    value = value.strip(_TRIM)
     if not value:
         raise InvalidDomainName("empty")
     _reject_characters(value)
@@ -105,7 +106,7 @@ def to_ascii_domain(value: object) -> str:
 _LABEL_RE: Final = re.compile(r"_?[a-z0-9]([a-z0-9-]*[a-z0-9])?")
 
 
-def _dns_label(label: str) -> str:
+def _dns_label(label: str, allow_underscore: bool) -> str:
     """Validate one (already lowercased, UTS #46-mapped) label; return its A-label form."""
     if not label.isascii():
         try:
@@ -118,18 +119,20 @@ def _dns_label(label: str) -> str:
         except (idna.IDNAError, UnicodeError):
             raise InvalidDomainName("idna") from None
         return label
-    if not _LABEL_RE.fullmatch(label):
+    if not _LABEL_RE.fullmatch(label) or (label.startswith("_") and not allow_underscore):
         raise InvalidDomainName("label")
     return label
 
 
-def to_dns_name(value: object) -> str:
+def to_dns_name(value: object, *, allow_underscore: bool = True) -> str:
     """Normalised ASCII owner name for DNS-tool record names (lowercase, no trailing dot).
 
     Same pipeline as `to_ascii_domain` (trim, control/surrogate/inner-whitespace rejection, UTS #46
     + IDNA 2008 for non-ASCII labels, one trailing dot removed, 253/63 limits) except:
     - ASCII labels use an LDH rule (letters, digits, inner hyphens) with ONE optional leading
-      underscore (`_dmarc`, `s1._domainkey`); `a_`, `a_b` and a lone `_` are rejected;
+      underscore (`_dmarc`, `s1._domainkey`) unless
+      `allow_underscore=False`, which rejects them (`label`);
+      `a_`, `a_b` and a lone `_` are rejected;
     - `*` is allowed only as the whole first label (wildcard owner name) and needs a parent;
     - the root name "." is accepted and returned as "."; any other single label is rejected
       (`single_label`);
@@ -140,7 +143,7 @@ def to_dns_name(value: object) -> str:
         raise InvalidDomainName("not_a_string")
     if len(value) > MAX_INPUT_LENGTH:
         raise InvalidDomainName("too_long")
-    value = value.strip()
+    value = value.strip(_TRIM)
     if not value:
         raise InvalidDomainName("empty")
     _reject_characters(value)
@@ -160,7 +163,10 @@ def to_dns_name(value: object) -> str:
     labels = mapped.split(".")
     if any(not label or len(label) > MAX_LABEL_LENGTH for label in labels):
         raise InvalidDomainName("label")
-    out = ["*" if i == 0 and label == "*" else _dns_label(label) for i, label in enumerate(labels)]
+    out = [
+        "*" if i == 0 and label == "*" else _dns_label(label, allow_underscore)
+        for i, label in enumerate(labels)
+    ]
     if any(len(label) > MAX_LABEL_LENGTH for label in out):
         raise InvalidDomainName("label")
     name = ".".join(out)
