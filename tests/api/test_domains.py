@@ -408,14 +408,14 @@ def test_rename_to_name_of_other_tenant_is_allowed(world: World) -> None:
 INVALID_NAMES = [
     "",
     " ",
-    " example.com",
-    "example.com ",
     "exa mple.com",
-    "example.com\n",
     "example.com\u0000",
     "\u0000",
     "exa\u0000mple.com",
     "example.com\u0001",
+    "example.com\u001f",
+    "\u0085example.com",
+    "example.com\u000b",
     "example\u001f.com",
     "example.com\u007f",
     "example\u0085.com",
@@ -435,6 +435,17 @@ INVALID_NAMES = [
     "user@example.com",
     "♥.com",
 ]
+
+
+@pytest.mark.parametrize(
+    "name", [" example.com", "example.com ", "example.com\n", " \texample.com\r\n"]
+)
+@pytest.mark.parametrize("method", ["POST", "PATCH"])
+def test_surrounding_whitespace_is_trimmed(world: World, name: str, method: str) -> None:
+    path = BASE if method == "POST" else f"{BASE}/{world.domains['assigned']}"
+    response = call(world, "owner", method, path, json={"name": name})
+    assert response.status_code in (200, 201), response.text
+    assert response.json()["name"] == "example.com"
 
 
 @pytest.mark.parametrize("name", INVALID_NAMES)
