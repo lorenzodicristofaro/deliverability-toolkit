@@ -111,6 +111,16 @@ ROLE_ACTIONS: Mapping[MembershipRole, frozenset[Action]] = MappingProxyType(
 # Roles whose domain access is restricted to DomainAccess rows.
 _DOMAIN_RESTRICTED_ROLES = frozenset({MembershipRole.CLIENT_VIEWER})
 
+
+def is_domain_restricted(role: object) -> bool:
+    """True if `role` sees only the domains assigned to it through DomainAccess. The single
+    source is `_DOMAIN_RESTRICTED_ROLES`; callers (e.g. request dependencies loading grants) ask
+    here instead of naming a role. An unknown or malformed role counts as restricted (fail
+    closed: loading grants never widens access, `can` still denies the unknown role)."""
+    known = _coerce_role(role)
+    return known is None or known in _DOMAIN_RESTRICTED_ROLES
+
+
 # The only actions the instance admin flag grants (instance-level resources only).
 INSTANCE_ADMIN_ACTIONS = frozenset({Action.INSTANCE_MANAGE})
 

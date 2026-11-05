@@ -35,10 +35,17 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.core.config import Settings
 from app.core.db import create_session_factory, engine_from_settings
 from app.core.i18n import t
-from app.core.permissions import Action, Principal, Resource, TenantResource, can
+from app.core.permissions import (
+    Action,
+    Principal,
+    Resource,
+    TenantResource,
+    can,
+    is_domain_restricted,
+)
 from app.core.security import SESSION_COOKIE_NAME
 from app.core.tenancy import TenantContext
-from app.models import MembershipRole, User
+from app.models import User
 from app.repositories import (
     DomainAccessRepository,
     UserMembershipsRepository,
@@ -110,7 +117,7 @@ def _build(db: Session, user: User, session_id: int, tenant_id: int | None) -> A
     if membership is None:
         return anonymous_tenant
     principal = principal_from_models(user, [membership], [], tenant_id)
-    if membership.role == MembershipRole.CLIENT_VIEWER:
+    if is_domain_restricted(membership.role):
         principal = _with_assigned_domains(principal, tenant_id, repos.domain_access, user.id)
     return AuthSession(session_id, user, tenant_id, principal)
 

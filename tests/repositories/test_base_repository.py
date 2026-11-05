@@ -612,6 +612,61 @@ def _is_models_module(name: str) -> bool:
     return name == "app.models" or name.startswith("app.models.")
 
 
+_TABLE_FACTORIES = frozenset({"table", "Table"})
+_HOLE = "\x00"  # stands for a non-constant part of a concatenated string
+
+
+def _static_text(node: ast.AST) -> str | None:
+    """The text of a string built only from literals: a constant, an f-string (its formatted
+    values become a hole), `a + b` of such parts, or `"sep".join([...literal parts...])`.
+    None when no part is a string literal."""
+    if isinstance(node, ast.Constant):
+        return node.value if isinstance(node.value, str) else None
+    if isinstance(node, ast.JoinedStr):
+        return "".join(
+            v.value if isinstance(v, ast.Constant) and isinstance(v.value, str) else _HOLE
+            for v in node.values
+        )
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        left, right = _static_text(node.left), _static_text(node.right)
+        if left is None and right is None:
+            return None
+        return (left if left is not None else _HOLE) + (right if right is not None else _HOLE)
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "join"
+        and len(node.args) == 1
+        and isinstance(node.args[0], ast.List | ast.Tuple)
+    ):
+        sep = _static_text(node.func.value)
+        parts = [_static_text(e) for e in node.args[0].elts]
+        if sep is None or all(p is None for p in parts):
+            return None
+        return sep.join(p if p is not None else _HOLE for p in parts)
+    return None
+
+
+def _string_names(tree: ast.AST) -> dict[str, str]:
+    """Names assigned a string literal anywhere in the module (`T = "domains"`)."""
+    names: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign | ast.AnnAssign) and node.value is not None:
+            text_value = _static_text(node.value)
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            for target in targets:
+                if isinstance(target, ast.Name) and text_value is not None:
+                    names[target.id] = text_value
+    return names
+
+
+def _table_arg(node: ast.AST, names: dict[str, str]) -> str | None:
+    """A table name given as a literal (or a name bound to one) to table()/Table()/.tables."""
+    if isinstance(node, ast.Name):
+        return names.get(node.id)
+    return _static_text(node)
+
+
 def tenant_access_violations(source: str) -> list[str]:
     """Lines of `source` referencing a tenant model (name, import incl. `as` alias, attribute on
     any object incl. app.models module aliases, getattr string) or raw SQL naming a tenant table.
@@ -629,7 +684,23 @@ def tenant_access_violations(source: str) -> list[str]:
                     flag(node, f"imports {node.module}.{alias.name}")
 
     docstrings = _docstring_nodes(tree)
+    names = _string_names(tree)
     for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            callee = _dotted(node.func) or ""
+            leaf = callee.rsplit(".", 1)[-1]
+            first = node.args[0] if node.args else None
+            if first is not None and _table_arg(first, names) in TENANT_TABLES:
+                if leaf in _TABLE_FACTORIES:
+                    flag(node, f"{leaf}() on a tenant table")
+                elif leaf == "get" and callee.rsplit(".", 1)[0].endswith("tables"):
+                    flag(node, "metadata tables.get on a tenant table")
+        if isinstance(node, ast.BinOp | ast.JoinedStr | ast.Call):
+            joined = _static_text(node)
+            # Holes stay in the text: a non-literal part never completes a table name.
+            if joined is not None and _RAW_SQL.search(joined):
+                flag(node, "raw SQL on a tenant table (concatenated)")
+
         if isinstance(node, ast.Name) and node.id in TENANT_MODELS:
             flag(node, f"references {node.id}")
         elif isinstance(node, ast.Attribute) and node.attr in TENANT_MODELS:
@@ -643,10 +714,11 @@ def tenant_access_violations(source: str) -> list[str]:
                 flag(node, f"names {node.value}")
             elif _RAW_SQL.search(node.value):
                 flag(node, "raw SQL on a tenant table")
-        elif isinstance(node, ast.Subscript) and isinstance(node.slice, ast.Constant):
+        elif isinstance(node, ast.Subscript):
             target = _dotted(node.value) or ""
-            if node.slice.value in TENANT_TABLES and target.endswith("tables"):
-                flag(node, f"metadata table {node.slice.value}")
+            key = _table_arg(node.slice, names)
+            if key in TENANT_TABLES and target.endswith("tables"):
+                flag(node, f"metadata table {key}")
     return sorted(found)
 
 
@@ -678,6 +750,25 @@ def test_tenant_model_list_is_complete() -> None:
         'f"UPDATE domain_access SET x = {y}"',
         'text("SELECT * FROM users u JOIN memberships m ON m.user_id = u.id")',
         "Base.metadata.tables['domains']",
+        # M1-20: table names passed to table()/Table()/.tables.get()/.tables[...]
+        "from sqlalchemy import table\nt = table('domains')",
+        "sa.table('memberships', sa.column('id'))",
+        "Table('domain_access', metadata, autoload_with=engine)",
+        "sqlalchemy.Table('domains', Base.metadata)",
+        "Base.metadata.tables.get('domains')",
+        "md.tables.get('memberships')",
+        "T = 'domains'\ntable(T)",
+        "T = 'domains'\nBase.metadata.tables[T]",
+        "Base.metadata.tables['dom' 'ains']",
+        # M1-20: raw SQL split across concatenated strings
+        'text("SELECT id " + "FROM domains")',
+        'q = "DELETE " + "FROM " + "memberships"',
+        'text("SELECT * FROM " + "domain_" + "access")',
+        'text(" ".join(["SELECT id", "FROM", "domains"]))',
+        'text("".join(("UPDATE ", "domain_access", " SET x = 1")))',
+        'f"SELECT * " f"FROM domains"',
+        'text(f"SELECT {cols} " + "FROM memberships")',
+        'text("SELECT * FROM "\n     "domains")',
     ],
 )
 def test_checker_flags_tenant_access(source: str) -> None:
@@ -695,6 +786,18 @@ def test_checker_flags_tenant_access(source: str) -> None:
         '"""Data from domains and memberships is reached via repositories."""',
         "def f():\n    '''Reads FROM domains only via repo_for.'''\n    return 1",
         "tags = ['domains']",
+        # M1-20: user-owned tables, non-literal names and unrelated concatenations
+        "table('users', column('id'))",
+        "Table('tenants', metadata)",
+        "Base.metadata.tables.get('users')",
+        "Base.metadata.tables[name]",
+        "table(name)",
+        "config.get('domains')",
+        'text("SELECT id " + "FROM users")',
+        'text("SELECT * FROM " + table_name)',
+        '"SELECT * FROM " + suffix + "domains"',
+        'label = "Domains: " + ", ".join(names)',
+        '"-".join(["domains", "list"])',
     ],
 )
 def test_checker_no_false_positive(source: str) -> None:
