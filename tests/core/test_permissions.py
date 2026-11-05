@@ -49,6 +49,7 @@ ROLE_EXPECTED: dict[str, dict[Action, set[str]]] = {
         ACT.DOMAIN_READ: DOMAIN_ALL,
         ACT.DOMAIN_UPDATE: DOMAIN_ALL,
         ACT.DOMAIN_DELETE: DOMAIN_ALL,
+        ACT.DNS_TOOLS: TENANT_LEVEL,
     },
     "admin": {
         ACT.TENANT_READ: TENANT_LEVEL,
@@ -58,11 +59,13 @@ ROLE_EXPECTED: dict[str, dict[Action, set[str]]] = {
         ACT.DOMAIN_READ: DOMAIN_ALL,
         ACT.DOMAIN_UPDATE: DOMAIN_ALL,
         ACT.DOMAIN_DELETE: DOMAIN_ALL,
+        ACT.DNS_TOOLS: TENANT_LEVEL,
     },
     "analyst": {
         ACT.TENANT_READ: TENANT_LEVEL,
         ACT.DOMAIN_LIST: TENANT_LEVEL,
         ACT.DOMAIN_READ: DOMAIN_ALL,
+        ACT.DNS_TOOLS: TENANT_LEVEL,
     },
     "client_viewer": {
         ACT.TENANT_READ: TENANT_LEVEL,
@@ -116,8 +119,8 @@ MATRIX = [
 
 
 def test_matrix_size() -> None:
-    # 5 role kinds x admin flag x active flag x 9 actions x 6 situations.
-    assert len(MATRIX) == 5 * 2 * 2 * 9 * 6 == 1080
+    # 5 role kinds x admin flag x active flag x 10 actions x 6 situations.
+    assert len(MATRIX) == 5 * 2 * 2 * 10 * 6 == 1200
 
 
 @pytest.mark.parametrize(("role", "admin", "active", "action", "situation"), MATRIX)
@@ -135,7 +138,7 @@ def test_matrix(role: str, admin: bool, active: bool, action: Action, situation:
         assert exc.value.code == "permission_denied"
 
 
-def test_action_list_is_the_m1_set() -> None:
+def test_action_list_is_the_m1_set_plus_dns_tools() -> None:
     assert {a.value for a in Action} == {
         "tenant.read",
         "tenant.manage",
@@ -146,6 +149,7 @@ def test_action_list_is_the_m1_set() -> None:
         "domain.update",
         "domain.delete",
         "instance.manage",
+        "dns.tools",  # M2-11
     }
 
 
@@ -365,3 +369,118 @@ def test_client_viewer_domain_ids_are_validated(
     assert (
         can(_p(memberships=(grant,)), Action.DOMAIN_READ, DomainResource(A, domain_id)) is expected
     )
+
+
+# --- M2-11: dns.tools (GM decision 2026-11-05) -----------------------------------------------
+# owner/admin/analyst only; client viewer denied by role and never grantable; anonymous (no
+# principal / no active membership) denied; the instance admin flag adds nothing.
+
+DNS_ROLES_EXPECTED = {"owner": True, "admin": True, "analyst": True, "client_viewer": False}
+DNS_TOGGLES: dict[str, dict[str, Any]] = {
+    "none": {},
+    "dns_true": {"dns.tools": True},
+    "dns_false": {"dns.tools": False},
+    "dns_none": {"dns.tools": None},
+    "dns_str_true": {"dns.tools": "true"},
+    "dns_one": {"dns.tools": 1},
+    "unrelated_false": {"domain.read": False},
+}
+DNS_STATES = ("member", "instance_admin_member", "inactive_user", "active_elsewhere")
+
+
+def _dns_principal(role: str, toggles: dict[str, Any], state: str) -> Principal:
+    return Principal(
+        user_id=1,
+        is_active=state != "inactive_user",
+        is_instance_admin=state == "instance_admin_member",
+        # "active_elsewhere": the membership exists but its tenant is not the active one.
+        active_tenant_id=B if state == "active_elsewhere" else A,
+        memberships=(_grant(role, toggles=toggles),),
+    )
+
+
+@pytest.mark.parametrize(
+    ("role", "toggle", "state"),
+    [
+        pytest.param(r, t, st, id=f"{r}-{t}-{st}")
+        for r, t, st in itertools.product(DNS_ROLES_EXPECTED, DNS_TOGGLES, DNS_STATES)
+    ],
+)
+def test_dns_tools_roles_x_toggles_x_states(role: str, toggle: str, state: str) -> None:
+    p = _dns_principal(role, DNS_TOGGLES[toggle], state)
+    expected = (
+        DNS_ROLES_EXPECTED[role]
+        and state in {"member", "instance_admin_member"}
+        and toggle in {"none", "dns_true", "unrelated_false"}
+    )
+    assert can(p, Action.DNS_TOOLS, TenantResource(A)) is expected
+    assert can(p, "dns.tools", TenantResource(A)) is expected
+    # Only the principal's own active tenant, and only the tenant-level resource kind.
+    for resource in (
+        TenantResource(B),
+        InstanceResource(),
+        DomainResource(A, ASSIGNED),
+        DomainResource(A, UNASSIGNED),
+    ):
+        assert can(p, Action.DNS_TOOLS, resource) is False
+
+
+@pytest.mark.parametrize(
+    ("label", "principal"),
+    [
+        ("anonymous", None),
+        ("no memberships", _p(memberships=())),
+        ("no active tenant", _p(active_tenant_id=None)),
+        ("instance admin, no membership", _p(is_instance_admin=True, memberships=())),
+        ("instance admin, no active tenant", _p(is_instance_admin=True, active_tenant_id=None)),
+        ("instance admin, inactive", _p(is_instance_admin=True, is_active=False)),
+    ],
+)
+def test_dns_tools_denied_without_active_membership(label: str, principal: object) -> None:
+    for resource in SITUATIONS.values():
+        assert can(principal, Action.DNS_TOOLS, resource) is False, label
+
+
+_ALL_TOGGLES_TRUE = {a.value: True for a in Action}
+
+
+@pytest.mark.parametrize(
+    ("label", "grant", "admin"),
+    [
+        ("plain", _grant("client_viewer"), False),
+        ("toggle dns.tools true", _grant("client_viewer", toggles={"dns.tools": True}), False),
+        ("every toggle true", _grant("client_viewer", toggles=_ALL_TOGGLES_TRUE), False),
+        (
+            "every domain assigned",
+            MembershipGrant(A, MembershipRole.CLIENT_VIEWER, domain_ids=frozenset(range(1, 50))),
+            False,
+        ),
+        (
+            "every domain + every toggle",
+            MembershipGrant(
+                A,
+                MembershipRole.CLIENT_VIEWER,
+                domain_ids=frozenset({ASSIGNED, UNASSIGNED}),
+                feature_toggles=MappingProxyType(_ALL_TOGGLES_TRUE),
+            ),
+            False,
+        ),
+        ("instance admin flag", _grant("client_viewer", toggles={"dns.tools": True}), True),
+        ("role as string", MembershipGrant(A, "client_viewer"), False),  # type: ignore[arg-type]
+    ],
+)
+def test_client_viewer_never_gets_dns_tools(
+    label: str, grant: MembershipGrant, admin: bool
+) -> None:
+    p = _p(is_instance_admin=admin, memberships=(grant,))
+    for resource in SITUATIONS.values():
+        assert can(p, Action.DNS_TOOLS, resource) is False, label
+        with pytest.raises(PermissionDenied):
+            require(p, Action.DNS_TOOLS, resource)
+
+
+def test_owner_role_in_other_tenant_does_not_leak_dns_tools() -> None:
+    # Owner in B must not leak dns.tools into A, where the user is only a client viewer.
+    p = _p(memberships=(_grant("client_viewer"), _grant("owner", B)))
+    assert can(p, Action.DNS_TOOLS, TenantResource(A)) is False
+    assert can(p, Action.DNS_TOOLS, TenantResource(B)) is False  # B is not the active tenant

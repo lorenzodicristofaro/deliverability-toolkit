@@ -38,6 +38,9 @@ class Action(enum.StrEnum):
     DOMAIN_UPDATE = "domain.update"
     DOMAIN_DELETE = "domain.delete"
     INSTANCE_MANAGE = "instance.manage"
+    # Raw DNS tools (lookup, reverse, trace, propagation). Tenant-level: needs an active
+    # membership; never granted to client viewers (SPEC section 3; GM decision 2026-11-05).
+    DNS_TOOLS = "dns.tools"
 
 
 # --- Resources -------------------------------------------------------------------------------
@@ -73,6 +76,7 @@ _RESOURCE_KIND: Mapping[Action, type[Resource]] = MappingProxyType(
         Action.DOMAIN_READ: DomainResource,
         Action.DOMAIN_UPDATE: DomainResource,
         Action.DOMAIN_DELETE: DomainResource,
+        Action.DNS_TOOLS: TenantResource,
     }
 )
 
@@ -92,16 +96,19 @@ ROLE_ACTIONS: Mapping[MembershipRole, frozenset[Action]] = MappingProxyType(
     {
         # Everything inside the tenant, including billing-like owner settings.
         MembershipRole.OWNER: frozenset(
-            {Action.TENANT_READ, Action.TENANT_MANAGE, Action.USER_MANAGE}
+            {Action.TENANT_READ, Action.TENANT_MANAGE, Action.USER_MANAGE, Action.DNS_TOOLS}
         )
         | _DOMAIN_ALL,
         # Domains and inviting users; not owner settings.
-        MembershipRole.ADMIN: frozenset({Action.TENANT_READ, Action.USER_MANAGE}) | _DOMAIN_ALL,
-        # Sees all domains; no user/integration management, no domain changes.
+        MembershipRole.ADMIN: frozenset({Action.TENANT_READ, Action.USER_MANAGE, Action.DNS_TOOLS})
+        | _DOMAIN_ALL,
+        # Sees all domains and uses the raw DNS tools; no user/integration management, no domain
+        # changes.
         MembershipRole.ANALYST: frozenset(
-            {Action.TENANT_READ, Action.DOMAIN_LIST, Action.DOMAIN_READ}
+            {Action.TENANT_READ, Action.DOMAIN_LIST, Action.DOMAIN_READ, Action.DNS_TOOLS}
         ),
-        # Read-only, assigned domains only (enforced in `_domain_allowed`).
+        # Read-only, assigned domains only (enforced in `_domain_allowed`). No raw DNS tools: not
+        # in this set, so no toggle or DomainAccess grant can give it.
         MembershipRole.CLIENT_VIEWER: frozenset(
             {Action.TENANT_READ, Action.DOMAIN_LIST, Action.DOMAIN_READ}
         ),
