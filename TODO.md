@@ -41,7 +41,7 @@ Carried over from M0-07 QA:
   - [x] M2-10 propagation
   - [x] M2-11 `dns.tools` permission (opus)
   - [x] M2-12 REST endpoints
-  - [ ] M2-13 UI lookup/reverse
+  - [x] M2-13 UI lookup/reverse
   - [ ] M2-14 UI trace/propagation
   - [ ] M2-15 acceptance tests + docs/DNS.md
 - Accept: tests pass against recorded zones; SERVFAIL/timeout never reported as "record missing".

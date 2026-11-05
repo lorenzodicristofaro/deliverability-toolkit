@@ -14,3 +14,5 @@ Acceptance criteria:
 - Underscore names and IDN input accepted; validation error displayed with a key (not the raw validator text).
 New i18n keys (en + it): tools.dns.title, tools.dns.name, tools.dns.type, tools.dns.type.all, tools.dns.resolver, tools.dns.resolver.default, tools.dns.resolver.unverified, tools.dns.no_cache, tools.dns.submit, tools.dns.reverse.title, tools.dns.reverse.ip, tools.dns.reverse.fcrdns.match, tools.dns.reverse.fcrdns.mismatch, tools.dns.reverse.fcrdns.not_evaluated, tools.dns.state.ok, tools.dns.state.nxdomain, tools.dns.state.nodata, tools.dns.state.servfail, tools.dns.state.refused, tools.dns.state.timeout, tools.dns.state.truncated, tools.dns.state.malformed, tools.dns.state.network_error, tools.dns.state.blocked, tools.dns.state.error, tools.dns.invalid_name, tools.dns.invalid_ip, tools.dns.denied, nav.tools.dns
 Status: done
+
+GM note 2026-11-06: QA r2 failed (session fallback wrote last_seen_at); maintainer approved a 3rd round; fallback removed. DNS tools nav link shows only on pages that resolve the session (not on /login, 404, setup).
