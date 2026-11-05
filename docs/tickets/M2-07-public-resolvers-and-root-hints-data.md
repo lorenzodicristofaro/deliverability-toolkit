@@ -15,5 +15,7 @@ Acceptance criteria:
 - A CI-style test warns (xfail-free `warnings.warn` or a dedicated test marked non-fatal) when `verified_on` is older than 12 months (ARCHITECTURE section 8 convention) and fails if `verified_on` is in the future.
 - Malformed-file tests table-driven (bad YAML, wrong types, extra keys, unknown status, IPv6 in v4 field, hostnames).
 New i18n keys: none (resolver display names come from the file; notes_key optional)
-Status: todo
+Status: done
 Open question for maintainer: confirm the public resolver entries against operators' official docs when marked `unverified`.
+
+Outcome (GM 2026-11-05): all entries verified from official pages (google, cloudflare, quad9, opendns v4-only); root_hints diffed by GM against live named.root (26/26, root zone 2026110301). pyyaml moved to runtime deps. Dockerfile ships seeds/.

@@ -35,7 +35,7 @@ Carried over from M0-07 QA:
   - [x] M2-04 recorded-zone fixtures + fake resolver
   - [x] M2-05 backends system/custom/Unbound (dnspython dependency, opus)
   - [x] M2-06 TTL cache
-  - [ ] M2-07 public resolver list + root hints data files (unverified entries flagged)
+  - [x] M2-07 public resolver list + root hints data files (unverified entries flagged)
   - [ ] M2-08 lookup + reverse service
   - [ ] M2-09 trace (opus)
   - [ ] M2-10 propagation
@@ -100,7 +100,7 @@ Carried over from M0-07 QA:
 ## Follow-ups (post-M1)
 - [ ] M7: DNS egress cannot detect an operator NAT64 prefix inside 2000::/3 embedding a private IPv4 (app/dns/egress.py); handle in the guarded client
 - [ ] Per-user rate limiting for free tools (DNS trace/propagation); M2 has per-request caps only
-- [ ] MAINTAINER TO CONFIRM: public resolver addresses and root hints in seeds/ marked `unverified` (M2-07)
+- [ ] Seed staleness: a host clock behind a seed `verified_on` makes the knowledge loader raise at runtime; consider a tolerance (M2-07 QA nit)
 - [x] (M2-01) Domain names: trim surrounding whitespace in `to_ascii_domain` instead of rejecting it (maintainer decision 2026-11-05); update the M1-18 tests. Underscores stay rejected for tenant domains, but the M2 DNS tool must accept them in record names.
 - [ ] Public `security.mac(label, msg, key)` helper, to replace csrf.py's import of private helpers
 - [ ] CSRF exemption for future bearer-token API routes
