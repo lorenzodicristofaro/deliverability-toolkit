@@ -12,6 +12,6 @@ Acceptance criteria:
 - Resolver selection limited to ids from the data file; unknown id rejected; maximum number of resolvers per request capped (constant, tested).
 - Tests use the M2-04 fake server set (zone where two servers disagree); no network.
 New i18n keys: none (codes only; UI keys in M2-14)
-Status: todo
+Status: done
 
 GM note 2026-11-05 (from M2-08 QA): public resolvers in M2-08 are built from the entry's first address only. Propagation must query every address of each selected entry (factory over entry.addresses) and report per-address results.
