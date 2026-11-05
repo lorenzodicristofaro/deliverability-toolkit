@@ -7,6 +7,7 @@ from app.core.domain_names import (
     InvalidDomainName,
     to_ascii_domain,
     to_display_name,
+    to_dns_name,
 )
 from app.models.domain import normalize_domain_name
 
@@ -38,6 +39,14 @@ assert len(NAME_253) == 253
         (f"{LABEL_63}.com", f"{LABEL_63}.com"),
         (NAME_253, NAME_253),
         (NAME_253 + ".", NAME_253),
+        # surrounding whitespace is trimmed
+        (" example.com", "example.com"),
+        ("example.com ", "example.com"),
+        ("example.com\n", "example.com"),
+        ("\texample.com\t", "example.com"),
+        ("\u00a0Example.COM\u00a0", "example.com"),  # NBSP
+        ("\u3000münchen.de\u3000", "xn--mnchen-3ya.de"),  # ideographic space
+        (" example.com. ", "example.com"),
     ],
 )
 def test_valid_names(raw: str, expected: str) -> None:
@@ -55,15 +64,19 @@ def test_valid_names(raw: str, expected: str) -> None:
         (["example.com"], "not_a_string"),
         ("", "empty"),
         ("x" * (MAX_INPUT_LENGTH + 1), "too_long"),
-        # whitespace anywhere (no silent strip)
-        (" example.com", "forbidden_character"),
-        ("example.com ", "forbidden_character"),
+        # inner whitespace is rejected (surrounding whitespace is trimmed: see test_valid_names)
         ("exa mple.com", "forbidden_character"),
-        ("example.com\n", "forbidden_character"),
-        ("example.com\t", "forbidden_character"),
-        ("example .com", "forbidden_character"),  # NBSP
-        ("example　.com", "forbidden_character"),  # ideographic space
-        ("example .com", "forbidden_character"),  # line separator
+        ("example .com", "forbidden_character"),  # NBSP
+        ("example\u3000.com", "forbidden_character"),  # ideographic space
+        ("example\u2028.com", "forbidden_character"),  # line separator
+        ("exam\tple.com", "forbidden_character"),
+        ("example.com\n.", "forbidden_character"),
+        # whitespace only
+        (" ", "empty"),
+        ("\t\n", "empty"),
+        ("\u00a0\u3000", "empty"),
+        # raw length cap applies before stripping
+        (" " * (MAX_INPUT_LENGTH + 1), "too_long"),
         # NUL and other control characters (PostgreSQL rejects NUL in text)
         ("example.com\x00", "forbidden_character"),
         ("\x00", "forbidden_character"),
@@ -100,7 +113,7 @@ def test_valid_names(raw: str, expected: str) -> None:
         ("ab--cd.com", "idna"),  # hyphens in 3rd and 4th position
         ("xn--zz.com", "idna"),  # invalid punycode A-label
         ("xn--a.com", "idna"),  # decodes to a disallowed code point
-        ("_dmarc.example.com", "idna"),
+        ("_dmarc.example.com", "idna"),  # underscore stays rejected for tenant domains
         ("ex_ample.com", "idna"),
         ("*.example.com", "idna"),
         ("example.com/path", "idna"),
@@ -116,7 +129,7 @@ def test_invalid_names(raw: object, reason: str) -> None:
     with pytest.raises(InvalidDomainName) as caught:
         to_ascii_domain(raw)
     assert caught.value.reason == reason
-    if isinstance(raw, str) and raw:
+    if isinstance(raw, str) and raw.strip():
         assert raw not in str(caught.value)  # the error never echoes the input
 
 
@@ -130,3 +143,82 @@ def test_invalid_names(raw: object, reason: str) -> None:
 )
 def test_display_name(stored: str, shown: str) -> None:
     assert to_display_name(stored) == shown
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("example.com", "example.com"),
+        ("EXAMPLE.Com.", "example.com"),
+        ("  Example.com\t", "example.com"),
+        ("_dmarc.example.com", "_dmarc.example.com"),
+        ("s1._domainkey.example.com", "s1._domainkey.example.com"),
+        ("_acme-challenge.Example.com", "_acme-challenge.example.com"),
+        ("*.example.com", "*.example.com"),
+        ("*._domainkey.example.com", "*._domainkey.example.com"),
+        ("bücher.example", "xn--bcher-kva.example"),
+        ("_dmarc.bücher.example", "_dmarc.xn--bcher-kva.example"),
+        ("bücher。example", "xn--bcher-kva.example"),
+        ("xn--bcher-kva.example", "xn--bcher-kva.example"),
+        (".", "."),
+        (" . ", "."),
+        (f"{LABEL_63}.com", f"{LABEL_63}.com"),
+        (NAME_253, NAME_253),
+        ("123.com", "123.com"),
+    ],
+)
+def test_dns_name_valid(raw: str, expected: str) -> None:
+    assert to_dns_name(raw) == expected
+
+
+@pytest.mark.parametrize(
+    ("raw", "reason"),
+    [
+        (None, "not_a_string"),
+        (b"a.com", "not_a_string"),
+        ("", "empty"),
+        ("  ", "empty"),
+        ("x" * (MAX_INPUT_LENGTH + 1), "too_long"),
+        ("example.com\x00", "forbidden_character"),
+        ("\x00", "forbidden_character"),
+        ("exa\x01mple.com", "forbidden_character"),
+        ("\ud800.example.com", "forbidden_character"),
+        ("exa mple.com", "forbidden_character"),
+        ("a..b", "label"),
+        (".example.com", "label"),
+        ("example.com..", "label"),
+        ("..", "label"),
+        ("a" * 64 + ".com", "label"),
+        ("é" * 60 + ".com", "idna"),  # A-label exceeds 63 (idna rejects it)
+        (NAME_253 + "a", "length"),
+        ("_.example.com", "label"),
+        ("__a.example.com", "label"),
+        ("a_.com", "label"),
+        ("a_b.com", "label"),
+        ("-a.com", "label"),
+        ("a-.com", "label"),
+        ("a.*.example.com", "label"),
+        ("a.com.*", "label"),
+        ("*x.example.com", "label"),
+        ("**.example.com", "label"),
+        ("*", "single_label"),
+        ("com", "single_label"),
+        ("_dmarc", "single_label"),
+        ("localhost.", "single_label"),
+        ("192.0.2.1", "ip_address"),
+        ("::1", "ip_address"),
+        ("[::1]", "ip_address"),
+        ("2001:db8::1", "ip_address"),
+        ("example.123", "ip_address"),
+        ("example.com/path", "label"),
+        ("user@example.com", "label"),
+        ("xn--zz.com", "idna"),
+        ("♥.com", "idna"),
+    ],
+)
+def test_dns_name_invalid(raw: object, reason: str) -> None:
+    with pytest.raises(InvalidDomainName) as caught:
+        to_dns_name(raw)
+    assert caught.value.reason == reason
+    if isinstance(raw, str) and raw.strip():
+        assert raw not in str(caught.value)
