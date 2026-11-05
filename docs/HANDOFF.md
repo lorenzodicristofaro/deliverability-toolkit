@@ -9,7 +9,8 @@ Tickets: docs/tickets/M1-01..M1-20. GM decisions recorded in M1-01 ("GM decision
 | Ticket | Status |
 |---|---|
 | M1-01..M1-12 | done (merged into dev, QA APPROVE, pushed) |
-| M1-13..M1-20 | todo |
+| M1-13 argon2 + sessions | todo — a coder was started and STOPPED by the GM before finishing (session end). Discard its worktree/branch (`git worktree list`, `git branch --list 'feature/m1-13*'`) and restart M1-13 from scratch on current dev. |
+| M1-14..M1-20 | todo |
 
 Suggested order after 11/12: 13, 14, 16, 15, 17, 18, 19, 20.
 
@@ -23,6 +24,10 @@ Suggested order after 11/12: 13, 14, 16, 15, 17, 18, 19, 20.
 
 ## Follow-ups already routed into tickets
 - M1-16: eager locale catalogue validation at startup + Accept-Language 4 KB cap (from M1-09 QA).
+
+## Process rules (from this session)
+- Merge gate: run checks with `set -o pipefail`; commit/push only on exit 0 (a red dev was pushed once on 2026-11-05 and fixed in 525d45c).
+- Parallel tickets: the second QA runs the full suite on a trial merge with the first already on dev.
 
 ## Notes
 - `gh run watch` exits 1 with the repo token (no Checks permission): poll `gh run view` instead.
