@@ -11,6 +11,7 @@
 {% block content %}
 {% set is_rev = error_form == "reverse" or reverse_report is not none or deadline == "reverse" %}
 <h1>{{ t("tools.dns.title") }}</h1>
+{% include "dns/_subnav.html" %}
 
 <form class="dns-form" method="post" action="/tools/dns/lookup" data-testid="lookup-form">
   <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">

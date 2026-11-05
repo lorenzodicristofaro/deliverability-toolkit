@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% from "dns/_result.html" import state_box with context %}
+{% from "dns/_hop_detail.html" import detail_label with context %}
+{% block title %}{{ t("tools.dns.trace.title") }} · {{ app_name }}{% endblock %}
+{% block content %}
+<h1>{{ t("tools.dns.trace.title") }}</h1>
+{% include "dns/_subnav.html" %}
+
+<form class="dns-form" method="post" action="/tools/dns/trace" data-testid="trace-form">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <p>
+    <label for="dns-name">{{ t("tools.dns.name") }}</label>
+    <input id="dns-name" name="name" type="text" required autocomplete="off" spellcheck="false" maxlength="1024" value="{{ values.get('name', '') }}">
+  </p>
+  <p>
+    <label for="dns-type">{{ t("tools.dns.type") }}</label>
+    <select id="dns-type" name="type">
+      {% for ty in types %}<option value="{{ ty }}"{% if values.get("type", "A") == ty %} selected{% endif %}>{{ ty }}</option>{% endfor %}
+    </select>
+  </p>
+  {% if error %}<p class="form-error" role="alert" data-testid="trace-error">{{ t(error) }}</p>{% endif %}
+  <button type="submit">{{ t("tools.dns.trace.submit") }}</button>
+</form>
+{% if deadline %}
+<p class="dns-state dns-state-failure" role="alert" data-state="timeout">{{ t("tools.dns.state.timeout") }} <code class="dns-reason">request_deadline</code></p>
+{% endif %}
+{% if report is defined and report is not none %}
+<section class="dns-report" data-testid="trace-result" data-outcome="{{ report.outcome.value }}">
+  <h3>{{ report.question.name|visible }} {{ report.question.rdtype }}</h3>
+  <ol class="dns-hops">
+  {% for h in report.hops %}
+    <li class="dns-hop" data-kind="{{ h.kind.value }}" data-state="{{ h.state.value }}">
+      <h4>{{ t("tools.dns.trace.hop") }} {{ loop.index }}</h4>
+      <p class="dns-meta">{{ t("tools.dns.trace.zone") }}: <code>{{ h.zone|visible }}</code>
+        {% if h.server_name or h.server_addr %} · {{ t("tools.dns.trace.server") }}: <code>{{ (h.server_name or "")|visible }}{% if h.server_name and h.server_addr %} {% endif %}{% if h.server_addr %}({{ h.server_addr|visible }}){% endif %}</code>{% endif %}
+        · {{ t("tools.dns.trace.elapsed") }}: {{ "%.0f"|format(h.elapsed_ms) }} ms</p>
+      {% if h.kind.value == "referral" %}
+      <p class="dns-state dns-state-referral" data-state="ok" data-kind="referral">{{ t("tools.dns.trace.referral") }}: <code>{{ (h.referral_zone or "")|visible }}</code></p>
+      {% if h.referral_ns %}<ul class="dns-ns">{% for ns in h.referral_ns %}<li><code>{{ ns|visible }}</code></li>{% endfor %}</ul>{% endif %}
+      {% elif h.kind.value == "blocked" %}
+      <p class="dns-state dns-state-failure" role="alert" data-state="blocked" data-kind="failure">{{ t("tools.dns.trace.skipped_blocked") }} {{ detail_label(h.detail_code) }}</p>
+      {% else %}
+      {{ state_box(h.state, none) }}
+      <p class="dns-meta">{{ {"answer": t("tools.dns.trace.kind.answer"), "failure": t("tools.dns.trace.kind.failure"), "ns_lookup": t("tools.dns.trace.kind.ns_lookup"), "skipped": t("tools.dns.trace.kind.skipped")}.get(h.kind.value, h.kind.value|visible) }} {{ detail_label(h.detail_code) }}</p>
+      {% endif %}
+      {% if h.records %}
+      <table class="dns-records"><tbody>
+      {% for rec in h.records %}<tr><td class="dns-wrap">{{ rec.name|visible }}</td><td>{{ rec.ttl }}</td><td class="dns-wrap dns-rdata">{{ rec.rdata_text|visible }}</td></tr>{% endfor %}
+      </tbody></table>
+      {% endif %}
+    </li>
+  {% endfor %}
+  </ol>
+  <h3>{{ t("tools.dns.trace.outcome") }}</h3>
+  {% set okind = "ok" if report.outcome.value == "ok" else ("absent" if report.outcome.value in ("nxdomain", "nodata") else "failure") %}
+  <p class="dns-state dns-state-{{ okind }}" data-state="{{ report.state.value }}" data-kind="{{ okind }}"{% if okind == "failure" %} role="alert"{% endif %}>
+    {{ {"ok": t("tools.dns.trace.outcome.ok"), "nxdomain": t("tools.dns.trace.outcome.nxdomain"), "nodata": t("tools.dns.trace.outcome.nodata"), "loop": t("tools.dns.trace.outcome.loop"), "depth_exceeded": t("tools.dns.trace.outcome.depth_exceeded"), "all_failed": t("tools.dns.trace.outcome.all_failed"), "lame_delegation": t("tools.dns.trace.outcome.lame"), "query_limit": t("tools.dns.trace.outcome.query_limit"), "deadline": t("tools.dns.trace.outcome.deadline"), "no_allowed_server": t("tools.dns.trace.outcome.no_allowed_server"), "no_server_address": t("tools.dns.trace.outcome.no_server_address")}[report.outcome.value] }}
+    {{ detail_label(report.detail_code) }}
+  </p>
+  <p class="dns-meta">{{ t("tools.dns.trace.queries") }}: {{ report.queries_sent }}
+    {% if report.final_zone %} · {{ t("tools.dns.trace.zone") }}: <code>{{ report.final_zone|visible }}</code>{% endif %}
+    {% if report.final_server %} · {{ t("tools.dns.trace.server") }}: <code>{{ report.final_server|visible }}</code>{% endif %}
+    · {{ t("tools.dns.trace.elapsed") }}: {{ "%.0f"|format(report.elapsed_ms) }} ms</p>
+  {% if report.answer %}
+  <h3>{{ t("tools.dns.trace.final_answer") }}</h3>
+  <table class="dns-records">
+    <thead><tr>
+      <th scope="col">{{ t("tools.dns.col.name") }}</th>
+      <th scope="col">{{ t("tools.dns.col.ttl") }}</th>
+      <th scope="col">{{ t("tools.dns.col.rdata") }}</th>
+    </tr></thead>
+    <tbody>
+    {% for rec in report.answer %}<tr><td class="dns-wrap">{{ rec.name|visible }}</td><td>{{ rec.ttl }}</td><td class="dns-wrap dns-rdata">{{ rec.rdata_text|visible }}</td></tr>{% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</section>
+{% endif %}
+{% endblock %}

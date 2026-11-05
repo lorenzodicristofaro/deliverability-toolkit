@@ -24,9 +24,12 @@ from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, Response
 
 from app.api.v1.dns_tools import REQUEST_DEADLINE_S, Backend
+from app.core.domain_names import InvalidDomainName, to_dns_name
 from app.core.permissions import Action, Principal, TenantResource, can
 from app.dns.knowledge import list_public_resolvers
-from app.dns.types import ALLOWED_RDTYPES
+from app.dns.trace import DEFAULT_LIMITS, TraceReport, trace
+from app.dns.types import ALLOWED_RDTYPES, DnsQuestion
+from app.services.dns_propagation import PropagationReport, check_propagation
 from app.services.dns_tools import (
     ALL_TYPES,
     InvalidLookupInput,
@@ -202,3 +205,157 @@ async def dns_reverse_form(request: Request, auth: CurrentSession, backend: Back
     except TimeoutError:
         return _page(request, deadline="reverse", values=values)
     return _page(request, reverse_report=report, values=values)
+
+
+# --- trace and propagation (M2-14) --------------------------------------------------------------
+
+_MAX_RESOLVER_IDS = 8  # same cap as the service; more is rejected there as well
+
+
+def _tool_page(
+    request: Request,
+    template: str,
+    *,
+    status_code: int = 200,
+    error: str | None = None,
+    deadline: bool = False,
+    values: dict[str, str] | None = None,
+    selected: tuple[str, ...] = (),
+    **extra: object,
+) -> HTMLResponse:
+    return render(
+        request,
+        template,
+        status_code=status_code,
+        logged_in=True,
+        types=sorted(ALLOWED_RDTYPES),
+        error=error,
+        deadline=deadline,
+        values=values or {},
+        selected=selected,
+        **extra,
+    )
+
+
+def _name_type(form: dict[str, list[str]]) -> dict[str, str] | None:
+    out: dict[str, str] = {}
+    for field in ("name", "type"):
+        if field in form:
+            value = clean_field(form, field)
+            if value is None:
+                return None
+            out[field] = value
+    return out
+
+
+def _resolver_ids(form: dict[str, list[str]]) -> tuple[str, ...] | None:
+    """The checked resolver ids; None if any is over-long, has controls or there are too many."""
+    raw = form.get("resolver_ids", [])
+    if len(raw) > _MAX_RESOLVER_IDS:
+        return None
+    out: list[str] = []
+    for item in raw:
+        value = clean_field({"x": [item]}, "x")
+        if value is None or len(value) > 64:
+            return None
+        out.append(value)
+    return tuple(out)
+
+
+@router.get("/trace", include_in_schema=False)
+def dns_trace_page(request: Request, auth: CurrentSession) -> Response:
+    denied = _guard(request, auth)
+    if denied is not None:
+        return denied
+    return _tool_page(request, "dns/trace.html", values={"type": "A"})
+
+
+@router.post("/trace", include_in_schema=False)
+async def dns_trace_form(request: Request, auth: CurrentSession, backend: Backend) -> Response:
+    denied = _guard(request, auth)
+    if denied is not None:
+        return denied
+    form = await read_form(request)
+    if form is None:
+        return Response(status_code=413)
+    values = _name_type(form)
+    if values is None or "name" not in values:
+        return _tool_page(
+            request, "dns/trace.html", status_code=422, error="api.error.invalid_request"
+        )
+    report: TraceReport
+    try:
+        name = to_dns_name(values["name"])
+        rdtype = values.get("type", "A").strip().upper()
+        if rdtype not in ALLOWED_RDTYPES:
+            raise InvalidLookupInput("rdtype", "not_allowed")
+        async with asyncio.timeout(REQUEST_DEADLINE_S):
+            report = await trace(
+                DnsQuestion(name, rdtype),
+                query_server=backend.query_server,
+                root_hints=backend.root_hints,
+                policy=backend.policy,
+                limits=DEFAULT_LIMITS,
+                resolver=backend.default,
+            )
+    except InvalidDomainName:
+        return _tool_page(
+            request,
+            "dns/trace.html",
+            status_code=422,
+            error="tools.dns.invalid_name",
+            values=values,
+        )
+    except InvalidLookupInput as exc:
+        return _tool_page(
+            request, "dns/trace.html", status_code=422, error=_error_key(exc), values=values
+        )
+    except TimeoutError:
+        return _tool_page(request, "dns/trace.html", deadline=True, values=values)
+    return _tool_page(request, "dns/trace.html", report=report, values=values)
+
+
+def _propagation_page(request: Request, **kw: object) -> HTMLResponse:
+    catalog = {r.id: r for r in list_public_resolvers()}
+    return _tool_page(request, "dns/propagation.html", catalog=catalog, **kw)  # type: ignore[arg-type]
+
+
+@router.get("/propagation", include_in_schema=False)
+def dns_propagation_page(request: Request, auth: CurrentSession) -> Response:
+    denied = _guard(request, auth)
+    if denied is not None:
+        return denied
+    return _propagation_page(request, values={"type": "A"})
+
+
+@router.post("/propagation", include_in_schema=False)
+async def dns_propagation_form(
+    request: Request, auth: CurrentSession, backend: Backend
+) -> Response:
+    denied = _guard(request, auth)
+    if denied is not None:
+        return denied
+    form = await read_form(request)
+    if form is None:
+        return Response(status_code=413)
+    values = _name_type(form)
+    ids = _resolver_ids(form)
+    if values is None or ids is None or "name" not in values:
+        return _propagation_page(request, status_code=422, error="api.error.invalid_request")
+    report: PropagationReport
+    try:
+        async with asyncio.timeout(REQUEST_DEADLINE_S):
+            report = await check_propagation(
+                values["name"],
+                values.get("type", "A"),
+                list(ids) if ids else None,  # none checked: every verified public resolver
+                default_resolver=backend.default,
+                address_factory=backend.address_factory,
+            )
+    except InvalidLookupInput as exc:
+        return _propagation_page(
+            request, status_code=422, error=_error_key(exc), values=values, selected=ids
+        )
+    except TimeoutError:
+        return _propagation_page(request, deadline=True, values=values, selected=ids)
+    return _propagation_page(request, report=report, values=values, selected=ids)

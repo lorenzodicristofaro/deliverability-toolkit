@@ -177,6 +177,10 @@ def _dns_propagation(_w: World, _role: str) -> dict[str, Any]:
     return {"name": "example.com", "type": "A", "resolver_ids": ["google"]}
 
 
+def _dns_propagation_form(_w: World, _role: str) -> dict[str, Any]:
+    return {"name": "example.com", "type": "A", "resolver_ids": "google"}
+
+
 _DNS_OWN = {**_by_role(200, 200), "viewer": 403}  # client viewers never get raw DNS tools
 
 MATRIX: dict[tuple[str, str], Entry] = {
@@ -206,6 +210,10 @@ MATRIX: dict[tuple[str, str], Entry] = {
     ("GET", "/tools/dns"): Entry(Kind.DNS, own=_DNS_OWN),
     ("POST", "/tools/dns/lookup"): Entry(Kind.DNS, body=_dns_lookup, own=_DNS_OWN),
     ("POST", "/tools/dns/reverse"): Entry(Kind.DNS, body=_dns_reverse, own=_DNS_OWN),
+    ("GET", "/tools/dns/trace"): Entry(Kind.DNS, own=_DNS_OWN),
+    ("POST", "/tools/dns/trace"): Entry(Kind.DNS, body=_dns_lookup, own=_DNS_OWN),
+    ("GET", "/tools/dns/propagation"): Entry(Kind.DNS, own=_DNS_OWN),
+    ("POST", "/tools/dns/propagation"): Entry(Kind.DNS, body=_dns_propagation_form, own=_DNS_OWN),
     # DNS tools API (app.api.v1.dns_tools)
     ("POST", "/api/v1/dns/lookup"): Entry(Kind.DNS, body=_dns_lookup, own=_DNS_OWN),
     ("POST", "/api/v1/dns/reverse"): Entry(Kind.DNS, body=_dns_reverse, own=_DNS_OWN),
