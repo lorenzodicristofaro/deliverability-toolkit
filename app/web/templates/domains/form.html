@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}{{ t("domain.add") if mode == "add" else t("domain.rename") }} · {{ app_name }}{% endblock %}
+{% block content %}
+<h1>{{ t("domain.add") if mode == "add" else t("domain.rename") }}</h1>
+{% if row is not none %}
+<p data-testid="domain-name">{{ row.display_name }}</p>
+{% include "domains/name_notes.html" %}
+{% endif %}
+{% if error %}
+<p class="form-error" role="alert">{{ t(error) }}</p>
+{% endif %}
+<form class="domain-form" method="post"
+      action="{% if mode == 'add' %}/domains{% else %}/domains/{{ row.id }}/rename{% endif %}">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <p>
+    <label for="domain-name-input">{{ t("domain.form.name") }}</label>
+    <input id="domain-name-input" name="name" type="text" required autocomplete="off"
+           spellcheck="false" maxlength="253" value="{{ name }}">
+  </p>
+  <button type="submit">{{ t("domain.add.submit") if mode == "add" else t("domain.rename.submit") }}</button>
+  <a href="{% if mode == 'add' %}/{% else %}/domains/{{ row.id }}{% endif %}">{{ t("domain.form.cancel") }}</a>
+</form>
+{% endblock %}

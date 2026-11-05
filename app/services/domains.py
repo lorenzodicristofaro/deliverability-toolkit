@@ -7,16 +7,15 @@ request's `TenantContext`, and every decision through `app.core.permissions.can(
 - a visible domain (or the tenant itself) the principal may not change is `Forbidden` (403).
 Errors carry only an i18n key, never user input or data of another tenant.
 
-The `Principal` built by the auth dependencies has no DomainAccess grants yet (app.web.deps), so
-this service loads the client viewer's assigned domains for the active tenant through
-`DomainAccessRepository` before calling `can()` (fail closed: no rows -> no domains).
+The `Principal` comes from the auth dependencies (app.web.deps), which load a client viewer's
+DomainAccess grants for the active tenant (M1-19); a principal without grants sees no domains
+(fail closed).
 
 TODO(M10): write audit log entries for create/rename/delete/access changes.
 """
 
 from __future__ import annotations
 
-import dataclasses
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
@@ -36,8 +35,8 @@ from app.core.tenancy import TenantContext
 from app.models.membership import MembershipRole
 from app.repositories import repo_for
 from app.repositories.base import DEFAULT_LIMIT
-from app.repositories.domain import DomainNameTaken, DomainRecord, DomainRepository
-from app.repositories.domain_access import MAX_ASSIGNMENTS, DomainAccessRepository
+from app.repositories.domain import DomainNameTaken, DomainRecord
+from app.repositories.domain_access import MAX_ASSIGNMENTS
 
 
 class DomainServiceError(Exception):
@@ -97,29 +96,17 @@ def _active_grant(principal: Principal, tenant_id: int) -> MembershipGrant | Non
     return matches[0] if len(matches) == 1 else None
 
 
-def with_domain_access(
-    principal: Principal, ctx: TenantContext, access: DomainAccessRepository
-) -> Principal:
-    """`principal` with the DomainAccess rows of its active-tenant membership loaded (the
-    other memberships are left untouched; nothing is granted if there is no active grant)."""
-    grant = _active_grant(principal, ctx.tenant_id)
-    if grant is None or principal.user_id != ctx.principal:
-        return principal
-    loaded = dataclasses.replace(grant, domain_ids=access.domain_ids_for_user(principal.user_id))
-    memberships = tuple(loaded if m is grant else m for m in principal.memberships)
-    return dataclasses.replace(principal, memberships=memberships)
-
-
 class DomainService:
     """Domain operations for one request: `ctx` scopes the data, `principal` the permissions."""
 
     def __init__(self, db: Session, ctx: TenantContext, principal: Principal) -> None:
         self._db = db
         self._ctx = ctx
-        self._domains = DomainRepository(ctx, db)
-        self._access = DomainAccessRepository(ctx, db)
-        self._memberships = repo_for(ctx, db).memberships
-        self._principal = with_domain_access(principal, ctx, self._access)
+        repos = repo_for(ctx, db)
+        self._domains = repos.domains
+        self._access = repos.domain_access
+        self._memberships = repos.memberships
+        self._principal = principal
 
     @property
     def principal(self) -> Principal:

@@ -1,0 +1,2 @@
+{% if row.ascii_name %}<small class="a-label" lang="en" data-testid="a-label">{{ t("domain.ascii_name", name=row.ascii_name) }}</small>{% endif %}
+{% if row.mixed_script %}<small class="lookalike-warning" role="note" data-testid="mixed-script">{{ t("domain.mixed_script") }}</small>{% endif %}
