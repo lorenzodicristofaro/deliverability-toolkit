@@ -34,7 +34,7 @@ Carried over from M0-07 QA:
   - [x] M2-03 DNS egress policy (opus; open question for maintainer)
   - [x] M2-04 recorded-zone fixtures + fake resolver
   - [ ] M2-05 backends system/custom/Unbound (dnspython dependency, opus)
-  - [ ] M2-06 TTL cache
+  - [x] M2-06 TTL cache
   - [ ] M2-07 public resolver list + root hints data files (unverified entries flagged)
   - [ ] M2-08 lookup + reverse service
   - [ ] M2-09 trace (opus)

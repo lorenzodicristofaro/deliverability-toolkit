@@ -16,4 +16,4 @@ Acceptance criteria:
 - A `bypass_cache` / fresh flag on the call path for the DNS tool "no cache" option and for propagation (propagation must see each resolver's live answer): test.
 - Table-driven tests: expiry boundary, clamp edges, eviction, mixed identities, TTL decrement.
 New i18n keys: none
-Status: todo
+Status: done
