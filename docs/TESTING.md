@@ -32,6 +32,9 @@ create data on purpose (the successful UI "smuggle" create) delete it before the
    - `COLLECTION`: list/create in the active tenant; give the expected status per role for the
      own-tenant request (`own=` for GET, `smuggle=` for writes that also try to pass a tenant B id).
    - `LANDING`, `SESSION`, `SWITCH`: see the module docstring.
+   - `DNS`: tenant-level `dns.tools` routes (M2-12); anonymous 401, a session whose active tenant
+     is B 404, and per-role `own=` statuses (client viewer 403). The tenancy world overrides the
+     `dns_backend` dependency with fixtures, so no request touches the network.
    - Pass `body=` for writes. A new resource type (not a domain) needs a new `Kind` with its
      cross-tenant target and an explicit expectation in `_expected`.
 2. Every matrix route must depend on `app.web.deps.current_session`

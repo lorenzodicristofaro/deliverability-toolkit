@@ -417,7 +417,7 @@ async def test_max_targets_rejected_not_truncated() -> None:
     fs = servers({"default": AGREE})
     with pytest.raises(InvalidLookupInput) as ei:
         await run(fs, cat, [e.id for e in cat])  # 18 > 16
-    assert (ei.value.field, ei.value.reason) == ("resolver_ids", "too_many_targets")
+    assert (ei.value.field, ei.value.reason) == ("resolver", "too_many_targets")
     assert fs.all_questions == []
     sixteen = [entry(f"s{i}", [f"10.3.{i}.1", f"10.3.{i}.2"]) for i in range(8)]
     fs2 = servers({"default": AGREE, **{x: AGREE for e in sixteen for x in e.addresses}})
@@ -448,3 +448,43 @@ async def test_no_verified_entries_only_default_inconclusive() -> None:
     rep = await run(fs, [entry("u", ["10.0.0.2"], status="unverified")])
     assert [r.resolver_id for r in rep.rows] == ["default"]
     assert rep.verdict is Verdict.inconclusive
+
+
+class Tracking:
+    """A resolver that never answers and records whether its task was cancelled."""
+
+    def __init__(self) -> None:
+        self.identity = "tracking"
+        self.started = asyncio.Event()
+        self.cancelled = False
+
+    async def resolve(self, question: DnsQuestion) -> DnsResult:
+        self.started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            self.cancelled = True
+            raise
+        raise AssertionError("unreachable")
+
+
+async def test_caller_cancellation_cancels_per_address_tasks() -> None:
+    fs = mk(AGREE, AGREE, AGREE, AGREE)
+    hung = Tracking()
+    caller = asyncio.ensure_future(
+        check_propagation(
+            "example.com",
+            "A",
+            ["p"],
+            default_resolver=hung,
+            address_factory=lambda e, ad: fs.resolver(ad),
+            catalog=E,
+            timeout_s=30,
+            deadline_s=30,
+        )
+    )
+    await asyncio.wait_for(hung.started.wait(), 2)
+    caller.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await caller
+    assert hung.cancelled

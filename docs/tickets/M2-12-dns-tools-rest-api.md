@@ -14,7 +14,7 @@ Acceptance criteria:
 - OpenAPI shows schemas; route-coverage guard in tests/tenancy passes.
 - Risk noted for GM: no per-user rate limiting exists yet (only login throttle); caps are per request. Follow-up candidate in TODO.md.
 New i18n keys: none (API returns codes; UI translates)
-Status: todo
+Status: done
 
 GM note 2026-11-05 (carried from M2-03/M2-10 QA; scope widened accordingly):
 - app/main.py: call `Settings.log_resolver_config()` in the lifespan after `configure_logging` (M2-03 acceptance item).

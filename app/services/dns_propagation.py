@@ -202,7 +202,7 @@ async def check_propagation(
     entries = _select(resolver_ids, list_public_resolvers() if catalog is None else catalog)
 
     if sum(len(e.addresses) for e in entries) > MAX_TARGETS:
-        raise InvalidLookupInput("resolver_ids", "too_many_targets")
+        raise InvalidLookupInput("resolver", "too_many_targets")
 
     q = DnsQuestion(name, rtype)
     targets: list[tuple[str, str | None, bool, Resolver]] = [
@@ -220,22 +220,28 @@ async def check_propagation(
             return await _ask(resolver, q, timeout_s)
 
     tasks = [asyncio.ensure_future(run(t[3])) for t in targets]
-    await asyncio.wait(tasks, timeout=deadline_s)
     results: list[DnsResult] = []
-    for task in tasks:
-        if task.done():
-            results.append(task.result())
-        else:
-            task.cancel()
-            results.append(
-                DnsResult(
-                    question=q,
-                    state=ResultState.timeout,
-                    elapsed_ms=deadline_s * 1000,
-                    detail_code="overall_deadline",
+    try:
+        await asyncio.wait(tasks, timeout=deadline_s)
+        for task in tasks:
+            if task.done():
+                results.append(task.result())
+            else:
+                task.cancel()
+                results.append(
+                    DnsResult(
+                        question=q,
+                        state=ResultState.timeout,
+                        elapsed_ms=deadline_s * 1000,
+                        detail_code="overall_deadline",
+                    )
                 )
-            )
-    await asyncio.gather(*tasks, return_exceptions=True)
+    finally:
+        # Also runs when the caller is cancelled (client disconnect): no task is left running.
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
     rows, groups, verdict = aggregate(
         [_row(rid, addr, unv, r) for (rid, addr, unv, _), r in zip(targets, results, strict=True)],
         min_evaluated,
