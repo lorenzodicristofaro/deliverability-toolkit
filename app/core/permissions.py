@@ -1,7 +1,8 @@
 """Permission layer: `can(principal, action, resource)` (ARCHITECTURE section 4 item 3).
 
-Pure: no DB session, no I/O. The caller loads the user, their memberships and domain access and
-builds a `Principal` (see `principal_from_models`); web, API and CLI all call `can`/`require`.
+Pure: no DB session, no I/O, no tenant models. The caller loads the user, their memberships and
+domain access and builds a `Principal` (see `app.repositories.principal_from_models`); web, API
+and CLI all call `can`/`require`.
 
 Rules (SPEC section 3, ARCHITECTURE section 4 items 3 and 6):
 - Deny by default: unknown action, unknown role, wrong resource kind, malformed input -> False.
@@ -19,16 +20,12 @@ Rules (SPEC section 3, ARCHITECTURE section 4 items 3 and 6):
 from __future__ import annotations
 
 import enum
-from collections.abc import Iterable, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from app.models.membership import MembershipRole
-
-if TYPE_CHECKING:
-    from app.models.membership import DomainAccess, Membership
-    from app.models.user import User
 
 
 class Action(enum.StrEnum):
@@ -139,46 +136,6 @@ class Principal:
     is_instance_admin: bool = False
     active_tenant_id: int | None = None
     memberships: tuple[MembershipGrant, ...] = ()
-
-
-def _freeze_toggles(toggles: object) -> Any:
-    """Read-only copy of a mapping; anything else is passed through unchanged so that
-    `_toggle_denies` denies every action for it (fail closed, no coercion)."""
-    if isinstance(toggles, Mapping):
-        return MappingProxyType(dict(toggles))
-    return toggles
-
-
-def principal_from_models(
-    user: User,
-    memberships: Iterable[Membership],
-    domain_access: Iterable[DomainAccess],
-    active_tenant_id: int | None,
-) -> Principal:
-    """Build a Principal from already-loaded ORM rows (no queries). Memberships of other users
-    and DomainAccess rows whose tenant does not match their membership are ignored."""
-    own = [m for m in memberships if m.user_id == user.id]
-    tenant_of = {m.id: m.tenant_id for m in own}
-    domains: dict[int, set[int]] = {m.id: set() for m in own}
-    for da in domain_access:
-        if da.membership_id in domains and tenant_of[da.membership_id] == da.tenant_id:
-            domains[da.membership_id].add(da.domain_id)
-    grants = tuple(
-        MembershipGrant(
-            tenant_id=m.tenant_id,
-            role=m.role,
-            domain_ids=frozenset(domains[m.id]),
-            feature_toggles=_freeze_toggles(m.feature_toggles),
-        )
-        for m in own
-    )
-    return Principal(
-        user_id=user.id,
-        is_active=user.is_active,
-        is_instance_admin=user.is_instance_admin,
-        active_tenant_id=active_tenant_id,
-        memberships=grants,
-    )
 
 
 # --- Errors ----------------------------------------------------------------------------------
