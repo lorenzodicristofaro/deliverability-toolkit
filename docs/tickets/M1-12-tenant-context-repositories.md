@@ -13,4 +13,4 @@ Acceptance criteria:
 - Tests on SQLite (and PostgreSQL when configured): two tenants with rows; every base method (get, list, add, update, delete, count) is proven not to cross tenants; attempt to update tenant_id is rejected.
 - Memberships repository for the user's own tenants lives in a clearly named non-tenant-scoped module with a docstring explaining why (listing a user's tenants is a user-scoped query).
 New i18n keys: none
-Status: todo
+Status: done (merged into dev, QA APPROVE after fix round 1; SQLite 484, PG 602 passed)

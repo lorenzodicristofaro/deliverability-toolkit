@@ -1,12 +1,13 @@
 # M1-20 Tenancy test matrix and M1 acceptance tests
 Milestone: M1
 Branch: feature/m1-20-tenancy-matrix
-Files in scope: tests/tenancy/conftest.py, tests/tenancy/test_matrix.py, tests/tenancy/test_acceptance_m1.py, docs/TESTING.md (short section on how new endpoints join the matrix)
+Files in scope: tests/tenancy/conftest.py, tests/tenancy/test_matrix.py, tests/tenancy/test_acceptance_m1.py, docs/TESTING.md (short section on how new endpoints join the matrix), tests/repositories/test_base_repository.py (static isolation check only)
 Out of scope: production code changes (findings are reported to GM as new tickets, not fixed here), PostgreSQL RLS, Playwright
 Depends on: M1-17, M1-18, M1-19
 Parallel-safe: no (runs against all of the above; conftest shared)
 Model: opus
 Acceptance criteria:
+- QA follow-up from M1-12: the AST isolation check also flags string constants equal to a tenant table name passed to `table()`, `Table()`, `.tables.get()`/`.tables[...]`, and raw SQL split across concatenated strings; self-tests for each.
 - Fixtures: two tenants, users per role (owner, admin, analyst, client viewer with assigned and unassigned domains), instance admin, anonymous; seeded through repositories/services, not raw SQL.
 - Matrix is generated from the FastAPI route table: a test fails if a non-public route (everything except /healthz, /login, /setup, static) is not covered by a matrix entry or an explicit documented exemption. This is the guard that makes "every endpoint needs a tenancy test" automatic for later milestones.
 - Matrix asserts: cross-tenant resource returns 404 for every role and every verb (UI and API); anonymous gets 401/redirect; client viewer never receives unassigned domains in list responses, HTML or JSON; session of user A never resolves tenant B context; switching to a non-member tenant fails.
