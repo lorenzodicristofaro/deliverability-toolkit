@@ -88,6 +88,7 @@
   "tools.dns.propagation.state": "Stato",
   "tools.dns.propagation.submit": "Verifica",
   "tools.dns.propagation.title": "Propagazione DNS",
+  "tools.dns.propagation.too_many_targets": "Troppi indirizzi di resolver selezionati. Seleziona meno resolver pubblici.",
   "tools.dns.resolver": "Resolver",
   "tools.dns.resolver.default": "Resolver predefinito",
   "tools.dns.resolver.unverified": "non verificato",

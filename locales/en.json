@@ -88,6 +88,7 @@
   "tools.dns.propagation.state": "State",
   "tools.dns.propagation.submit": "Check",
   "tools.dns.propagation.title": "DNS propagation",
+  "tools.dns.propagation.too_many_targets": "Too many resolver addresses selected. Select fewer public resolvers.",
   "tools.dns.resolver": "Resolver",
   "tools.dns.resolver.default": "Default resolver",
   "tools.dns.resolver.unverified": "unverified",
