@@ -43,7 +43,7 @@ Carried over from M0-07 QA:
   - [x] M2-12 REST endpoints
   - [x] M2-13 UI lookup/reverse
   - [x] M2-14 UI trace/propagation
-  - [ ] M2-15 acceptance tests + docs/DNS.md
+  - [x] M2-15 acceptance tests + docs/DNS.md
 - Accept: tests pass against recorded zones; SERVFAIL/timeout never reported as "record missing".
 
 ## M3 — SPF, DKIM, DMARC
@@ -98,6 +98,9 @@ Carried over from M0-07 QA:
 - [ ] Security review checklist, dependency/license audit, v0.1.0 release
 
 ## Follow-ups (post-M1)
+- [ ] Extend the tests/dns network guard (loopback-only) to the DNS tests in tests/api and tests/web (M2-15 QA)
+- [ ] Import guard: forbid network calls via dns.resolver in app/dns/factory.py (it may only read resolv.conf) (M2-15 QA nit)
+- [ ] Use a translated label for the FCrDNS no_ptr case instead of omitting the line (M2-13 QA nit)
 - [ ] Global cap on concurrent DNS tool requests (per-request caps only in M2-12); pair with the per-user rate limit
 - [ ] M7: DNS egress cannot detect an operator NAT64 prefix inside 2000::/3 embedding a private IPv4 (app/dns/egress.py); handle in the guarded client
 - [ ] Per-user rate limiting for free tools (DNS trace/propagation); M2 has per-request caps only

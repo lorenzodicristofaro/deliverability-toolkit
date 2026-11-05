@@ -12,7 +12,7 @@ Acceptance criteria:
 - A guard test fails if any module under app/dns or app/services/dns_* imports `socket`/opens connections outside the backend module, and if any unit test run created a socket (global socket monkeypatch in tests/dns conftest, if not already present).
 - docs/DNS.md written; lint, mypy and full suite green.
 New i18n keys: none
-Status: todo
+Status: done
 
 GM note 2026-11-06 (carried from M2-14 QA; scope widened to app/web/dns_tools.py, app/web/templates/dns/trace.html, app/web/static/app.css, locales/en.json, locales/it.json):
 - too_many_targets in the propagation UI shows the generic api.error.invalid_request: add key tools.dns.propagation.too_many_targets (en+it), map it in `_error_key`, test with MAX_TARGETS monkeypatched (422, error testid, no input echo).
