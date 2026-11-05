@@ -13,4 +13,4 @@ Acceptance criteria:
 - Output model is presentation-neutral: states, records (type, ttl, rdata_text), resolver identity, elapsed, AD flag, detail codes. A failure state is never rendered as "no record": `LookupReport.summary` exposes `evaluated: bool` so a caller can tell "nothing found" (nxdomain/nodata) from "could not evaluate" (servfail, timeout, ...). Tests prove SERVFAIL and timeout on one type do not turn into "missing" for that type and do not hide the other types.
 - Tests use the M2-04 fake resolver only; table-driven incl. malformed names (NUL, too long, bad labels), IPv6 forms (compressed, mapped, uppercase), `_dmarc.example.com`, trailing dot, unicode names.
 New i18n keys: none (codes only; UI keys in M2-13)
-Status: todo
+Status: done
