@@ -15,4 +15,4 @@ Acceptance criteria:
 - `rdata_text` is the canonical presentation text; TXT multi-string joining rule documented (concatenate strings, keep raw bytes decoded as latin-1 or escaped; coder decides, test it).
 - Tests table-driven: state classification, record/state consistency, rdtype allow-list rejects unknown and ANY, immutability.
 New i18n keys: none (state codes are stable identifiers; UI keys come in M2-13)
-Status: todo
+Status: done

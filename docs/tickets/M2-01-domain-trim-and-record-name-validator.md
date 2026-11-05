@@ -16,3 +16,5 @@ Acceptance criteria:
 - Table-driven tests for the new function incl. malformed input: NUL, control chars, empty label (`a..b`), label > 63, name > 253 (after IDNA), `_` only label, `a_.com`, `*.example.com` ok, `a.*.example.com` rejected, `*` alone, mixed `*x.example.com` rejected, IPv4/IPv6, unicode `bücher.example`, uppercase, trailing dot, double trailing dot.
 New i18n keys: none
 Status: todo
+
+GM note 2026-11-05 (QA r1): scope widened to tests/api/test_domains.py (trimmed names now accepted). Trim set narrowed to ASCII space/\t/\r/\n; other end-of-string control chars stay rejected. Status: changes-requested.
