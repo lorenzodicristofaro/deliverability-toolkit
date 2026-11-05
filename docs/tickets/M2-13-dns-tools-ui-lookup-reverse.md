@@ -1,7 +1,7 @@
 # M2-13 DNS tools web UI: shell, lookup and reverse
 Milestone: M2
 Branch: feature/m2-13-dns-tools-ui
-Files in scope: app/web/dns_tools.py, app/web/templates/dns/ (index.html, lookup_result.html, reverse_result.html), app/web/templates/base.html (nav link only, shown only with the permission), app/main.py (router registration), locales/en.json, locales/it.json, tests/web/test_dns_tools_ui.py, tests/tenancy/ (route classification)
+Files in scope: app/web/dns_tools.py, app/web/templates/dns/ (index.html, lookup_result.html, reverse_result.html), app/web/templates/base.html (nav link only, shown only with the permission), app/main.py (router registration), app/web/landing.py, app/web/static/app.css, app/web/templating.py, app/web/deps.py (nav flag), locales/en.json, locales/it.json, tests/web/test_dns_tools_ui.py, tests/tenancy/ (route classification)
 Out of scope: trace and propagation views (M2-14), new JS (CSP is `script-src 'self'`, HTMX status is unverified: plain form POST plus server-rendered result, no inline scripts)
 Depends on: M2-11, M2-12
 Parallel-safe: no (app/main.py, base.html, locales)

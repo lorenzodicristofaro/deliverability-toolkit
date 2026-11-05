@@ -93,7 +93,6 @@ def _page(
         "dns/index.html",
         status_code=status_code,
         logged_in=True,
-        show_dns_tools=True,
         types=sorted(ALLOWED_RDTYPES),
         resolvers=resolver_choices(),
         lookup_report=lookup_report,
@@ -110,7 +109,7 @@ def _guard(request: Request, auth: CurrentSession) -> Response | None:
     without a valid active tenant."""
     ctx = tenant_ctx(auth)
     if not dns_tools_allowed(auth.principal, ctx.tenant_id):
-        return render(request, "domains/denied.html", status_code=403, logged_in=True)
+        return render(request, "dns/denied.html", status_code=403, logged_in=True)
     return None
 
 

@@ -123,14 +123,36 @@ def test_viewer_denied_before_body_is_read(world: World) -> None:
 
 @pytest.mark.parametrize(
     ("who", "visible_link"),
-    [("owner", True), ("admin", True), ("analyst", True), ("viewer", False)],
+    [("owner", True), ("admin", True), ("analyst", True), ("viewer", False), ("anon", False)],
 )
-def test_nav_link_only_with_permission(world: World, who: str, visible_link: bool) -> None:
-    for path in ("/", "/tools/dns") if visible_link else ("/",):
+def test_nav_link_on_every_kind_of_page(world: World, who: str, visible_link: bool) -> None:
+    paths = [
+        "/",  # landing
+        f"/domains/{world.domains['assigned']}",  # domain page
+        f"/domains/{world.domains['other']}",  # 404 error page (foreign domain)
+        "/no-such-page",  # 404 without any dependency resolved
+        "/login",
+    ]
+    if who != "viewer":
+        paths.append("/tools/dns")
+    for path in paths:
         r = get(world, who, path)
-        assert r.status_code == 200
-        assert ('href="/tools/dns"' in r.text) is visible_link
-    assert 'href="/tools/dns"' not in get(world, "anon", "/login").text
+        if who == "anon" and path in ("/", f"/domains/{world.domains['assigned']}"):
+            continue  # redirect to login
+        assert ('href="/tools/dns"' in r.text) is visible_link, (
+            who,
+            path,
+            r.status_code,
+        )
+
+
+def test_viewer_denied_page_uses_dns_key(world: World) -> None:
+    r = get(world, "viewer", "/tools/dns")
+    assert r.status_code == 403
+    assert t("tools.dns.denied", "en") in r.text
+    assert 'href="/tools/dns"' not in r.text
+    r = post(world, "viewer", "/tools/dns/lookup", {"name": "example.com"})
+    assert r.status_code == 403 and t("tools.dns.denied", "en") in r.text
 
 
 # --- page, states, escaping, i18n ---------------------------------------------------------------

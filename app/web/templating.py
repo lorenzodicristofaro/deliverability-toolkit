@@ -26,7 +26,7 @@ from starlette.types import Scope
 from app.core.config import Settings
 from app.core.csrf import csrf_token_for
 from app.core.i18n import SUPPORTED_LANGUAGES, resolve_language, t
-from app.core.security import session_cookie_settings
+from app.core.security import SESSION_COOKIE_NAME, session_cookie_settings
 
 WEB_DIR: Final = Path(__file__).resolve().parent
 TEMPLATES_DIR: Final = WEB_DIR / "templates"
@@ -91,6 +91,34 @@ def request_language(scope: Scope) -> str:
     )
 
 
+def dns_tools_nav(request: Request) -> bool:
+    """Whether the nav shows the DNS tools link: the request's session principal holds
+    `dns.tools` in its active tenant. False for anonymous, without a tenant, and on any error
+    (fail closed). Uses the session resolved by `optional_session` when it ran; otherwise (e.g.
+    an unknown-path 404) resolves it once here."""
+    from app.core.permissions import Action, TenantResource, can  # lazy: deps imports this module
+
+    try:
+        state = request.state
+        if hasattr(state, "auth_session"):
+            auth = state.auth_session
+        else:
+            from app.web import deps
+
+            if request.cookies.get(SESSION_COOKIE_NAME) is None:
+                return False
+            db = deps._session_factory(request)()
+            try:
+                auth = deps._resolve(request, db, app_settings(request))
+            finally:
+                db.close()
+        if auth is None or auth.active_tenant_id is None:
+            return False
+        return bool(can(auth.principal, Action.DNS_TOOLS, TenantResource(auth.active_tenant_id)))
+    except Exception:
+        return False
+
+
 def render(request: Request, template: str, status_code: int = 200, **context: Any) -> HTMLResponse:
     """Render `template` for `request` (language, CSRF token and current path in the context)."""
     lang = request_language(request.scope)
@@ -109,6 +137,7 @@ def render(request: Request, template: str, status_code: int = 200, **context: A
         csrf_token=csrf_token,
         current_path=request.url.path,
         supported_languages=SUPPORTED_LANGUAGES,
+        show_dns_tools=dns_tools_nav(request),
         **context,
     )
     response = HTMLResponse(html, status_code=status_code)
