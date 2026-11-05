@@ -237,6 +237,14 @@ def test_login_success_sets_session_cookie(world: World) -> None:
         ("not-an-email", PASSWORD),
         ("@@", PASSWORD),
         ("alice@example.com\x00", PASSWORD),
+        ("\x00alice@example.com", PASSWORD),
+        ("alice@exa\x00mple.com", PASSWORD),
+        ("alice@example.com\x01", PASSWORD),  # other control characters
+        ("alice\x1f@example.com", PASSWORD),
+        ("alice@example.com\x7f", PASSWORD),
+        ("alice@exa\x85mple.com", PASSWORD),
+        ("a" * 243 + "@example.com", PASSWORD),  # 255 chars: over the 254 cap
+        ("a" * 2000 + "@example.com", PASSWORD),
     ],
 )
 def test_login_failure_is_generic(world: World, email: str, password: str) -> None:
