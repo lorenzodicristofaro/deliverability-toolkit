@@ -48,6 +48,7 @@ class CachingResolver:
         if min_ttl < 0 or max_ttl < min_ttl or negative_ttl < 0 or max_entries < 1:
             raise ValueError("invalid cache bounds")
         self._inner = inner
+        self.identity: str = inner.identity
         self._clock = clock
         self._min_ttl = min_ttl
         self._max_ttl = max_ttl
@@ -56,17 +57,13 @@ class CachingResolver:
         self._entries: OrderedDict[_Key, _Entry] = OrderedDict()
         self._inflight: dict[_Key, asyncio.Task[DnsResult]] = {}
 
-    @property
-    def identity(self) -> str:
-        return self._inner.identity
-
     def __len__(self) -> int:
         return len(self._entries)
 
     async def resolve(self, question: DnsQuestion, *, bypass_cache: bool = False) -> DnsResult:
         if bypass_cache:
             return await self._inner.resolve(question)
-        key: _Key = (self._inner.identity, question)
+        key: _Key = (self.identity, question)
         now = self._clock()
         entry = self._entries.get(key)
         if entry is not None:
@@ -105,7 +102,10 @@ class CachingResolver:
                 return 0
             return max(self._min_ttl, min(raw, self._max_ttl))
         if result.state.is_definitive_absence:
-            return min(self._negative_ttl, self._max_ttl)
+            ttl = self._negative_ttl
+            if result.ttl_min is not None:
+                ttl = min(ttl, result.ttl_min)
+            return min(ttl, self._max_ttl)
         return 0  # every failure state: never cached
 
     @staticmethod
@@ -113,7 +113,8 @@ class CachingResolver:
         elapsed = int(now - entry.stored_at)
         res = entry.result
         if not res.records:
-            return replace(res, elapsed_ms=0.0)
+            ttl_min = None if res.ttl_min is None else max(0, res.ttl_min - elapsed)
+            return replace(res, ttl_min=ttl_min, elapsed_ms=0.0)
         records: tuple[DnsRecord, ...] = tuple(
             replace(r, ttl=max(0, r.ttl - elapsed)) for r in res.records
         )
@@ -123,3 +124,8 @@ class CachingResolver:
             ttl_min=min(r.ttl for r in records),
             elapsed_ms=0.0,
         )
+
+
+def _static_conformance(cache: CachingResolver) -> Resolver:
+    """Never called: makes mypy verify that CachingResolver satisfies Resolver."""
+    return cache

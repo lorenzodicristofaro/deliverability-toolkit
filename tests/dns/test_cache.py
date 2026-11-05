@@ -270,3 +270,32 @@ async def test_bypass_cache_gets_live_answer_and_leaves_cache() -> None:
 def test_invalid_bounds(kw: dict[str, int]) -> None:
     with pytest.raises(ValueError):
         CachingResolver(Inner([]), **kw)
+
+
+@pytest.mark.parametrize(
+    ("ttl_min", "cached_for"),
+    [(None, 60), (30, 30), (500, 60), (0, 0)],
+)
+async def test_negative_ttl_min_bounds_and_counts_down(
+    ttl_min: int | None, cached_for: int
+) -> None:
+    c = Clock()
+    res = DnsResult(Q, ResultState.nxdomain, ttl_min=ttl_min)
+    inner = Inner([res])
+    r = make(inner, c, negative_ttl=60)
+    await r.resolve(Q)
+    if cached_for == 0:
+        await r.resolve(Q)
+        assert inner.calls == 2
+        return
+    c.t += cached_for - 1
+    hit = await r.resolve(Q)
+    assert inner.calls == 1
+    assert hit.ttl_min == (None if ttl_min is None else max(0, ttl_min - (cached_for - 1)))
+    c.t += 1
+    await r.resolve(Q)
+    assert inner.calls == 2
+
+
+def test_identity_is_inner_identity() -> None:
+    assert CachingResolver(Inner([], "zz")).identity == "zz"
