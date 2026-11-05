@@ -1,8 +1,25 @@
 """dnspython-backed resolver (M2-05): one class for system / custom / Unbound / untrusted targets.
 
 dnspython builds and parses the DNS messages; the packets go through an injected ``Transport``
-(production: ``asyncio_transport``, stdlib asyncio sockets). The transport returns raw wire bytes,
+(production: ``asyncio_transport``, stdlib asyncio sockets). The transport yields raw wire bytes,
 so the size cap is enforced BEFORE parsing and tests can feed arbitrary bytes without sockets.
+
+UDP: a datagram that is oversized, unparseable, from an unexpected source or not a response to
+our query (ID/opcode/question mismatch) is dropped and reading continues until the per-attempt
+timeout (like dnspython's ``ignore_unexpected``/``ignore_errors``), so a stray or spoofed packet
+cannot end the query. The ID/question check runs BEFORE the TC flag is acted on, so a spoofed TC
+cannot force a TCP fallback. Over TCP (a connected stream) the same conditions are ``malformed``.
+
+Timing: the per-attempt timeout (QUERY_TIMEOUT_S) covers time on the wire only; waiting for a
+per-nameserver slot (MAX_IN_FLIGHT_PER_SERVER) is bounded by the overall deadline, and expiry
+while waiting is ``timeout`` (detail ``slot_wait``), never a packet-less "missing".
+
+Rdata text: owner names are lowercased, without trailing dot ("." for the root). In MX, NS,
+CNAME, PTR, SRV, SOA and NAPTR rdata, domain names are rendered relative to the root (no trailing
+dot; the root itself is "."). All other types use dnspython's presentation form unchanged: names
+embedded there (e.g. SVCB/HTTPS/DNAME/RP, should they be allowed later) keep the trailing dot.
+Rdata is never case-normalised (names keep the case the server sent). TXT/SPF use
+``join_txt_strings``. Records are sorted by rdata text for a deterministic order.
 
 Egress: every packet passes ``TargetPolicy.check`` (app/dns/egress.py) right before it is sent.
 Trusted = the nameservers the resolver was built with from operator configuration
@@ -19,8 +36,9 @@ Mapping (never raises for network/DNS conditions):
 - timeout / total deadline exhausted                                    -> timeout
 - OSError / EOF / connection closed                                     -> network_error
 - TC still set (or unparseable because truncated) after TCP fallback    -> truncated
-- oversized, unparseable, ID/question mismatch, unexpected source,
-  too many records, CNAME loop, out-of-bailiwick referral               -> malformed
+- oversized, unparseable, ID/question mismatch, unexpected source
+  (TCP only; dropped on UDP), too many records, CNAME loop or chain
+  longer than MAX_CNAME_CHAIN, out-of-bailiwick referral                -> malformed
 - any other exception                                                   -> error
 
 SERVFAIL, REFUSED, timeout and truncation are never mapped to nxdomain/nodata.
@@ -37,8 +55,8 @@ import asyncio
 import ipaddress
 import logging
 import time
-from collections.abc import AsyncIterator, Callable, Sequence
-from contextlib import asynccontextmanager, suppress
+from collections.abc import AsyncGenerator, AsyncIterator, Callable, Sequence
+from contextlib import aclosing, asynccontextmanager, suppress
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -65,14 +83,15 @@ from app.dns.types import (
 logger = logging.getLogger(__name__)
 
 # Defaults (proposed in M2-05; recorded in the ticket outcome).
-QUERY_TIMEOUT_S = 2.0  # one attempt (semaphore wait + send + receive, incl. TCP fallback)
+QUERY_TIMEOUT_S = 2.0  # one attempt on the wire (send + receive, incl. TCP fallback)
 TOTAL_DEADLINE_S = 5.0  # whole resolve()/query_server() call, all attempts
 MAX_ATTEMPTS = 3  # first try + 2 retries, round-robin over nameservers; timeout/network only
 EDNS_PAYLOAD = 1232  # advertised UDP buffer size (DNS Flag Day 2020 recommendation)
-MAX_RESPONSE_BYTES = 16384  # larger responses are rejected as malformed
+MAX_RESPONSE_BYTES = 16384  # larger responses: dropped (UDP) / malformed (TCP)
 MAX_RECORDS_PER_SECTION = 100  # answer/authority/additional each
 MAX_CNAME_CHAIN = 16  # links followed inside one response (server-side chain only)
-MAX_IN_FLIGHT_PER_SERVER = 1  # concurrent queries per nameserver
+MAX_IN_FLIGHT_PER_SERVER = 32  # concurrent queries per nameserver (GM decision, M2-05 QA)
+UDP_QUEUE_SIZE = 64  # datagrams buffered per query; extra ones are dropped
 
 RETRYABLE_STATES = frozenset({ResultState.timeout, ResultState.network_error})
 
@@ -115,14 +134,21 @@ class WireReply:
 
 
 class Transport(Protocol):
-    """Sends one query and returns the first response. Raises on network errors. Timeouts are
-    applied by the caller (``asyncio.timeout``)."""
+    """Sends one query and yields responses: every received datagram for UDP (until the caller
+    stops iterating), exactly one message for TCP. Raises on network errors. Timeouts are applied
+    by the caller (``asyncio.timeout``); the caller closes the generator (``aclosing``)."""
 
-    async def __call__(self, wire: bytes, target: ResolverAddr, *, tcp: bool) -> WireReply: ...
+    def __call__(
+        self, wire: bytes, target: ResolverAddr, *, tcp: bool
+    ) -> AsyncGenerator[WireReply, None]: ...
 
 
 class ResponseTooLarge(Exception):
     """The response is larger than MAX_RESPONSE_BYTES."""
+
+
+class _SlotTimeout(Exception):
+    """No per-nameserver slot became free before the overall deadline."""
 
 
 class _Blocked(Exception):
@@ -313,7 +339,11 @@ def parse_wire(
         raise _Bad(ResultState.malformed, "unexpected_source")
     try:
         resp = dns.message.from_wire(data, raise_on_truncation=True)
-    except dns.message.Truncated:
+    except dns.message.Truncated as exc:
+        # Act on TC only for a response to OUR query: a spoofed TC must not force TCP.
+        partial = exc.message()  # type: ignore[no-untyped-call]
+        if not isinstance(partial, dns.message.Message) or not query.is_response(partial):
+            raise _Bad(ResultState.malformed, "mismatched_response") from None
         raise
     except dns.exception.DNSException:
         raise _Bad(ResultState.malformed, "unparseable") from None
@@ -325,52 +355,62 @@ def parse_wire(
 # --- production transport --------------------------------------------------------------------
 
 
+_UdpItem = tuple[bytes, ResolverAddr] | BaseException
+
+
 class _UdpProtocol(asyncio.DatagramProtocol):
-    def __init__(self, future: asyncio.Future[tuple[bytes, ResolverAddr]]) -> None:
-        self.future = future
+    def __init__(self, queue: asyncio.Queue[_UdpItem]) -> None:
+        self.queue = queue
+
+    def _put(self, item: _UdpItem) -> None:
+        with suppress(asyncio.QueueFull):  # flood: drop extra datagrams
+            self.queue.put_nowait(item)
 
     def datagram_received(self, data: bytes, addr: tuple[str | Any, int]) -> None:
-        if not self.future.done():
-            host = str(addr[0]).split("%", 1)[0]
-            self.future.set_result((data, ResolverAddr(host, int(addr[1]))))
+        host = str(addr[0]).split("%", 1)[0]
+        self._put((data, ResolverAddr(host, int(addr[1]))))
 
-    def error_received(self, exc: Exception) -> None:
-        if not self.future.done():
-            self.future.set_exception(exc)
+    def error_received(self, exc: Exception) -> None:  # e.g. ICMP port unreachable
+        self._put(exc)
 
     def connection_lost(self, exc: Exception | None) -> None:
-        if not self.future.done():
-            self.future.set_exception(exc or ConnectionError("udp socket closed"))
+        self._put(exc or ConnectionError("udp socket closed"))
 
 
-async def asyncio_transport(wire: bytes, target: ResolverAddr, *, tcp: bool) -> WireReply:
+async def asyncio_transport(
+    wire: bytes, target: ResolverAddr, *, tcp: bool
+) -> AsyncGenerator[WireReply, None]:
     """Stdlib asyncio UDP/TCP. Only reached after the egress policy allowed ``target``; the
-    target is an IP literal, so no name resolution happens here."""
+    target is an IP literal, so no name resolution happens here. Sockets are closed on every
+    exit path (reply, error, cancellation, generator close)."""
     loop = asyncio.get_running_loop()
     if not tcp:
-        future: asyncio.Future[tuple[bytes, ResolverAddr]] = loop.create_future()
+        queue: asyncio.Queue[_UdpItem] = asyncio.Queue(maxsize=UDP_QUEUE_SIZE)
         transport, _ = await loop.create_datagram_endpoint(
-            lambda: _UdpProtocol(future), remote_addr=(target.host, target.port)
+            lambda: _UdpProtocol(queue), remote_addr=(target.host, target.port)
         )
         try:
             transport.sendto(wire)
-            data, source = await future
+            while True:
+                item = await queue.get()
+                if isinstance(item, BaseException):
+                    raise item
+                yield WireReply(item[0], item[1])
         finally:
             transport.close()
-        return WireReply(data, source)
     reader, writer = await asyncio.open_connection(target.host, target.port)
     try:
         writer.write(len(wire).to_bytes(2, "big") + wire)
         await writer.drain()
         length = int.from_bytes(await reader.readexactly(2), "big")
         if length > MAX_RESPONSE_BYTES:
-            raise ResponseTooLarge(length)
+            raise ResponseTooLarge(length)  # before reading the body
         data = await reader.readexactly(length)
     finally:
         writer.close()
         with suppress(Exception):
             await writer.wait_closed()
-    return WireReply(data, None)  # connected stream: the source is the target
+    yield WireReply(data, None)  # connected stream: the source is the target
 
 
 # --- resolver --------------------------------------------------------------------------------
@@ -384,13 +424,21 @@ class _Slots:
         self._slots: dict[tuple[str, int], tuple[asyncio.Semaphore, int]] = {}
 
     @asynccontextmanager
-    async def hold(self, addr: ResolverAddr) -> AsyncIterator[None]:
+    async def hold(self, addr: ResolverAddr, wait_s: float) -> AsyncIterator[None]:
+        """Wait at most ``wait_s`` for a slot (else _SlotTimeout) and hold it for the block."""
         key = (addr.host, addr.port)
         sem, users = self._slots.get(key, (asyncio.Semaphore(self.size), 0))
         self._slots[key] = (sem, users + 1)
         try:
-            async with sem:
+            try:
+                async with asyncio.timeout(max(0.0, wait_s)):
+                    await sem.acquire()
+            except TimeoutError:
+                raise _SlotTimeout from None
+            try:
                 yield
+            finally:
+                sem.release()
         finally:
             sem, users = self._slots[key]
             if users <= 1:
@@ -420,6 +468,7 @@ class DnsPythonResolver:
         query_timeout_s: float = QUERY_TIMEOUT_S,
         deadline_s: float = TOTAL_DEADLINE_S,
         max_attempts: int = MAX_ATTEMPTS,
+        max_in_flight: int = MAX_IN_FLIGHT_PER_SERVER,
     ) -> None:
         self.nameservers = tuple(nameservers)
         self.trusted = trusted
@@ -431,7 +480,7 @@ class DnsPythonResolver:
         self.query_timeout_s = query_timeout_s
         self.deadline_s = deadline_s
         self.max_attempts = max(1, max_attempts)
-        self._slots = _Slots(MAX_IN_FLIGHT_PER_SERVER)
+        self._slots = _Slots(max(1, max_in_flight))
 
     def _is_trusted(self, addr: ResolverAddr) -> bool:
         return self.trusted and any(_same_addr(addr, ns) for ns in self.nameservers)
@@ -447,25 +496,37 @@ class DnsPythonResolver:
             flags=flags,
         )
 
-    async def _send(self, wire: bytes, target: ResolverAddr, trusted: bool, tcp: bool) -> WireReply:
-        """The single place packets leave: the egress policy is checked before every send."""
+    async def _receive(
+        self, query: dns.message.Message, target: ResolverAddr, trusted: bool, tcp: bool
+    ) -> dns.message.Message:
+        """The single place packets leave: the egress policy is checked before every send.
+        UDP: bad datagrams are dropped and reading continues. TCP: they are malformed."""
         reason = self.policy.check(target, trusted=trusted)
         if reason is not None:
             raise _Blocked(reason)
-        return await self.transport(wire, target, tcp=tcp)
+        async with aclosing(self.transport(query.to_wire(), target, tcp=tcp)) as replies:
+            async for reply in replies:
+                try:
+                    return parse_wire(reply.data, query, target, reply.source)
+                except _Bad as exc:
+                    if tcp:
+                        raise
+                    logger.debug(
+                        "dropped udp datagram: %s",
+                        exc.detail,
+                        extra={"event": "dns.datagram_dropped", "server": format_addr(target)},
+                    )
+        raise ConnectionError("transport ended without a reply")
 
     async def _exchange(
         self, query: dns.message.Message, target: ResolverAddr, trusted: bool
     ) -> dns.message.Message:
-        wire = query.to_wire()
-        reply = await self._send(wire, target, trusted, tcp=False)
         try:
-            return parse_wire(reply.data, query, target, reply.source)
+            return await self._receive(query, target, trusted, tcp=False)
         except dns.message.Truncated:
-            pass  # TC on UDP: retry the same server over TCP
-        reply = await self._send(wire, target, trusted, tcp=True)
+            pass  # TC on a response to our query: retry the same server over TCP
         try:
-            return parse_wire(reply.data, query, target, reply.source)
+            return await self._receive(query, target, trusted, tcp=True)
         except dns.message.Truncated:
             raise _Bad(ResultState.truncated, "truncated_after_tcp") from None
 
@@ -482,14 +543,25 @@ class DnsPythonResolver:
         target: ResolverAddr,
         trusted: bool,
         recursion_desired: bool,
-        timeout_s: float,
+        deadline: float,
         started: float,
     ) -> ServerReply:
         query = self._make_query(question, recursion_desired)
         try:
-            async with asyncio.timeout(timeout_s), self._slots.hold(target):
-                resp = await self._exchange(query, target, trusted)
+            # Slot wait is bounded by the overall deadline; the wire timeout starts afterwards.
+            async with self._slots.hold(target, deadline - self.clock()):
+                wire_s = min(self.query_timeout_s, deadline - self.clock())
+                if wire_s <= 0:
+                    raise TimeoutError
+                async with asyncio.timeout(wire_s):
+                    resp = await self._exchange(query, target, trusted)
             out = interpret_response(resp, question)
+        except _SlotTimeout:
+            return ServerReply(
+                self._result(
+                    question, target, started, state=ResultState.timeout, detail_code="slot_wait"
+                )
+            )
         except _Blocked as exc:
             return ServerReply(
                 self._result(
@@ -543,16 +615,10 @@ class DnsPythonResolver:
         last: ServerReply | None = None
         for i in range(self.max_attempts):
             target, trusted = targets[i % len(targets)]
-            remaining = deadline - self.clock()
-            if remaining <= 0:
+            if deadline - self.clock() <= 0:
                 break
             reply = await self._attempt(
-                question,
-                target,
-                trusted,
-                recursion_desired,
-                min(self.query_timeout_s, remaining),
-                started,
+                question, target, trusted, recursion_desired, deadline, started
             )
             if reply.result.state not in RETRYABLE_STATES:
                 return reply

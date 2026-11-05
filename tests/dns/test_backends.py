@@ -5,7 +5,8 @@ from __future__ import annotations
 
 import asyncio
 import socket
-from collections.abc import Callable
+from collections.abc import AsyncGenerator, Callable
+from contextlib import aclosing
 from pathlib import Path
 from typing import Any
 
@@ -22,13 +23,17 @@ import pytest
 from app.core.config import ResolverAddr, Settings
 from app.dns.backends import (
     EDNS_PAYLOAD,
+    MAX_CNAME_CHAIN,
+    MAX_IN_FLIGHT_PER_SERVER,
     MAX_RECORDS_PER_SECTION,
     MAX_RESPONSE_BYTES,
+    UDP_QUEUE_SIZE,
     BlockedResolver,
     DnsPythonResolver,
     ResponseTooLarge,
     ServerReply,
     WireReply,
+    asyncio_transport,
     classify_exception,
 )
 from app.dns.egress import BlockReason, TargetPolicy
@@ -42,7 +47,9 @@ PUBLIC = ResolverAddr("1.1.1.1", 53)  # globally routable; never actually contac
 Q_A = DnsQuestion("example.com", "A")
 SECRET = "s" * 40
 
-Handler = Callable[[dns.message.Message, ResolverAddr, bool], bytes | WireReply | BaseException]
+Item = bytes | WireReply | BaseException
+# A handler returns one item or, for UDP, a list of datagrams delivered in order.
+Handler = Callable[[dns.message.Message, ResolverAddr, bool], Item | list[Item]]
 
 
 @pytest.fixture(autouse=True)
@@ -58,21 +65,35 @@ async def no_sockets(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 class FakeTransport:
-    """Records every packet; the handler builds the reply from the parsed query."""
+    """Records every packet; the handler builds the reply from the parsed query. Over UDP, once
+    the scripted datagrams are exhausted the wire "times out" (dns.exception.Timeout) without
+    real waiting; over TCP exactly one item is delivered."""
 
     def __init__(self, handler: Handler) -> None:
         self.handler = handler
         self.calls: list[tuple[ResolverAddr, bool]] = []
         self.queries: list[dns.message.Message] = []
+        self.closed = 0
 
-    async def __call__(self, wire: bytes, target: ResolverAddr, *, tcp: bool) -> WireReply:
+    async def __call__(
+        self, wire: bytes, target: ResolverAddr, *, tcp: bool
+    ) -> AsyncGenerator[WireReply, None]:
         self.calls.append((target, tcp))
         query = dns.message.from_wire(wire)
         self.queries.append(query)
         out = self.handler(query, target, tcp)
-        if isinstance(out, BaseException):
-            raise out
-        return out if isinstance(out, WireReply) else WireReply(out)
+        items = out if isinstance(out, list) else [out]
+        try:
+            for item in items:
+                if isinstance(item, BaseException):
+                    raise item
+                yield item if isinstance(item, WireReply) else WireReply(item)
+                if tcp:
+                    return
+            if not tcp:
+                raise dns.exception.Timeout()
+        finally:
+            self.closed += 1
 
 
 def response(
@@ -230,7 +251,33 @@ def _cname_loop(q: dns.message.Message, _t: ResolverAddr, _tcp: bool) -> bytes:
     )
 
 
-MALFORMED_CASES: list[tuple[str, Handler, str]] = [
+def _cname_chain(links: int) -> Handler:
+    names = ["example.com."] + [f"c{i}.example.net." for i in range(1, links + 1)]
+    answer = [(names[i], 300, "CNAME", [names[i + 1]]) for i in range(links)]
+    answer.append((names[-1], 300, "A", ["192.0.2.1"]))
+    return answer_with(answer=answer)
+
+
+def _spoofed_tc(q: dns.message.Message, _t: ResolverAddr, _tcp: bool) -> bytes:
+    resp = response(q, flags=dns.flags.TC)
+    resp.id = (q.id + 1) % 65536
+    return wire(resp)
+
+
+def _spoofed_tc_cut(q: dns.message.Message, _t: ResolverAddr, _tcp: bool) -> bytes:
+    resp = response(q, answer=A_ANSWER, flags=dns.flags.TC)
+    resp.id = (q.id + 1) % 65536
+    return wire(resp)[:-3]  # Truncated raised with a partial message: ID still checked
+
+
+def _spoofed_tc_wrong_question(q: dns.message.Message, t: ResolverAddr, tcp: bool) -> bytes:
+    other = dns.message.make_query("other.example.com", "A", id=q.id)
+    other.flags = q.flags
+    return wire(response(other, flags=dns.flags.TC))
+
+
+# Datagram-level problems: dropped on UDP (reading continues), malformed over TCP.
+DATAGRAM_ERRORS: list[tuple[str, Handler, str]] = [
     ("garbage", lambda _q, _t, _tcp: b"\xff\xfe garbage bytes \x00\x01", "unparseable"),
     ("empty", lambda _q, _t, _tcp: b"", "unparseable"),
     ("short_header", lambda _q, _t, _tcp: b"\x12\x34\x81", "unparseable"),
@@ -239,22 +286,83 @@ MALFORMED_CASES: list[tuple[str, Handler, str]] = [
     ("id_mismatch", _id_mismatch, "mismatched_response"),
     ("wrong_question", _wrong_question, "mismatched_response"),
     ("not_a_response", _not_a_response, "mismatched_response"),
-    ("too_many_records", _too_many, "too_many_records"),
     ("oversized", _oversized, "oversized"),
     ("unexpected_source", _unexpected_source, "unexpected_source"),
+    ("spoofed_tc", _spoofed_tc, "mismatched_response"),
+    ("spoofed_tc_cut", _spoofed_tc_cut, "mismatched_response"),
+    ("spoofed_tc_wrong_question", _spoofed_tc_wrong_question, "mismatched_response"),
+]
+DATAGRAM_IDS = [c[0] for c in DATAGRAM_ERRORS]
+
+
+def via_tcp(bad: Handler) -> Handler:
+    """A genuine TC over UDP, then the bad reply over TCP."""
+
+    def handler(q: dns.message.Message, t: ResolverAddr, tcp: bool) -> Any:
+        return bad(q, t, tcp) if tcp else wire(response(q, flags=dns.flags.TC))
+
+    return handler
+
+
+@pytest.mark.parametrize(("bad", "detail"), [c[1:] for c in DATAGRAM_ERRORS], ids=DATAGRAM_IDS)
+async def test_bad_reply_over_tcp_is_malformed(bad: Handler, detail: str) -> None:
+    t = FakeTransport(via_tcp(bad))
+    result = await custom(t).resolve(Q_A)
+    assert result.state is S.malformed
+    assert result.detail_code == detail
+    assert t.calls == [(NS1, False), (NS1, True)]  # malformed is not retried
+
+
+@pytest.mark.parametrize("bad", [c[1] for c in DATAGRAM_ERRORS], ids=DATAGRAM_IDS)
+async def test_bad_datagram_dropped_then_valid_is_ok(bad: Handler) -> None:
+    def handler(q: dns.message.Message, t: ResolverAddr, tcp: bool) -> list[Item]:
+        first = bad(q, t, tcp)
+        assert not isinstance(first, list)
+        return [first, wire(response(q, answer=A_ANSWER))]
+
+    t = FakeTransport(handler)
+    result = await custom(t).resolve(Q_A)
+    assert result.state is S.ok
+    assert t.calls == [(NS1, False)]  # one UDP query; a spoofed TC never forces TCP
+    assert t.closed == 1
+
+
+@pytest.mark.parametrize("bad", [c[1] for c in DATAGRAM_ERRORS], ids=DATAGRAM_IDS)
+async def test_only_bad_datagrams_is_timeout(bad: Handler) -> None:
+    def handler(q: dns.message.Message, t: ResolverAddr, tcp: bool) -> list[Item]:
+        first = bad(q, t, tcp)
+        assert not isinstance(first, list)
+        return [first, first]
+
+    t = FakeTransport(handler)
+    result = await custom(t, max_attempts=1).resolve(Q_A)
+    assert result.state is S.timeout
+    assert t.calls == [(NS1, False)]
+
+
+CONTENT_ERRORS: list[tuple[str, Handler, str]] = [
+    ("too_many_records", _too_many, "too_many_records"),
     ("cname_loop", _cname_loop, "bad_cname_chain"),
+    ("cname_chain_too_long", _cname_chain(MAX_CNAME_CHAIN + 1), "cname_chain_too_long"),
+    ("cname_chain_much_too_long", _cname_chain(40), "cname_chain_too_long"),
 ]
 
 
 @pytest.mark.parametrize(
-    ("handler", "detail"), [c[1:] for c in MALFORMED_CASES], ids=[c[0] for c in MALFORMED_CASES]
+    ("handler", "detail"), [c[1:] for c in CONTENT_ERRORS], ids=[c[0] for c in CONTENT_ERRORS]
 )
-async def test_malformed_responses(handler: Handler, detail: str) -> None:
+async def test_malformed_content(handler: Handler, detail: str) -> None:
     t = FakeTransport(handler)
     result = await custom(t).resolve(Q_A)
     assert result.state is S.malformed
     assert result.detail_code == detail
     assert len(t.calls) == 1  # malformed is not retried
+
+
+async def test_cname_chain_at_limit_is_ok() -> None:
+    result = await custom(FakeTransport(_cname_chain(MAX_CNAME_CHAIN))).resolve(Q_A)
+    assert result.state is S.ok
+    assert result.records[0].name == f"c{MAX_CNAME_CHAIN}.example.net"
 
 
 async def test_expected_source_is_accepted() -> None:
@@ -334,7 +442,7 @@ RETRY_CASES: list[tuple[str, list[Any], ResultState, int]] = [
     ("nodata_no_retry", [[]], S.nodata, 1),
     ("refused_no_retry", [dns.rcode.REFUSED], S.refused, 1),
     ("servfail_no_retry", [dns.rcode.SERVFAIL], S.servfail, 1),
-    ("malformed_no_retry", [b"\x00"], S.malformed, 1),
+    ("udp_garbage_only_is_timeout_then_retried", [b"\x00", A_ANSWER], S.ok, 2),
 ]
 
 
@@ -379,9 +487,9 @@ async def test_total_deadline_stops_retries() -> None:
 
 
 async def test_per_query_timeout_is_enforced() -> None:
-    async def slow(_w: bytes, _t: ResolverAddr, *, tcp: bool) -> WireReply:
+    async def slow(_w: bytes, _t: ResolverAddr, *, tcp: bool) -> AsyncGenerator[WireReply, None]:
         await asyncio.sleep(10)
-        raise AssertionError("unreachable")
+        yield WireReply(b"")
 
     r = DnsPythonResolver(
         [NS1], trusted=True, identity="x", transport=slow, query_timeout_s=0.01, max_attempts=1
@@ -389,25 +497,65 @@ async def test_per_query_timeout_is_enforced() -> None:
     assert (await r.resolve(Q_A)).state is S.timeout
 
 
-async def test_one_query_in_flight_per_nameserver() -> None:
+def test_default_in_flight_limit() -> None:
+    assert MAX_IN_FLIGHT_PER_SERVER == 32  # GM decision (M2-05 QA round 1)
+
+
+async def test_in_flight_limit_per_nameserver() -> None:
     in_flight: dict[str, int] = {}
     peak: dict[str, int] = {}
+    gate = asyncio.Event()
 
-    async def transport(w: bytes, target: ResolverAddr, *, tcp: bool) -> WireReply:
+    async def transport(
+        w: bytes, target: ResolverAddr, *, tcp: bool
+    ) -> AsyncGenerator[WireReply, None]:
         key = target.host
         in_flight[key] = in_flight.get(key, 0) + 1
         peak[key] = max(peak.get(key, 0), in_flight[key])
-        await asyncio.sleep(0)
-        await asyncio.sleep(0)
+        await gate.wait()
         in_flight[key] -= 1
-        return WireReply(wire(response(dns.message.from_wire(w), answer=A_ANSWER)))
+        yield WireReply(wire(response(dns.message.from_wire(w), answer=A_ANSWER)))
 
     one = DnsPythonResolver([NS1], trusted=True, identity="x", transport=transport)
     other = DnsPythonResolver([NS2], trusted=True, identity="y", transport=transport)
-    results = await asyncio.gather(*(one.resolve(Q_A) for _ in range(5)), other.resolve(Q_A))
+    task = asyncio.gather(*(one.resolve(Q_A) for _ in range(40)), other.resolve(Q_A))
+    for _ in range(50):
+        await asyncio.sleep(0)
+    assert in_flight == {"172.28.53.2": MAX_IN_FLIGHT_PER_SERVER, "10.0.0.2": 1}
+    gate.set()
+    results = await task
     assert all(r.state is S.ok for r in results)
-    assert peak == {"172.28.53.2": 1, "10.0.0.2": 1}
+    assert peak == {"172.28.53.2": MAX_IN_FLIGHT_PER_SERVER, "10.0.0.2": 1}
     assert one._slots._slots == {}  # semaphores are released and dropped
+
+
+async def test_slot_wait_bounded_by_deadline_is_timeout() -> None:
+    t = FakeTransport(answer_with(answer=A_ANSWER))
+    r = custom(t, max_in_flight=1, deadline_s=0.02)
+    async with r._slots.hold(NS1, 1.0):  # another query holds the only slot
+        result = await r.resolve(Q_A)
+    assert result.state is S.timeout
+    assert result.detail_code == "slot_wait"
+    assert t.calls == []  # no packet was sent: never a packet-less "missing"
+    assert r._slots._slots == {}
+
+
+async def test_slot_wait_does_not_consume_wire_timeout() -> None:
+    t = FakeTransport(answer_with(answer=A_ANSWER))
+    r = custom(t, max_in_flight=1, query_timeout_s=0.05, deadline_s=5.0)
+    holding = asyncio.Event()
+
+    async def holder() -> None:
+        async with r._slots.hold(NS1, 1.0):
+            holding.set()
+            await asyncio.sleep(0.1)  # longer than the per-attempt wire timeout
+
+    task = asyncio.create_task(holder())
+    await holding.wait()
+    result = await r.resolve(Q_A)
+    await task
+    assert result.state is S.ok
+    assert t.calls == [(NS1, False)]
 
 
 # --- query construction, CNAME, rdata, AD ------------------------------------------------------
@@ -783,3 +931,232 @@ async def test_build_unbound_resolver() -> None:
     result = await r.resolve(Q_A)
     assert result.state is S.ok and result.authenticated_data
     assert t.queries[0].ednsflags & dns.flags.DO
+
+
+# --- production asyncio_transport, without sockets ---------------------------------------------
+
+HANG = object()
+
+
+class FakeReader:
+    """readexactly() returns scripted chunks, raises scripted exceptions, or hangs on HANG."""
+
+    def __init__(self, *script: object) -> None:
+        self.script = list(script)
+        self.reads: list[int] = []
+
+    async def readexactly(self, n: int) -> bytes:
+        self.reads.append(n)
+        step = self.script.pop(0)
+        if step is HANG:
+            await asyncio.Event().wait()
+        if isinstance(step, BaseException):
+            raise step
+        assert isinstance(step, bytes)
+        return step
+
+
+class FakeWriter:
+    def __init__(self) -> None:
+        self.written = b""
+        self.closed = False
+
+    def write(self, data: bytes) -> None:
+        self.written += data
+
+    async def drain(self) -> None:
+        return None
+
+    def close(self) -> None:
+        self.closed = True
+
+    async def wait_closed(self) -> None:
+        return None
+
+
+def patch_tcp(monkeypatch: pytest.MonkeyPatch, reader: FakeReader) -> FakeWriter:
+    writer = FakeWriter()
+
+    async def open_connection(host: str, port: int) -> tuple[FakeReader, FakeWriter]:
+        assert (host, port) == ("172.28.53.2", 5353)
+        return reader, writer
+
+    monkeypatch.setattr(asyncio, "open_connection", open_connection)
+    return writer
+
+
+async def first_reply(tcp: bool) -> WireReply:
+    async with aclosing(asyncio_transport(b"QUERY", NS1, tcp=tcp)) as replies:
+        return await anext(replies)
+
+
+async def test_tcp_transport_reads_length_prefixed_reply(monkeypatch: pytest.MonkeyPatch) -> None:
+    reader = FakeReader(b"\x00\x05", b"hello")
+    writer = patch_tcp(monkeypatch, reader)
+    reply = await first_reply(tcp=True)
+    assert reply == WireReply(b"hello", None)
+    assert writer.written == b"\x00\x05QUERY"
+    assert reader.reads == [2, 5]
+    assert writer.closed
+
+
+TCP_ERRORS: list[tuple[str, tuple[object, ...], type[BaseException], list[int]]] = [
+    ("length_over_cap", ((MAX_RESPONSE_BYTES + 1).to_bytes(2, "big"),), ResponseTooLarge, [2]),
+    ("short_length", (asyncio.IncompleteReadError(b"\x00", 2),), asyncio.IncompleteReadError, [2]),
+    ("short_body", (b"\x00\x05", asyncio.IncompleteReadError(b"he", 5)), EOFError, [2, 5]),
+    ("reset", (ConnectionResetError(),), ConnectionResetError, [2]),
+]
+
+
+@pytest.mark.parametrize(
+    ("script", "exc", "reads"), [c[1:] for c in TCP_ERRORS], ids=[c[0] for c in TCP_ERRORS]
+)
+async def test_tcp_transport_errors_close_the_socket(
+    monkeypatch: pytest.MonkeyPatch,
+    script: tuple[object, ...],
+    exc: type[BaseException],
+    reads: list[int],
+) -> None:
+    reader = FakeReader(*script)
+    writer = patch_tcp(monkeypatch, reader)
+    with pytest.raises(exc):
+        await first_reply(tcp=True)
+    assert reader.reads == reads  # the body is never read past the length cap
+    assert writer.closed
+
+
+async def test_tcp_transport_closes_on_cancellation(monkeypatch: pytest.MonkeyPatch) -> None:
+    reader = FakeReader(HANG)
+    writer = patch_tcp(monkeypatch, reader)
+    task = asyncio.create_task(first_reply(tcp=True))
+    for _ in range(5):
+        await asyncio.sleep(0)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert writer.closed
+
+
+class FakeDatagramTransport:
+    def __init__(self, protocol: asyncio.DatagramProtocol, script: list[object]) -> None:
+        self.protocol = protocol
+        self.script = script
+        self.sent: list[bytes] = []
+        self.closed = False
+
+    def sendto(self, data: bytes) -> None:
+        self.sent.append(data)
+        loop = asyncio.get_running_loop()
+        for step in self.script:
+            if isinstance(step, Exception):
+                loop.call_soon(self.protocol.error_received, step)
+            else:
+                data_, addr = step  # type: ignore[misc]
+                loop.call_soon(self.protocol.datagram_received, data_, addr)
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def patch_udp(monkeypatch: pytest.MonkeyPatch, script: list[object]) -> list[FakeDatagramTransport]:
+    created: list[FakeDatagramTransport] = []
+    loop = asyncio.get_running_loop()
+
+    async def endpoint(
+        factory: Callable[[], asyncio.DatagramProtocol], remote_addr: tuple[str, int]
+    ) -> tuple[FakeDatagramTransport, asyncio.DatagramProtocol]:
+        protocol = factory()
+        transport = FakeDatagramTransport(protocol, script)
+        created.append(transport)
+        return transport, protocol
+
+    monkeypatch.setattr(loop, "create_datagram_endpoint", endpoint)
+    return created
+
+
+async def test_udp_transport_yields_every_datagram(monkeypatch: pytest.MonkeyPatch) -> None:
+    created = patch_udp(
+        monkeypatch, [(b"one", ("172.28.53.2", 5353)), (b"two", ("fe80::1%eth0", 53))]
+    )
+    async with aclosing(asyncio_transport(b"QUERY", NS1, tcp=False)) as replies:
+        assert await anext(replies) == WireReply(b"one", NS1)
+        assert await anext(replies) == WireReply(b"two", ResolverAddr("fe80::1", 53))
+    assert created[0].sent == [b"QUERY"]
+    assert created[0].closed
+
+
+async def test_udp_transport_icmp_error_raises_and_closes(monkeypatch: pytest.MonkeyPatch) -> None:
+    created = patch_udp(monkeypatch, [ConnectionRefusedError()])
+    with pytest.raises(ConnectionRefusedError):
+        await first_reply(tcp=False)
+    assert created[0].closed
+
+
+async def test_udp_transport_closes_on_cancellation(monkeypatch: pytest.MonkeyPatch) -> None:
+    created = patch_udp(monkeypatch, [])
+    task = asyncio.create_task(first_reply(tcp=False))
+    for _ in range(5):
+        await asyncio.sleep(0)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert created[0].closed
+
+
+async def test_udp_transport_flood_is_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
+    patch_udp(monkeypatch, [(b"x", ("172.28.53.2", 5353))] * (UDP_QUEUE_SIZE + 50))
+    received = 0
+    async with aclosing(asyncio_transport(b"QUERY", NS1, tcp=False)) as replies:
+        for _ in range(UDP_QUEUE_SIZE):
+            await anext(replies)
+            received += 1
+        with pytest.raises(TimeoutError):
+            async with asyncio.timeout(0.01):
+                await anext(replies)
+    assert received == UDP_QUEUE_SIZE
+
+
+RESOLVER_UDP_CASES: list[tuple[str, Callable[[dns.message.Message], list[object]], ResultState]] = [
+    (
+        "garbage_then_valid",
+        lambda q: [
+            (b"\x00garbage", ("172.28.53.2", 5353)),
+            (wire(response(q, answer=A_ANSWER)), ("172.28.53.2", 5353)),
+        ],
+        S.ok,
+    ),
+    ("icmp_unreachable", lambda q: [ConnectionRefusedError()], S.network_error),
+]
+
+
+@pytest.mark.parametrize(
+    ("script", "state"),
+    [c[1:] for c in RESOLVER_UDP_CASES],
+    ids=[c[0] for c in RESOLVER_UDP_CASES],
+)
+async def test_resolver_over_real_transport_code(
+    monkeypatch: pytest.MonkeyPatch,
+    script: Callable[[dns.message.Message], list[object]],
+    state: ResultState,
+) -> None:
+    created: list[FakeDatagramTransport] = []
+    loop = asyncio.get_running_loop()
+
+    async def endpoint(
+        factory: Callable[[], asyncio.DatagramProtocol], remote_addr: tuple[str, int]
+    ) -> tuple[Any, asyncio.DatagramProtocol]:
+        protocol = factory()
+
+        class _T(FakeDatagramTransport):
+            def sendto(self, data: bytes) -> None:
+                self.script = script(dns.message.from_wire(data))
+                super().sendto(data)
+
+        transport = _T(protocol, [])
+        created.append(transport)
+        return transport, protocol
+
+    monkeypatch.setattr(loop, "create_datagram_endpoint", endpoint)
+    r = DnsPythonResolver([NS1], trusted=True, identity="x", max_attempts=1)
+    assert (await r.resolve(Q_A)).state is state
+    assert all(t.closed for t in created)
