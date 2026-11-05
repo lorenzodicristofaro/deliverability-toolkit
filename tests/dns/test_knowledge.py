@@ -222,3 +222,10 @@ def test_missing_file_rejected(tmp_path: Path) -> None:
 
 def _ok(addr: str) -> bool:
     return DEFAULT_POLICY.check(ResolverAddr(addr, 53), trusted=False) is None
+
+
+def test_dockerfile_copies_seeds_to_app_seeds() -> None:
+    # SEEDS_DIR is parents[2]/seeds; the image must ship it at /app/seeds (WORKDIR /app).
+    dockerfile = (knowledge.SEEDS_DIR.parent / "Dockerfile").read_text()
+    assert "WORKDIR /app\n" in dockerfile
+    assert "\nCOPY seeds ./seeds\n" in dockerfile

@@ -27,6 +27,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 COPY pyproject.toml uv.lock ./
 COPY app ./app
 COPY locales ./locales
+COPY seeds ./seeds
 COPY alembic.ini ./alembic.ini
 COPY migrations ./migrations
 RUN --mount=type=cache,target=/root/.cache/uv \
