@@ -10,6 +10,7 @@ from sqlalchemy.exc import ArgumentError
 from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from app.api import api_router
 from app.core.config import Settings
 from app.core.csrf import CSRFMiddleware
 from app.core.i18n import validate_catalogues
@@ -66,6 +67,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     web_app.include_router(language_router)
     web_app.include_router(auth_router)
     web_app.include_router(setup_router)
+    web_app.include_router(api_router)
     web_app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
     @web_app.exception_handler(StarletteHTTPException)
