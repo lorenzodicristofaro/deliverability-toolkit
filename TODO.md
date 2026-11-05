@@ -21,7 +21,7 @@ Carried over from M0-07 QA:
 - [x] Users, tenants, memberships, roles, permission layer `can()`
 - [x] Login (argon2), sessions, CSRF, first-run setup wizard (creates instance admin)
 - [ ] Tenant-scoped repositories + tenancy test matrix
-- [ ] Domain CRUD, tenant landing page, i18n (en/it) scaffolding, dark mode
+- [x] Domain CRUD, tenant landing page, i18n (en/it) scaffolding, dark mode
 - Accept: user from tenant A cannot read tenant B data (tests prove it); client viewer limited to assigned domains.
 
 ## M2 — DNS engine
@@ -94,4 +94,7 @@ Carried over from M0-07 QA:
 - [ ] A TenantMembershipRepository.create() helper (setup uses memberships.add(model(...)))
 - [ ] NFC normalisation of email and password (login and setup together)
 - [ ] A dedicated permission action for domain access management, replacing the USER_MANAGE+DOMAIN_UPDATE combination on PUT /domains/{id}/access
+- [ ] Landing pagination (the landing caps at 1000 domains)
+- [ ] Mixed-script heuristic false positives (U+00B7 Catalan middle dot, U+02BC, ZWJ) and possible false negatives for scripts sharing a first word in the unicodedata name: use Script_Extensions data
+- [ ] Move `mixed_script` to app/core/domain_names.py
 - [ ] HTMX under CSP `script-src 'self'` is unverified, maintainer to confirm against https://htmx.org/docs/ (set includeIndicatorStyles=false and allowEval=false when vendored)

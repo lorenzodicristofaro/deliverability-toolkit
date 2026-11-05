@@ -18,4 +18,11 @@ Acceptance criteria:
 - Show the A-label (xn--) next to the Unicode display name, and flag mixed-script names (UTS #39 lookalikes). Record any library choice with name, version and licence, or mark it unverified.
 - Verify "/" is registered as a real route (check it is there).
 New i18n keys: landing.title, landing.empty, landing.domain.name, landing.domain.last_check, landing.domain.never_checked, domain.add, domain.add.submit, domain.delete, domain.delete.confirm, domain.rename, domain.detail.title, domain.access.title (en + it)
-Status: todo
+Status: done
+Outcome (merged into dev, QA APPROVE):
+- Client-viewer grants are loaded in app/web/deps.py on every request.
+- `repo_for` exposes `domains` and `domain_access`.
+- `/` is a named route "landing".
+- The mixed-script heuristic uses the first word of the unicodedata name, with allowed combinations per UTS #39 section 5.2 Highly Restrictive (QA verified at unicode.org/reports/tr39).
+- Extra i18n keys were added beyond the list above, plus denied and delete templates.
+- Known limits are tracked in the TODO.md post-M1 follow-ups (pagination, heuristic false positives/negatives).

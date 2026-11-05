@@ -1,8 +1,8 @@
 # M1-20 Tenancy test matrix and M1 acceptance tests
 Milestone: M1
 Branch: feature/m1-20-tenancy-matrix
-Files in scope: tests/tenancy/conftest.py, tests/tenancy/test_matrix.py, tests/tenancy/test_acceptance_m1.py, docs/TESTING.md (short section on how new endpoints join the matrix), tests/repositories/test_base_repository.py (static isolation check only)
-Out of scope: production code changes (findings are reported to GM as new tickets, not fixed here), PostgreSQL RLS, Playwright
+Files in scope: tests/tenancy/conftest.py, tests/tenancy/test_matrix.py, tests/tenancy/test_acceptance_m1.py, app/web/deps.py and app/core/permissions.py (only for the role-constant fix below), docs/TESTING.md (short section on how new endpoints join the matrix), tests/repositories/test_base_repository.py (static isolation check only)
+Out of scope: production code changes other than the deps.py/permissions.py fix below (findings are reported to GM as new tickets, not fixed here), PostgreSQL RLS, Playwright
 Depends on: M1-17, M1-18, M1-19
 Parallel-safe: no (runs against all of the above; conftest shared)
 Model: opus
@@ -14,5 +14,6 @@ Acceptance criteria:
 - M1 acceptance (TODO): "user from tenant A cannot read tenant B data" and "client viewer limited to assigned domains" each have a named test.
 - Leak checks: error bodies and logs for a cross-tenant request do not contain tenant B names.
 - Runs on SQLite and, when TEST_DATABASE_URL is set, PostgreSQL (CI from M1-07).
+- From M1-19 QA: app/web/deps.py:114 hardcodes MembershipRole.CLIENT_VIEWER. Use the single source `_DOMAIN_RESTRICTED_ROLES` from app/core/permissions.py:112, or expose a public helper there; no hardcoded role in deps.py. Test covers it.
 New i18n keys: none
 Status: todo
