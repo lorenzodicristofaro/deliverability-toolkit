@@ -133,9 +133,15 @@ def setup_email(email: str) -> str | None:
 
 @cache
 def common_passwords() -> frozenset[str]:
-    """The bundled blocklist (casefolded entries; comment lines skipped). Read once."""
+    """The bundled blocklist (casefolded entries; comment lines skipped). Read once.
+    A missing or unreadable file raises (OSError, UnicodeDecodeError); a file without entries
+    raises RuntimeError. Startup calls this, so the app fails closed instead of serving setup
+    without the blocklist."""
     lines = COMMON_PASSWORDS_FILE.read_text(encoding="utf-8").splitlines()
-    return frozenset(line for line in lines if line and not line.startswith("#"))
+    entries = frozenset(line for line in lines if line and not line.startswith("#"))
+    if not entries:
+        raise RuntimeError("the bundled common-password list has no entries")
+    return entries
 
 
 def _squash(value: str) -> str:

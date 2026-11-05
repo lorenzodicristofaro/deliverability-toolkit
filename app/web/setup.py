@@ -45,6 +45,7 @@ from app.services.setup import (
     PASSWORD_MAX_LENGTH,
     PASSWORD_MIN_LENGTH,
     SetupOutcome,
+    common_passwords,
     complete_setup,
     issue_setup_token,
     setup_email,
@@ -127,7 +128,9 @@ def setup_pending(app: FastAPI) -> bool | None:
 
 
 def prepare_setup(app: FastAPI) -> None:
-    """Startup hook: issue and log the setup token if setup is pending."""
+    """Startup hook: load the password blocklist (a missing or corrupt list aborts startup:
+    fail closed), then issue and log the setup token if setup is pending."""
+    common_passwords()
     setup_pending(app)
 
 

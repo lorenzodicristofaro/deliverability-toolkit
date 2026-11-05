@@ -526,6 +526,39 @@ def test_bundled_blocklist_has_provenance_and_entries() -> None:
     assert not any(e.startswith("#") for e in entries)
 
 
+@pytest.mark.parametrize(
+    "content",
+    [None, "# only comments\n# nothing else\n", b"\xff\xfe not utf-8\n"],
+)
+def test_startup_fails_closed_without_a_usable_blocklist(
+    env: Env, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, content: str | bytes | None
+) -> None:
+    broken = tmp_path / "common_passwords.txt"
+    if isinstance(content, bytes):
+        broken.write_bytes(content)
+    elif content is not None:
+        broken.write_text(content, encoding="utf-8")
+    monkeypatch.setattr(svc, "COMMON_PASSWORDS_FILE", broken)
+    svc.common_passwords.cache_clear()
+    application = env.app()
+    try:
+        with pytest.raises((OSError, UnicodeDecodeError, RuntimeError)), TestClient(application):
+            pass
+        assert env.tokens() == []  # no token issued before the failure
+    finally:
+        svc.common_passwords.cache_clear()
+        engine = getattr(application.state, "db_engine", None)
+        if engine is not None:
+            engine.dispose()
+
+
+def test_third_party_notice_bundles_seclists_licence() -> None:
+    notice = (svc.COMMON_PASSWORDS_FILE.parent / "THIRD_PARTY_NOTICES").read_text(encoding="utf-8")
+    assert "MIT License\n\nCopyright (c) 2018 Daniel Miessler\n" in notice
+    assert 'THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND' in notice
+    assert "c205c36a445bff37f8e58a9ec829105cd4975c58" in notice
+
+
 def test_common_password_rejected_in_italian(running: Running) -> None:
     running.client.cookies.set("dt_lang", "it")
     response = _post(running, **_both(LISTED))
