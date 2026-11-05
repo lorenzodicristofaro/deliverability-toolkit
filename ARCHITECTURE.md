@@ -34,7 +34,8 @@
   /cli             Typer-based CLI
 /profiles/esp      YAML ESP profiles (schema validated)
 /seeds             seed data (versioned): dkim_selectors.yaml, content_rules.yaml, dnsbl.yaml,
-                   provider_requirements.yaml; shipped in the image at /app/seeds
+                   provider_requirements.yaml, dns_resolvers.yaml, root_hints.yaml;
+                   shipped in the image at /app/seeds
 /migrations        Alembic
 /tests             unit, integration, tenancy, e2e
 /docs
