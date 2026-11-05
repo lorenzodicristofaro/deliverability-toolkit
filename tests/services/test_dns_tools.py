@@ -183,8 +183,7 @@ async def test_public_selector_uses_factory_with_known_entry() -> None:
 
 
 async def test_default_public_factory_goes_through_egress_policy() -> None:
-    # Real factory, but resolution is never reached for a blocked target; here the entry is
-    # public so we only check an unsent build: identity names the target, no query is issued.
+    # Real factory with a private address (10.0.0.1): the egress policy blocks it, no packet sent.
     from app.services.dns_tools import _build_public
 
     r = _build_public(PublicResolver("t", "t", "t", ("10.0.0.1",), 53, None, (), "unverified"))
@@ -235,7 +234,7 @@ async def test_concurrency_cap_and_exception_is_error() -> None:
         ),
         (
             "::ffff:192.0.2.1",
-            "1.0.2.0.0.0.0.c.f.f.f.f.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.ip6.arpa",
+            "1.2.0.192.in-addr.arpa",  # mapped input is normalised to IPv4
         ),
         ("10.0.0.1", "1.0.0.10.in-addr.arpa"),  # private accepted as input
     ],
@@ -429,3 +428,15 @@ async def test_reverse_selector_validation() -> None:
     with pytest.raises(InvalidLookupInput) as e:
         await reverse("192.0.2.10", "1.1.1.1", resolvers=rs(make([])))
     assert e.value.field == "resolver"
+
+
+async def test_fcrdns_mapped_ipv6_input_confirms_via_ipv4() -> None:
+    fake = make(
+        [
+            rec("1.2.0.192.in-addr.arpa", "PTR", ["m.example.com."]),
+            rec("m.example.com", "A", ["192.0.2.1"]),
+        ]
+    )
+    rep = await reverse("::ffff:192.0.2.1", DEFAULT, resolvers=rs(fake), forward_confirm=True)
+    assert rep.fcrdns is FcrdnsState.confirmed
+    assert rep.ip == "192.0.2.1" and rep.ptr_name == "1.2.0.192.in-addr.arpa"

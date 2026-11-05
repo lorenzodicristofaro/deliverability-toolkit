@@ -180,14 +180,14 @@ async def _query(
                 result = await resolver.resolve(question)
         except Exception:  # resolvers must not raise; if one does it is "could not evaluate"
             return TypeResult(
-                rdtype,
-                ResultState.error,
-                (),
-                None,
-                False,
-                (time.perf_counter() - started) * 1000,
-                None,
-                "resolver_exception",
+                rdtype=rdtype,
+                state=ResultState.error,
+                records=(),
+                ttl_min=None,
+                authenticated_data=False,
+                elapsed_ms=(time.perf_counter() - started) * 1000,
+                server=None,
+                detail_code="resolver_exception",
             )
     return _to_type_result(rdtype, result)
 
@@ -243,9 +243,13 @@ def parse_ip(ip_input: object) -> IPAddress:
     if "/" in text:
         raise InvalidLookupInput("ip", "range")
     try:
-        return ipaddress.ip_address(text)
+        ip = ipaddress.ip_address(text)
     except ValueError:
         raise InvalidLookupInput("ip", "malformed") from None
+    # IPv4-mapped IPv6 is normalised to IPv4 so the PTR name and forward A match work.
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+        return ip.ipv4_mapped
+    return ip
 
 
 def _ptr_target(rdata_text: str) -> str | None:
