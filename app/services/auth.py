@@ -10,8 +10,8 @@ exception carries a password, token or cookie value.
 
 Expiry (SessionPolicy): absolute expiry is fixed at creation (`expires_at`); idle expiry is
 `last_seen_at` + `idle`, and `last_seen_at` is refreshed by every successful resolve.
-DEFAULT_SESSION_POLICY: idle 30 minutes, absolute 12 hours (project choice, to be wired to
-Settings; see the ticket report).
+The policy comes from Settings (SESSION_IDLE_TIMEOUT_MINUTES, default 30;
+SESSION_ABSOLUTE_TIMEOUT_MINUTES, default 720 = 12 h) via `SessionPolicy.from_settings`.
 """
 
 from __future__ import annotations
@@ -25,6 +25,7 @@ from pydantic import SecretStr
 from sqlalchemy import CursorResult, select, update
 from sqlalchemy.orm import Session
 
+from app.core.config import Settings
 from app.core.security import (
     DEFAULT_HASHER,
     dummy_verify,
@@ -52,10 +53,12 @@ class SessionPolicy:
         if self.idle > self.absolute:
             raise ValueError("idle timeout must not exceed the absolute timeout")
 
-
-DEFAULT_IDLE_TIMEOUT = timedelta(minutes=30)
-DEFAULT_ABSOLUTE_TIMEOUT = timedelta(hours=12)
-DEFAULT_SESSION_POLICY = SessionPolicy(idle=DEFAULT_IDLE_TIMEOUT, absolute=DEFAULT_ABSOLUTE_TIMEOUT)
+    @classmethod
+    def from_settings(cls, settings: Settings) -> SessionPolicy:
+        return cls(
+            idle=timedelta(minutes=settings.session_idle_timeout_minutes),
+            absolute=timedelta(minutes=settings.session_absolute_timeout_minutes),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -146,7 +149,7 @@ def create_session(
     secret_key: SecretStr,
     *,
     active_tenant_id: int | None = None,
-    policy: SessionPolicy = DEFAULT_SESSION_POLICY,
+    policy: SessionPolicy,
     now: datetime | None = None,
 ) -> IssuedSession:
     """Store a new session for `user` (its token hash only) and return the signed cookie value."""
@@ -176,7 +179,7 @@ def resolve_session(
     cookie_value: object,
     secret_key: SecretStr,
     *,
-    policy: SessionPolicy = DEFAULT_SESSION_POLICY,
+    policy: SessionPolicy,
     now: datetime | None = None,
 ) -> ResolvedSession | None:
     """The live session for a cookie value, or None if the cookie is malformed or tampered, or

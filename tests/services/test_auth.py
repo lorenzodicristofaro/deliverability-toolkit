@@ -21,6 +21,7 @@ from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from app.core import security
+from app.core.config import Settings
 from app.core.db import create_db_engine, create_session_factory
 from app.core.security import hash_password, hash_session_token, unsign_session_token
 from app.models import Tenant, User, UserSession
@@ -311,9 +312,27 @@ def test_session_policy_rejects_unsafe_values(idle: timedelta, absolute: timedel
         SessionPolicy(idle=idle, absolute=absolute)
 
 
-def test_default_policy() -> None:
-    policy = auth.DEFAULT_SESSION_POLICY
+def _settings(monkeypatch: pytest.MonkeyPatch, **env: str) -> Settings:
+    for name in ("SESSION_IDLE_TIMEOUT_MINUTES", "SESSION_ABSOLUTE_TIMEOUT_MINUTES"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("SECRET_KEY", KEY)
+    monkeypatch.setenv("ENCRYPTION_KEY", KEY)
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+    return Settings()  # type: ignore[call-arg]
+
+
+def test_policy_from_default_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    policy = SessionPolicy.from_settings(_settings(monkeypatch))
     assert (policy.idle, policy.absolute) == (timedelta(minutes=30), timedelta(hours=12))
+
+
+def test_policy_from_configured_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = _settings(
+        monkeypatch, SESSION_IDLE_TIMEOUT_MINUTES="5", SESSION_ABSOLUTE_TIMEOUT_MINUTES="60"
+    )
+    policy = SessionPolicy.from_settings(settings)
+    assert (policy.idle, policy.absolute) == (timedelta(minutes=5), timedelta(hours=1))
 
 
 def test_no_secrets_in_logs(env: Env, caplog: pytest.LogCaptureFixture) -> None:

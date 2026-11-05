@@ -6,11 +6,14 @@ import ipaddress
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from pydantic import SecretStr, ValidationError, field_validator
+from pydantic import Field, SecretStr, ValidationError, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 DEFAULT_RESOLVER_PORT = 53
 MIN_SECRET_LENGTH = 32
+# Session expiry defaults (M1-13): project choice, not taken from an external source.
+DEFAULT_SESSION_IDLE_TIMEOUT_MINUTES = 30
+DEFAULT_SESSION_ABSOLUTE_TIMEOUT_MINUTES = 12 * 60
 
 RESOLVER_ADDR_INVALID_KEY = "config.resolver_addr.invalid"
 # i18n keys; the locale files are created by M1-09, until then these are constants only.
@@ -128,6 +131,12 @@ class Settings(BaseSettings):
     allow_registration: bool = False
     base_url: str = "http://localhost:8000"
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
+    # Login sessions: idle timeout (since last request) and absolute lifetime, in minutes.
+    # Both must be > 0 and idle <= absolute.
+    session_idle_timeout_minutes: int = Field(default=DEFAULT_SESSION_IDLE_TIMEOUT_MINUTES, gt=0)
+    session_absolute_timeout_minutes: int = Field(
+        default=DEFAULT_SESSION_ABSOLUTE_TIMEOUT_MINUTES, gt=0
+    )
 
     @field_validator("secret_key", "encryption_key", mode="after")
     @classmethod
@@ -166,6 +175,8 @@ class Settings(BaseSettings):
             raise ConfigError(CONFIG_INVALID_VALUE_KEY, name=name.upper()) from None
         if not self.base_url.startswith(("http://", "https://")):
             raise ConfigError(CONFIG_INVALID_VALUE_KEY, name="BASE_URL")
+        if self.session_idle_timeout_minutes > self.session_absolute_timeout_minutes:
+            raise ConfigError(CONFIG_INVALID_VALUE_KEY, name="SESSION_IDLE_TIMEOUT_MINUTES")
         if not self.parsed_resolver_addrs() and self.resolver_mode in ("custom", "unbound"):
             raise ConfigError(CONFIG_RESOLVER_ADDRS_REQUIRED_KEY, mode=self.resolver_mode)
 
