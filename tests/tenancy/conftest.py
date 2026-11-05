@@ -35,6 +35,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.api.v1.dns_tools import dns_backend
 from app.core import i18n
 from app.core.config import Settings
 from app.core.csrf import (
@@ -54,6 +55,7 @@ from app.services import setup as setup_service
 from app.services.auth import SessionPolicy, create_session
 from app.services.domains import DomainService
 from tests.conftest import _reset_postgres
+from tests.support.dns_backend import fake_backend
 
 ROOT = Path(__file__).resolve().parents[2]
 KEY = "k" * 40
@@ -269,6 +271,8 @@ def seeded_world(
         settings = Settings(database_url=db_url, secret_key=KEY, encryption_key=KEY)  # type: ignore[call-arg]
         tenants, users, domains = _seed(db, settings)
         application = create_app(settings)
+        fake, _servers = fake_backend()  # the DNS tools never touch the network
+        application.dependency_overrides[dns_backend] = lambda: fake
         try:
             with TestClient(application, raise_server_exceptions=True) as client:
                 seeded = World(

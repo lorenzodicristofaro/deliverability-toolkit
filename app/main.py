@@ -51,6 +51,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.settings = settings if settings is not None else Settings()
         cfg = app.state.settings
         configure_logging(cfg.log_level, log_secrets(cfg))
+        cfg.log_resolver_config()
         # First-run setup: logs the one-time setup token (WARNING) while no user exists.
         await run_in_threadpool(prepare_setup, app)
         yield
