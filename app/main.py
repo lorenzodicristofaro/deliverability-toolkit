@@ -14,6 +14,7 @@ from app.core.csrf import CSRFMiddleware
 from app.core.i18n import validate_catalogues
 from app.core.logging import RequestLoggingMiddleware, configure_logging
 from app.core.security_headers import SecurityHeadersMiddleware
+from app.web.auth import router as auth_router
 from app.web.health import router as health_router
 from app.web.templating import STATIC_DIR, render
 from app.web.templating import router as language_router
@@ -56,6 +57,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     web_app.add_middleware(RequestLoggingMiddleware)
     web_app.include_router(health_router)
     web_app.include_router(language_router)
+    web_app.include_router(auth_router)
     web_app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
     @web_app.exception_handler(StarletteHTTPException)

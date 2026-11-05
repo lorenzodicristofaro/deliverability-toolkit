@@ -1,4 +1,13 @@
 {
+  "auth.login.email": "Email",
+  "auth.login.failed": "Email o password non validi.",
+  "auth.login.password": "Password",
+  "auth.login.submit": "Accedi",
+  "auth.login.throttled": "Troppi tentativi non riusciti. Attendi e riprova più tardi.",
+  "auth.login.title": "Accedi",
+  "auth.logout": "Esci",
+  "auth.required": "Accedi per continuare.",
+  "auth.tenant_switch.denied": "Tenant non trovato.",
   "config.invalid_value": "Valore non valido per {name}.",
   "config.missing": "L'impostazione obbligatoria {name} è assente o vuota.",
   "config.resolver_addr.invalid": "Voce RESOLVER_ADDRS non valida \"{entry}\": atteso un indirizzo IPv4 o un indirizzo IPv6 tra parentesi quadre, seguito facoltativamente da :porta (1-65535).",

@@ -1,4 +1,13 @@
 {
+  "auth.login.email": "Email",
+  "auth.login.failed": "Invalid email or password.",
+  "auth.login.password": "Password",
+  "auth.login.submit": "Log in",
+  "auth.login.throttled": "Too many failed attempts. Please wait and try again later.",
+  "auth.login.title": "Log in",
+  "auth.logout": "Log out",
+  "auth.required": "Please log in to continue.",
+  "auth.tenant_switch.denied": "Tenant not found.",
   "config.invalid_value": "Invalid value for {name}.",
   "config.missing": "Required setting {name} is missing or empty.",
   "config.resolver_addr.invalid": "Invalid RESOLVER_ADDRS entry \"{entry}\": expected an IPv4 address or a bracketed IPv6 address, optionally followed by :port (1-65535).",

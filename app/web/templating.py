@@ -3,7 +3,11 @@
 Autoescape is on for every template. `t()` is bound to the request language; `csrf_token()` is
 the real `csrf_token_for()` from M1-14 (lazy: an anonymous `dt_csrf` cookie is set only when a
 template actually asks for the token). Language resolution: `dt_lang` cookie (user preference)
-> Accept-Language > default (see `app.core.i18n.resolve_language`).
+> Accept-Language > default (see `app.core.i18n.resolve_language`). The product name is the
+`app_name` template global (a name, not translated).
+
+`read_form` is the shared urlencoded body parser (python-multipart is not a dependency): bodies
+are capped at `MAX_FORM_BYTES` and invalid UTF-8 yields an empty form.
 """
 
 from __future__ import annotations
@@ -11,7 +15,7 @@ from __future__ import annotations
 from http.cookies import CookieError, SimpleCookie
 from pathlib import Path
 from typing import Any, Final
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
@@ -29,13 +33,44 @@ TEMPLATES_DIR: Final = WEB_DIR / "templates"
 STATIC_DIR: Final = WEB_DIR / "static"
 LANGUAGE_COOKIE: Final = "dt_lang"
 LANGUAGE_COOKIE_MAX_AGE: Final = 365 * 24 * 3600
-_MAX_FORM_BYTES: Final = 4096
+MAX_FORM_BYTES: Final = 4096
+APP_NAME: Final = "Deliverability Toolkit"
+# Percent-decoding rounds applied by safe_next (catches /%2F%2F and double encoding).
+_NEXT_DECODE_ROUNDS: Final = 3
 
 env = Environment(
     loader=FileSystemLoader(TEMPLATES_DIR),
     autoescape=select_autoescape(["html"], default=True),
     undefined=StrictUndefined,
 )
+env.globals["app_name"] = APP_NAME
+
+
+def app_settings(request: Request) -> Settings:
+    """The Settings stored on the app by the lifespan; a clear error if they are missing."""
+    settings = getattr(request.app.state, "settings", None)
+    if not isinstance(settings, Settings):
+        raise RuntimeError("app.state.settings is not configured (lifespan not run?)")
+    return settings
+
+
+async def read_form(request: Request) -> dict[str, list[str]] | None:
+    """The urlencoded body as `parse_qs` values, or None if it exceeds MAX_FORM_BYTES.
+    A body that is not valid UTF-8 yields an empty form."""
+    raw = b""
+    async for chunk in request.stream():
+        raw += chunk
+        if len(raw) > MAX_FORM_BYTES:
+            return None
+    try:
+        return parse_qs(raw.decode("utf-8"), keep_blank_values=True)
+    except UnicodeDecodeError:
+        return {}
+
+
+def form_value(form: dict[str, list[str]], name: str) -> str:
+    """The first value of `name`, or the empty string."""
+    return (form.get(name) or [""])[0]
 
 
 def _parse_cookies(header: str | None) -> dict[str, str]:
@@ -59,8 +94,7 @@ def request_language(scope: Scope) -> str:
 def render(request: Request, template: str, status_code: int = 200, **context: Any) -> HTMLResponse:
     """Render `template` for `request` (language, CSRF token and current path in the context)."""
     lang = request_language(request.scope)
-    settings = request.app.state.settings
-    assert isinstance(settings, Settings)
+    settings = app_settings(request)
     holder = Response()  # collects the Set-Cookie of an anonymous CSRF token
     token: list[str] = []
 
@@ -97,14 +131,29 @@ def render_server_error(scope: Scope) -> bytes:
     return html.encode("utf-8")
 
 
-def safe_next(value: str | None) -> str:
-    """Only same-site absolute paths are redirect targets; anything else becomes `/`."""
-    if not value or not value.startswith("/") or value.startswith("//") or "\\" in value:
-        return "/"
+def _local_path(value: str) -> bool:
+    if not value.startswith("/") or value.startswith("//") or "\\" in value:
+        return False
     if any(ord(c) < 0x20 or ord(c) == 0x7F for c in value):
-        return "/"
+        return False
     parts = urlsplit(value)
-    return value if not parts.scheme and not parts.netloc else "/"
+    return not parts.scheme and not parts.netloc
+
+
+def safe_next(value: str | None) -> str:
+    """Only same-site absolute paths are redirect targets; anything else becomes `/`. The value
+    must stay local after percent-decoding too (`/%2F%2Fevil`, `/%5Cevil` are refused)."""
+    if not value:
+        return "/"
+    candidate = value
+    for _ in range(_NEXT_DECODE_ROUNDS):
+        if not _local_path(candidate):
+            return "/"
+        decoded = unquote(candidate)
+        if decoded == candidate:
+            return value
+        candidate = decoded
+    return value if _local_path(candidate) and unquote(candidate) == candidate else "/"
 
 
 router = APIRouter()
@@ -114,20 +163,14 @@ router = APIRouter()
 async def switch_language(request: Request) -> Response:
     """Set the `dt_lang` cookie from the `lang` form field and redirect to `next`.
     CSRF is enforced by the middleware (token in the form body or X-CSRF-Token)."""
-    raw = b""
-    async for chunk in request.stream():
-        raw += chunk
-        if len(raw) > _MAX_FORM_BYTES:
-            return Response(status_code=413)
-    try:
-        form = parse_qs(raw.decode("utf-8"), keep_blank_values=True)
-    except UnicodeDecodeError:
-        form = {}
-    lang = (form.get("lang") or [""])[0]
-    target = safe_next((form.get("next") or [""])[0])
+    form = await read_form(request)
+    if form is None:
+        return Response(status_code=413)
+    lang = form_value(form, "lang")
+    target = safe_next(form_value(form, "next"))
     response = RedirectResponse(target, status_code=303)
     if lang in SUPPORTED_LANGUAGES:
-        base = session_cookie_settings(request.app.state.settings, LANGUAGE_COOKIE_MAX_AGE)
+        base = session_cookie_settings(app_settings(request), LANGUAGE_COOKIE_MAX_AGE)
         response.set_cookie(
             LANGUAGE_COOKIE,
             lang,

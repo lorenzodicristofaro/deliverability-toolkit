@@ -278,10 +278,64 @@ def test_language_post_header_token_and_bad_utf8(client: TestClient) -> None:
         ("evil", "/"),
         ("/a\r\nSet-Cookie: x=y", "/"),
         ("/a\x00", "/"),
+        # Percent-encoded variants must not become non-local after decoding.
+        ("/%2F%2Fevil.test", "/"),
+        ("/%2f%2fevil.test", "/"),
+        ("/%5Cevil.test", "/"),
+        ("/%5cevil.test", "/"),
+        ("/%252F%252Fevil.test", "/"),  # double encoded
+        ("/%25252F%25252Fevil.test", "/"),  # triple encoded: beyond the decode budget
+        ("%2F%2Fevil.test", "/"),
+        ("/%0d%0aSet-Cookie:x", "/"),
+        ("/a%20b", "/a%20b"),
+        ("/search?q=%2F", "/search?q=%2F"),
     ],
 )
 def test_safe_next(value: str | None, expected: str) -> None:
     assert safe_next(value) == expected
+
+
+def test_language_cookie_is_secure_with_https_base_url() -> None:
+    application = create_app(
+        Settings(  # type: ignore[call-arg]
+            secret_key=KEY, encryption_key=KEY, base_url="https://toolkit.example"
+        )
+    )
+
+    @application.get("/t/page", response_class=HTMLResponse)
+    def page(request: Request) -> HTMLResponse:
+        return render(request, "errors/404.html")
+
+    with TestClient(application, base_url="https://testserver") as c:
+        token = _csrf_from(c.get("/t/page").text)
+        response = c.post(
+            "/language", data={"lang": "it", "csrf_token": token}, follow_redirects=False
+        )
+    assert response.status_code == 303
+    cookie = response.headers["set-cookie"]
+    assert "dt_lang=it" in cookie and "Secure" in cookie
+
+
+def test_brand_is_the_app_name_global(client: TestClient) -> None:
+    html = client.get("/t/page").text
+    assert env.globals["app_name"] == templating.APP_NAME
+    assert f"<title>{templating.APP_NAME}</title>" in html
+    assert f'<a class="brand" href="/">{templating.APP_NAME}</a>' in html
+    base = (TEMPLATES_DIR / "base.html").read_text(encoding="utf-8")
+    assert templating.APP_NAME not in base
+
+
+def test_anonymous_page_has_no_logout_form(client: TestClient) -> None:
+    html = client.get("/t/page").text
+    assert 'action="/logout"' not in html
+    assert 'href="/logout"' not in html
+
+
+def test_render_without_settings_raises_a_clear_error(app: FastAPI) -> None:
+    with TestClient(app, raise_server_exceptions=True) as c:
+        del app.state.settings
+        with pytest.raises(RuntimeError, match="app.state.settings"):
+            c.get("/t/page")
 
 
 def test_language_cookie_garbage_is_ignored(client: TestClient) -> None:

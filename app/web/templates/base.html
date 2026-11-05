@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light dark">
-  <title>{% block title %}Deliverability Toolkit{% endblock %}</title>
+  <title>{% block title %}{{ app_name }}{% endblock %}</title>
   <link rel="stylesheet" href="/static/app.css">
   <script src="/static/theme.js"></script>
 </head>
@@ -12,11 +12,18 @@
   <a class="skip-link" href="#main">{{ t("ui.skip_to_content") }}</a>
   <header class="site-header">
     <nav class="nav">
-      <a class="brand" href="/">Deliverability Toolkit</a>
+      <a class="brand" href="/">{{ app_name }}</a>
       <ul class="nav-links">
         <li><a href="/">{{ t("ui.nav.home") }}</a></li>
         {% block nav %}{% endblock %}
-        {% if logged_in is defined and logged_in %}<li><a href="/logout">{{ t("ui.nav.logout") }}</a></li>{% endif %}
+        {% if logged_in is defined and logged_in and csrf_token is not none %}
+        <li>
+          <form class="logout" method="post" action="/logout">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button type="submit">{{ t("auth.logout") }}</button>
+          </form>
+        </li>
+        {% endif %}
       </ul>
       <div class="nav-tools">
         {% if csrf_token is not none %}
