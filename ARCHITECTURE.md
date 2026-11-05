@@ -142,6 +142,16 @@ and DNS snapshots are kept longer.
 - Per-query timeout, retry policy, TTL-aware cache, response size caps.
 - Distinguish NXDOMAIN, NODATA, SERVFAIL, timeout, REFUSED explicitly in the
   result type; checks must handle each.
+- DNS egress before the M7 guarded client (GM decision 2026-11-05, `app/dns/egress.py`):
+  operator-configured resolvers (`RESOLVER_ADDRS`; resolv.conf nameservers in `system` mode,
+  which cannot be policy-checked) are trusted and may be private. Every target derived from
+  request input or DNS data (public-resolver list entries, trace referral/glue/NS addresses)
+  must be a globally routable unicast IP literal on port 53; a blocked target yields
+  `ResultState.blocked`, never "missing". The DNS tool selects resolvers by id only
+  (configured + `seeds/dns_resolvers.yaml`); free-form resolver IPs are deferred to M7,
+  which will absorb this policy into the guarded client.
+- Raw DNS tools require the `dns.tools` permission: owner, admin, analyst; never client
+  viewer (not grantable by toggle); no anonymous access.
 - DNSBL lookups must detect "refused/blocked" return codes (e.g. 127.255.255.x
   conventions) and report them as `error`, not `listed`.
 
