@@ -144,6 +144,8 @@ BAD_RESOLVERS: list[tuple[str, Any]] = [
     ("port string", _res(port="53")),
     ("port bool", _res(port=True)),
     ("notes_key wrong type", _res(notes_key=3)),
+    ("port float", _res(port=53.0)),
+    ("future verified_on", _res(verified_on=date.today() + timedelta(days=2))),
 ]
 
 
@@ -191,6 +193,12 @@ BAD_HINTS: list[tuple[str, Any]] = [
     ("hostname", _servers(lambda s: s[0].update(ipv4="a.root-servers.net"))),
     ("private", _servers(lambda s: s[0].update(ipv4="192.168.0.1"))),
     ("server extra key", _servers(lambda s: s[0].update(x=1))),
+    ("future verified_on", _hints(verified_on=date.today() + timedelta(days=2))),
+    ("future file_last_modified", _hints(file_last_modified=date.today() + timedelta(days=2))),
+    ("http source", _hints(source="http://www.iana.org/domains/root/files")),
+    ("file_url not url", _hints(file_url="named.root")),
+    ("dup v4 across servers", _servers(lambda s: s[1].update(ipv4=s[0]["ipv4"]))),
+    ("dup v6 across servers", _servers(lambda s: s[1].update(ipv6=s[0]["ipv6"]))),
     ("server missing ipv6", _servers(lambda s: s[0].pop("ipv6"))),
 ]
 
@@ -229,3 +237,17 @@ def test_dockerfile_copies_seeds_to_app_seeds() -> None:
     dockerfile = (knowledge.SEEDS_DIR.parent / "Dockerfile").read_text()
     assert "WORKDIR /app\n" in dockerfile
     assert "\nCOPY seeds ./seeds\n" in dockerfile
+
+
+def test_duplicate_address_across_resolvers_rejected() -> None:
+    a = _res()["resolvers"][0]
+    b = copy.deepcopy(a)
+    b["id"] = "y"
+    with pytest.raises(KnowledgeError, match="another resolver"):
+        parse_resolvers({"resolvers": [a, b]})
+
+
+def test_today_is_injectable() -> None:
+    parse_resolvers(_res(), today=date(2026, 1, 1))
+    with pytest.raises(KnowledgeError, match="future"):
+        parse_resolvers(_res(), today=date(2025, 12, 31))

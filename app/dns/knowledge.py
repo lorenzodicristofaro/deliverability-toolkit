@@ -90,10 +90,12 @@ def _str(value: object, where: str) -> str:
     return value
 
 
-def _date(value: object, where: str) -> date:
-    if isinstance(value, date) and not hasattr(value, "hour"):
-        return value
-    raise _fail(where, "must be an ISO date (YYYY-MM-DD)")
+def _date(value: object, where: str, today: date | None = None) -> date:
+    if not (isinstance(value, date) and not hasattr(value, "hour")):
+        raise _fail(where, "must be an ISO date (YYYY-MM-DD)")
+    if today is not None and value > today:
+        raise _fail(where, f"date is in the future: {value}")
+    return value
 
 
 def _status(value: object, where: str) -> str:
@@ -101,6 +103,13 @@ def _status(value: object, where: str) -> str:
         raise _fail(where, f"must be one of {_STATUSES}")
     assert isinstance(value, str)
     return value
+
+
+def _https(value: object, where: str) -> str:
+    url = _str(value, where)
+    if not url.startswith("https://"):
+        raise _fail(where, f"must be an https URL: {url!r}")
+    return url
 
 
 def _url_list(value: object, where: str) -> tuple[str, ...]:
@@ -135,7 +144,9 @@ def _load_yaml(path: Path) -> object:
         raise KnowledgeError(f"{path.name}: cannot read/parse: {exc}") from exc
 
 
-def parse_resolvers(data: object) -> tuple[PublicResolver, ...]:
+def parse_resolvers(data: object, today: date | None = None) -> tuple[PublicResolver, ...]:
+    today = today or date.today()
+    seen_addrs: set[str] = set()
     root = _check_keys(data, "resolvers file", {"resolvers"})
     items = root["resolvers"]
     if not isinstance(items, list) or not items:
@@ -158,7 +169,7 @@ def parse_resolvers(data: object) -> tuple[PublicResolver, ...]:
         seen.add(rid)
         status = _status(e["status"], f"{w}.status")
         port = e["port"]
-        if port != 53 or isinstance(port, bool):
+        if type(port) is not int or port != 53:
             raise _fail(f"{w}.port", "must be 53")
         addrs = e["addresses"]
         if not isinstance(addrs, list) or not addrs:
@@ -166,7 +177,13 @@ def parse_resolvers(data: object) -> tuple[PublicResolver, ...]:
         addresses = tuple(_ip(a, None, f"{w}.addresses") for a in addrs)
         if len(set(addresses)) != len(addresses):
             raise _fail(f"{w}.addresses", "duplicate address")
-        verified_on = _date(e["verified_on"], f"{w}.verified_on") if "verified_on" in e else None
+        for a in addresses:
+            if a in seen_addrs:
+                raise _fail(f"{w}.addresses", f"address already used by another resolver: {a}")
+            seen_addrs.add(a)
+        verified_on = (
+            _date(e["verified_on"], f"{w}.verified_on", today) if "verified_on" in e else None
+        )
         sources = _url_list(e["sources"], f"{w}.sources") if "sources" in e else ()
         if status == "verified" and (verified_on is None or not sources):
             raise _fail(w, "verified entries need verified_on and a non-empty sources list")
@@ -187,7 +204,9 @@ def parse_resolvers(data: object) -> tuple[PublicResolver, ...]:
     return tuple(out)
 
 
-def parse_root_hints(data: object) -> RootHints:
+def parse_root_hints(data: object, today: date | None = None) -> RootHints:
+    today = today or date.today()
+    seen_addrs: set[str] = set()
     w = "root hints"
     d = _check_keys(
         data,
@@ -212,18 +231,21 @@ def parse_root_hints(data: object) -> RootHints:
         name = _str(s["name"], f"{sw}.name")
         if name != f"{letter}.root-servers.net":
             raise _fail(f"{sw}.name", f"expected {letter}.root-servers.net, got {name!r}")
-        servers.append(
-            RootServer(name, _ip(s["ipv4"], 4, f"{sw}.ipv4"), _ip(s["ipv6"], 6, f"{sw}.ipv6"))
-        )
+        v4, v6 = _ip(s["ipv4"], 4, f"{sw}.ipv4"), _ip(s["ipv6"], 6, f"{sw}.ipv6")
+        for a in (v4, v6):
+            if a in seen_addrs:
+                raise _fail(sw, f"duplicate address {a}")
+            seen_addrs.add(a)
+        servers.append(RootServer(name, v4, v6))
     version = d["root_zone_version"]
     if not isinstance(version, str) or not version.isdigit():
         raise _fail("root_zone_version", "must be a digit string")
     return RootHints(
-        source=_str(d["source"], "source"),
-        file_url=_str(d["file_url"], "file_url"),
-        file_last_modified=_date(d["file_last_modified"], "file_last_modified"),
+        source=_https(d["source"], "source"),
+        file_url=_https(d["file_url"], "file_url"),
+        file_last_modified=_date(d["file_last_modified"], "file_last_modified", today),
         root_zone_version=version,
-        verified_on=_date(d["verified_on"], "verified_on"),
+        verified_on=_date(d["verified_on"], "verified_on", today),
         status=_status(d["status"], "status"),
         servers=tuple(servers),
     )
