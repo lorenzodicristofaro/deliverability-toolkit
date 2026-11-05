@@ -31,7 +31,14 @@ from app.dns.trace import (
     trace,
 )
 from app.dns.types import DnsQuestion, DnsRecord, DnsResult, ResultState
-from tests.support.dns_zones import FakeResolver, FakeServerSet, NsAddr, Referral, parse_zones
+from tests.support.dns_zones import (
+    FakeResolver,
+    FakeServerSet,
+    NsAddr,
+    Referral,
+    ZoneFixtureError,
+    parse_zones,
+)
 
 ROOTS = (RootServer("a.root-servers.net", "192.0.2.1", "2001:db8::1"),)
 
@@ -601,6 +608,119 @@ async def test_oversized_answer_is_rejected() -> None:
     assert report.outcome is TraceOutcome.all_failed
 
 
+# --- authority (AA flag) ---------------------------------------------------------------------
+
+
+TWO_NS = [("ns1.example.com", "192.0.2.3"), ("ns2.example.com", "192.0.2.4")]
+
+
+def entry(state_or_rdata: str, aa: bool, name: str = "example.com") -> dict[str, Any]:
+    if state_or_rdata in ("nxdomain", "nodata"):
+        return {"name": name, "type": "A", "state": state_or_rdata, "aa": aa}
+    return {"name": name, "type": "A", "ttl": 60, "rdata": [state_or_rdata], "aa": aa}
+
+
+@pytest.mark.parametrize("absence", ["nxdomain", "nodata"])
+async def test_non_authoritative_absence_is_lame_then_next_server(absence: str) -> None:
+    servers = chain(
+        TWO_NS, {"192.0.2.3": [entry(absence, False)], "192.0.2.4": [entry(absence, True)]}
+    )
+    report = await run(servers, q("example.com"))
+    lame = report.hops[2]
+    assert (lame.kind, lame.state, lame.detail_code) == (
+        HopKind.failure,
+        ResultState.error,
+        "lame_or_non_authoritative",
+    )
+    assert report.outcome.value == absence
+    assert report.final_server == "192.0.2.4"
+
+
+@pytest.mark.parametrize("absence", ["nxdomain", "nodata"])
+async def test_only_non_authoritative_absence_ends_error(absence: str) -> None:
+    servers = chain(
+        TWO_NS, {"192.0.2.3": [entry(absence, False)], "192.0.2.4": [entry(absence, False)]}
+    )
+    report = await run(servers, q("example.com"))
+    assert report.outcome is TraceOutcome.lame_delegation
+    assert report.state is ResultState.error
+    assert report.detail_code == "lame_or_non_authoritative"
+    assert_never_missing(report)
+
+
+async def test_non_authoritative_positive_answer_is_ok_but_flagged() -> None:
+    servers = chain(TWO_NS[:1], {"192.0.2.3": [entry("192.0.2.10", False)]})
+    report = await run(servers, q("example.com"))
+    assert report.outcome is TraceOutcome.ok
+    assert report.hops[-1].detail_code == "non_authoritative"
+    authoritative = await run(chain(TWO_NS[:1], GOOD), q("example.com"))
+    assert authoritative.hops[-1].detail_code is None
+
+
+async def test_fake_server_set_reports_authority(fake_dns: Any) -> None:
+    servers = fake_dns("delegation")
+    assert (await servers.query_server("192.0.2.1", q("example.com"))).authoritative is False
+    assert (await servers.query_server("192.0.2.3", q("example.com"))).authoritative is True
+    assert (await servers.query_server("192.0.2.3", q("nope.example.com"))).authoritative is True
+    assert (await servers.query_server("192.0.2.99", q("example.com"))).authoritative is False
+    with pytest.raises(ZoneFixtureError, match="`aa` must be a boolean"):
+        parse_zones({"zones": {"default": [{**entry("192.0.2.1", True), "aa": "no"}]}})
+
+
+# --- timeouts raised by collaborators vs the trace deadline ----------------------------------
+
+
+async def test_timeout_from_query_server_is_a_server_failure() -> None:
+    servers = chain(TWO_NS, {"192.0.2.4": GOOD["192.0.2.3"]})
+
+    async def raising(addr: str, question: DnsQuestion) -> Any:
+        if addr == "192.0.2.3":
+            raise TimeoutError
+        return await servers.query_server(addr, question)
+
+    report = await run(servers, q("example.com"), query_server=raising)
+    assert report.outcome is TraceOutcome.ok
+    assert (report.hops[2].state, report.hops[2].detail_code) == (
+        ResultState.timeout,
+        "query_timeout",
+    )
+
+
+class TimeoutResolver:
+    identity = "stub"
+
+    async def resolve(self, question: DnsQuestion) -> DnsResult:
+        raise TimeoutError
+
+
+async def test_timeout_from_resolver_is_a_lookup_failure() -> None:
+    servers = glueless_servers(("ns1.example.com",))
+    report = await run(servers, q("example.org"), resolver=TimeoutResolver())
+    lookups = [h for h in report.hops if h.kind is HopKind.ns_lookup]
+    assert [(h.state, h.detail_code) for h in lookups] == [
+        (ResultState.timeout, "resolver_timeout"),
+        (ResultState.timeout, "resolver_timeout"),
+    ]
+    assert report.outcome is TraceOutcome.no_server_address
+
+
+async def test_glueless_addresses_are_capped() -> None:
+    servers = glueless_servers(("ns1.example.com",))
+    many = [f"192.0.2.{i}" for i in range(100, 110)]
+    resolver = ns_resolver(
+        [
+            {"name": "ns1.example.com", "type": "A", "ttl": 60, "rdata": many},
+            {"name": "ns1.example.com", "type": "AAAA", "ttl": 60, "rdata": ["2001:db8::30"]},
+        ]
+    )
+    limits = TraceLimits(max_referral_glue=3, max_servers_per_zone=10)
+    report = await run(servers, q("example.org"), resolver=resolver, limits=limits)
+    lookups = [h for h in report.hops if h.kind is HopKind.ns_lookup]
+    assert [h.detail_code for h in lookups] == ["addresses_capped", "addresses_capped"]
+    assert sent(servers)[2:] == many[:3]  # all unreachable; nothing beyond the cap is tried
+    assert report.outcome is TraceOutcome.all_failed
+
+
 # --- the GM note: a referral never reaches the user as "missing" -----------------------------
 
 
@@ -722,7 +842,7 @@ def test_default_limits_are_the_named_constants() -> None:
         == DEFAULT_LIMITS
     )
     assert (MAX_REFERRAL_DEPTH, MAX_TOTAL_QUERIES, MAX_SERVERS_PER_ZONE) == (16, 64, 4)
-    assert TOTAL_DEADLINE_S == 30.0
+    assert TOTAL_DEADLINE_S == 15.0
     assert MAX_HOP_RECORDS == backends.MAX_RECORDS_PER_SECTION
 
 

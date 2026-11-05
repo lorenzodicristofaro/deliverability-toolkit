@@ -77,10 +77,13 @@ class Referral:
 
 @dataclass(frozen=True, slots=True)
 class ServerReply:
-    """Answer of query_server: the result plus a referral when the server delegates the name."""
+    """Answer of query_server: the result plus a referral when the server delegates the name.
+    ``authoritative`` mirrors the AA flag: True for data the fake serves (an entry may set
+    ``aa: false``), False for referrals and unreachable servers."""
 
     result: DnsResult
     referral: Referral | None = None
+    authoritative: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,6 +92,7 @@ class _Entry:
     state: ResultState | None = None
     rcode: int | None = None
     ad: bool = False
+    aa: bool = True
 
 
 @dataclass(slots=True)
@@ -174,6 +178,9 @@ def _parse_entry(source: str, where: str, raw: Any, zone: ZoneData) -> None:
     ad = raw.get("ad", False)
     if not isinstance(ad, bool):
         raise _fail(source, where, "`ad` must be a boolean")
+    aa = raw.get("aa", True)
+    if not isinstance(aa, bool):
+        raise _fail(source, where, "`aa` must be a boolean")
     try:
         question = DnsQuestion(raw["name"], raw["type"])
     except ValueError as exc:
@@ -199,7 +206,7 @@ def _parse_entry(source: str, where: str, raw: Any, zone: ZoneData) -> None:
         expected = {ResultState.nxdomain: 3, ResultState.nodata: 0}.get(state)
         if rcode is not None and (rcode != expected if expected is not None else rcode in (0, 3)):
             raise _fail(source, where, f"rcode {rcode} inconsistent with state {state.value!r}")
-        zone.entries[key] = _Entry(state=state, rcode=rcode, ad=ad)
+        zone.entries[key] = _Entry(state=state, rcode=rcode, ad=ad, aa=aa)
         return
     ttl = _parse_ttl(source, where, raw.get("ttl"))
     rdata = raw["rdata"]
@@ -214,7 +221,7 @@ def _parse_entry(source: str, where: str, raw: Any, zone: ZoneData) -> None:
             except ValueError:
                 raise _fail(source, where, f"invalid address {text!r}") from None
         records.append(DnsRecord(question.name, question.rdtype, ttl, text))
-    zone.entries[key] = _Entry(records=tuple(records), ad=ad)
+    zone.entries[key] = _Entry(records=tuple(records), ad=ad, aa=aa)
 
 
 def parse_zones(data: Any, source: str = "<memory>") -> FakeServerSet:
@@ -298,7 +305,8 @@ class FakeResolver:
         if entry is not None:
             if entry.state is not None:
                 return ServerReply(
-                    self._result(q, entry.state, rcode=entry.rcode, authenticated_data=entry.ad)
+                    self._result(q, entry.state, rcode=entry.rcode, authenticated_data=entry.ad),
+                    authoritative=entry.aa,
                 )
             return ServerReply(
                 self._result(
@@ -308,15 +316,16 @@ class FakeResolver:
                     ttl_min=min(r.ttl for r in entry.records),
                     authenticated_data=entry.ad,
                     rcode=0,
-                )
+                ),
+                authoritative=entry.aa,
             )
         if q.name not in self.zones.names():
             ref = self._referral_for(q.name)
             if ref is not None:
                 return ServerReply(self._result(q, ResultState.nodata, rcode=0), ref)
         if self._exists(q.name):
-            return ServerReply(self._result(q, ResultState.nodata, rcode=0))
-        return ServerReply(self._result(q, ResultState.nxdomain, rcode=3))
+            return ServerReply(self._result(q, ResultState.nodata, rcode=0), authoritative=True)
+        return ServerReply(self._result(q, ResultState.nxdomain, rcode=3), authoritative=True)
 
     async def resolve(self, question: DnsQuestion) -> DnsResult:
         return self.lookup(question).result

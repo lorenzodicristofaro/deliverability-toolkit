@@ -45,8 +45,10 @@ SERVFAIL, REFUSED, timeout and truncation are never mapped to nxdomain/nodata.
 
 Referrals: ``query_server`` (non-recursive, for trace) returns ``ServerReply(result, referral)``.
 Callers MUST check ``reply.referral`` BEFORE ``reply.result.state``: a referral reply carries the
-placeholder state ``nodata`` and is never "missing". ``resolve`` is for recursive servers only; a
-referral there is a lame server and yields ``error`` (detail ``unexpected_referral``).
+placeholder state ``nodata`` and is never "missing". ``ServerReply.authoritative`` carries the AA
+flag (trace uses it to accept nxdomain/nodata as final only from an authoritative server).
+``resolve`` is for recursive servers only; a referral there is a lame server and yields
+``error`` (detail ``unexpected_referral``).
 """
 
 from __future__ import annotations
@@ -119,10 +121,14 @@ class Referral:
 
 @dataclass(frozen=True, slots=True)
 class ServerReply:
-    """Answer of ``query_server``. Check ``referral`` BEFORE ``result.state``."""
+    """Answer of ``query_server``. Check ``referral`` BEFORE ``result.state``.
+
+    ``authoritative`` is the AA flag of the parsed response; False when no response was parsed
+    (timeout, blocked, malformed, ...)."""
 
     result: DnsResult
     referral: Referral | None = None
+    authoritative: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -602,7 +608,7 @@ class DnsPythonResolver:
             authenticated_data=ad,
             detail_code=out.detail,
         )
-        return ServerReply(result, out.referral)
+        return ServerReply(result, out.referral, authoritative=bool(resp.flags & dns.flags.AA))
 
     async def _run(
         self,

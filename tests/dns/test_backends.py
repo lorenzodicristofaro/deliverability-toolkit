@@ -757,6 +757,37 @@ async def test_referral_edge_cases(
     assert (reply.referral is not None) is has_referral
 
 
+AA_CASES: list[tuple[str, Any, ResultState, bool]] = [
+    ("aa_answer", answer_with(answer=A_ANSWER, flags=dns.flags.AA), S.ok, True),
+    ("non_aa_answer", answer_with(answer=A_ANSWER), S.ok, False),
+    ("aa_nxdomain", answer_with(rcode=dns.rcode.NXDOMAIN, flags=dns.flags.AA), S.nxdomain, True),
+    ("non_aa_nxdomain", answer_with(rcode=dns.rcode.NXDOMAIN), S.nxdomain, False),
+    ("non_aa_referral", answer_with(**REFERRAL), S.nodata, False),
+    ("aa_refused", answer_with(rcode=dns.rcode.REFUSED, flags=dns.flags.AA), S.refused, True),
+]
+
+
+@pytest.mark.parametrize(
+    ("handler", "state", "aa"), [c[1:] for c in AA_CASES], ids=[c[0] for c in AA_CASES]
+)
+async def test_query_server_reports_aa_flag(handler: Any, state: ResultState, aa: bool) -> None:
+    reply = await custom(FakeTransport(handler)).query_server(
+        PUBLIC, DnsQuestion("example.com", "A")
+    )
+    assert reply.result.state is state
+    assert reply.authoritative is aa
+
+
+async def test_blocked_target_is_not_authoritative() -> None:
+    t = FakeTransport(answer_with(answer=A_ANSWER, flags=dns.flags.AA))
+    reply = await custom(t).query_server(
+        ResolverAddr("10.0.0.53", 53), DnsQuestion("example.com", "A")
+    )
+    assert reply.result.state is S.blocked
+    assert reply.authoritative is False
+    assert t.queries == []
+
+
 async def test_resolve_never_returns_referral() -> None:
     result = await custom(FakeTransport(answer_with(**REFERRAL))).resolve(
         DnsQuestion("www.example.com", "A")

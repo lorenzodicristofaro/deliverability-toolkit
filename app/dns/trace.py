@@ -39,9 +39,15 @@ server of the same zone is tried (at most ``max_servers_per_zone`` queries per z
 recorded. SERVFAIL/timeout at any hop never becomes "name does not exist": only an answer from a
 server we were referred to (or a root) can end the trace nxdomain/nodata.
 
-Known limitation: ``ServerReply`` does not expose the AA flag, so a non-authoritative answer that
-is not a referral cannot be told apart from an authoritative one; lame delegation is detected
-from REFUSED replies and from referrals that do not move closer to the name.
+Authority (``reply.authoritative``, the AA flag): nxdomain/nodata end the trace only when the
+server is authoritative; a non-referral, non-authoritative absence is a lame hop (state error,
+detail ``lame_or_non_authoritative``) and the next server is tried. A non-authoritative positive
+answer is kept as ok with detail ``non_authoritative``. Lame delegation = REFUSED or
+non-authoritative absence from every queried server of a zone.
+
+Timeouts: a TimeoutError raised by ``query_server``/the resolver itself is a per-server failure
+(``query_timeout``/``resolver_timeout``); only expiry of the trace deadline ends the trace
+(``deadline``).
 
 Detail codes only; UI i18n keys come with M2-14.
 """
@@ -65,7 +71,7 @@ from app.dns.types import DnsQuestion, DnsRecord, DnsResult, Resolver, ResultSta
 MAX_REFERRAL_DEPTH = 16  # referrals followed below the root
 MAX_TOTAL_QUERIES = 64  # query_server packets plus glueless NS resolver lookups
 MAX_SERVERS_PER_ZONE = 4  # servers actually queried per zone (blocked ones are not queried)
-TOTAL_DEADLINE_S = 30.0  # whole trace
+TOTAL_DEADLINE_S = 15.0  # whole trace
 MAX_REFERRAL_NS = 16  # NS names in one referral
 MAX_REFERRAL_GLUE = 32  # glue addresses in one referral
 MAX_HOP_RECORDS = 100  # answer records accepted from one hop
@@ -175,6 +181,8 @@ class ReplyLike(Protocol):
     def result(self) -> DnsResult: ...
     @property
     def referral(self) -> ReferralLike | None: ...
+    @property
+    def authoritative(self) -> bool: ...
 
 
 QueryServer = Callable[[str, DnsQuestion], Awaitable[ReplyLike]]
@@ -240,6 +248,7 @@ class _Zone:
     lame: int = 0
     loops: int = 0
     failures: int = 0
+    non_authoritative: int = 0
     glueless_lookups: int = 0
     seen_addrs: set[str] = field(default_factory=set)
 
@@ -336,11 +345,14 @@ class _Tracer:
             remaining = self._spend()
             t0 = self.clock()
             nq = DnsQuestion(name, rdtype)
+            cm = asyncio.timeout(remaining)
             try:
-                async with asyncio.timeout(remaining):
+                async with cm:
                     res = await self.resolver.resolve(nq)
             except TimeoutError:
-                raise _Abort(TraceOutcome.deadline) from None
+                if cm.expired():
+                    raise _Abort(TraceOutcome.deadline) from None
+                res = DnsResult(nq, ResultState.timeout, detail_code="resolver_timeout")
             except Exception:
                 res = DnsResult(nq, ResultState.error, detail_code="resolver_exception")
             state, detail, records = res.state, res.detail_code, res.records
@@ -349,7 +361,10 @@ class _Tracer:
                     # The NS name is an alias (answer owned by another name): RFC 2181 10.3.
                     state, detail, records = ResultState.malformed, "ns_is_cname", ()
                 else:
-                    addrs.extend(r.rdata_text for r in records)
+                    room = self.limits.max_referral_glue - len(addrs)
+                    if len(records) > room:
+                        detail = "addresses_capped"
+                    addrs.extend(r.rdata_text for r in records[: max(0, room)])
             self.hops.append(
                 TraceHop(
                     kind=HopKind.ns_lookup,
@@ -449,14 +464,21 @@ class _Tracer:
         remaining = self._spend()
         info.queried += 1
         t0 = self.clock()
+        cm = asyncio.timeout(remaining)
         try:
-            async with asyncio.timeout(remaining):
+            async with cm:
                 reply = await self.query_server(addr, self.q)
         except TimeoutError:
+            if cm.expired():  # the trace deadline, not a timeout raised by query_server
+                self._hop(
+                    HopKind.failure, zone, ResultState.timeout, server_name, addr, "trace_deadline"
+                )
+                raise _Abort(TraceOutcome.deadline) from None
+            info.failures += 1
             self._hop(
-                HopKind.failure, zone, ResultState.timeout, server_name, addr, "trace_deadline"
+                HopKind.failure, zone, ResultState.timeout, server_name, addr, "query_timeout"
             )
-            raise _Abort(TraceOutcome.deadline) from None
+            return None
         except Exception:
             info.failures += 1
             self._hop(
@@ -516,12 +538,21 @@ class _Tracer:
             )
             return child, cands
         state = res.state
+        if state.is_definitive_absence and not reply.authoritative:
+            # Absence is only final from an authoritative server: a lame server, try the next.
+            info.lame += 1
+            info.non_authoritative += 1
+            record(HopKind.failure, ResultState.error, "lame_or_non_authoritative")
+            return None
         if state.is_ok or state.is_definitive_absence:
             if len(res.records) > self.limits.max_hop_records:
                 info.failures += 1
                 record(HopKind.failure, ResultState.malformed, "oversized_answer")
                 return None
-            record(HopKind.answer, state, res.detail_code, records=res.records)
+            detail = res.detail_code
+            if not reply.authoritative:
+                detail = "non_authoritative"  # positive answer kept, but flagged
+            record(HopKind.answer, state, detail, records=res.records)
             return self._report(
                 TraceOutcome(state.value),
                 answer=res.records,
@@ -544,7 +575,8 @@ class _Tracer:
         if info.failures == 0 and info.lame == 0:
             return self._report(TraceOutcome.loop)
         if info.failures == 0:
-            return self._report(TraceOutcome.lame_delegation)
+            detail = "lame_or_non_authoritative" if info.non_authoritative else None
+            return self._report(TraceOutcome.lame_delegation, detail=detail)
         return self._report(TraceOutcome.all_failed)
 
     def _report(
