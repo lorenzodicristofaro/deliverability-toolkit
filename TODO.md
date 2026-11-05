@@ -26,8 +26,8 @@ Carried over from M0-07 QA:
   Status: **accepted 2026-11-05** — tenancy matrix + named acceptance tests (tests/tenancy/test_acceptance_m1.py). CI green at d2e5e4a incl. PostgreSQL (4393 passed). Report: docs/reports/M1.md
 
 ## M2 — DNS engine
-- [ ] Resolver abstraction (system / custom / Unbound), cache, timeouts, explicit result states
-- [ ] Free DNS tool: all record types, trace, reverse, propagation across resolvers
+- [x] Resolver abstraction (system / custom / Unbound), cache, timeouts, explicit result states
+- [x] Free DNS tool: all record types, trace, reverse, propagation across resolvers
 - Tickets (docs/tickets/):
   - [x] M2-01 trim whitespace in `to_ascii_domain` + DNS record-name validator (underscores) — also closes the post-M1 follow-up
   - [x] M2-02 result states + Resolver protocol
@@ -45,6 +45,7 @@ Carried over from M0-07 QA:
   - [x] M2-14 UI trace/propagation
   - [x] M2-15 acceptance tests + docs/DNS.md
 - Accept: tests pass against recorded zones; SERVFAIL/timeout never reported as "record missing".
+  Status: **accepted 2026-11-06** — tests/dns/test_acceptance_m2.py; CI green at 8083cc5 incl. PostgreSQL (6577 passed). Report: docs/reports/M2.md
 
 ## M3 — SPF, DKIM, DMARC
 - [ ] Parsers + checks with Finding codes, remediation texts (en/it)
