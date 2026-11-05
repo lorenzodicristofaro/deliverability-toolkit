@@ -121,3 +121,55 @@ def test_resolver_protocol() -> None:
 
     assert isinstance(Fake(), Resolver)
     assert not isinstance(object(), Resolver)
+
+
+def test_root_name_accepted() -> None:
+    assert DnsQuestion(".", "NS").name == "."
+
+
+@pytest.mark.parametrize("name", ["..", ".a", "a..", ".."])
+def test_root_lookalikes_rejected(name: str) -> None:
+    with pytest.raises(ValueError):
+        DnsQuestion(name, "NS")
+
+
+@pytest.mark.parametrize(
+    ("state", "rcode"),
+    [
+        (ResultState.nxdomain, 2),
+        (ResultState.nxdomain, 0),
+        (ResultState.nodata, 3),
+        (ResultState.nodata, 2),
+    ],
+)
+def test_inconsistent_rcode_rejected(state: ResultState, rcode: int) -> None:
+    with pytest.raises(ValueError):
+        DnsResult(Q, state, rcode=rcode)
+
+
+def test_ok_rcode_must_be_zero() -> None:
+    with pytest.raises(ValueError):
+        DnsResult(Q, ResultState.ok, records=(R,), rcode=3)
+    assert DnsResult(Q, ResultState.ok, records=(R,), rcode=0).rcode == 0
+    assert DnsResult(Q, ResultState.nxdomain, rcode=3).rcode == 3
+    assert DnsResult(Q, ResultState.nodata, rcode=0).rcode == 0
+    assert DnsResult(Q, ResultState.servfail, rcode=2).rcode == 2
+
+
+def test_negative_ttl_min_rejected() -> None:
+    with pytest.raises(ValueError):
+        DnsResult(Q, ResultState.ok, records=(R,), ttl_min=-1)
+
+
+def test_explicit_failure_set() -> None:
+    expected = {
+        ResultState.servfail,
+        ResultState.refused,
+        ResultState.timeout,
+        ResultState.truncated,
+        ResultState.malformed,
+        ResultState.network_error,
+        ResultState.blocked,
+        ResultState.error,
+    }
+    assert {s for s in ResultState if s.is_failure} == expected

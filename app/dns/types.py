@@ -81,6 +81,9 @@ def join_txt_strings(strings: Iterable[bytes]) -> str:
 
 
 def _validate_name(name: str) -> None:
+    """Names are lowercase ASCII without trailing dot; exactly "." is the root name."""
+    if name == ".":
+        return
     if not name or len(name) > _MAX_NAME or not name.isascii() or name != name.lower():
         raise ValueError(f"invalid DNS name: {name!r}")
     if name.endswith("."):
@@ -93,6 +96,13 @@ def _validate_name(name: str) -> None:
 def _validate_rdtype(rdtype: str) -> None:
     if rdtype not in ALLOWED_RDTYPES:
         raise ValueError(f"rdtype not allowed: {rdtype!r}")
+
+
+_RCODE_FOR_STATE: dict[ResultState, int] = {
+    ResultState.ok: 0,
+    ResultState.nodata: 0,
+    ResultState.nxdomain: 3,
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -140,6 +150,11 @@ class DnsResult:
             raise ValueError("records are only allowed for ok results")
         if self.elapsed_ms < 0:
             raise ValueError("elapsed_ms must be >= 0")
+        if self.ttl_min is not None and self.ttl_min < 0:
+            raise ValueError("ttl_min must be >= 0")
+        required = _RCODE_FOR_STATE.get(self.state)
+        if self.rcode is not None and required is not None and self.rcode != required:
+            raise ValueError(f"rcode {self.rcode} inconsistent with state {self.state}")
 
 
 @runtime_checkable
