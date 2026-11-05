@@ -31,7 +31,7 @@ Carried over from M0-07 QA:
 - Tickets (docs/tickets/):
   - [x] M2-01 trim whitespace in `to_ascii_domain` + DNS record-name validator (underscores) — also closes the post-M1 follow-up
   - [x] M2-02 result states + Resolver protocol
-  - [x] M2-03 DNS egress policy (opus; open question for maintainer)
+  - [x] M2-03 DNS egress policy (opus; decided by GM 2026-11-05, ARCHITECTURE section 7)
   - [x] M2-04 recorded-zone fixtures + fake resolver
   - [ ] M2-05 backends system/custom/Unbound (dnspython dependency, opus)
   - [x] M2-06 TTL cache
@@ -39,7 +39,7 @@ Carried over from M0-07 QA:
   - [ ] M2-08 lookup + reverse service
   - [ ] M2-09 trace (opus)
   - [ ] M2-10 propagation
-  - [ ] M2-11 `dns.tools` permission (opus)
+  - [x] M2-11 `dns.tools` permission (opus)
   - [ ] M2-12 REST endpoints
   - [ ] M2-13 UI lookup/reverse
   - [ ] M2-14 UI trace/propagation
