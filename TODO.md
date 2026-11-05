@@ -20,9 +20,10 @@ Carried over from M0-07 QA:
 - [x] Config, logging, DB, Alembic migrations (SQLite + PostgreSQL) (M1-01..03, M1-06, M1-07; PG in CI)
 - [x] Users, tenants, memberships, roles, permission layer `can()`
 - [x] Login (argon2), sessions, CSRF, first-run setup wizard (creates instance admin)
-- [ ] Tenant-scoped repositories + tenancy test matrix
+- [x] Tenant-scoped repositories + tenancy test matrix
 - [x] Domain CRUD, tenant landing page, i18n (en/it) scaffolding, dark mode
 - Accept: user from tenant A cannot read tenant B data (tests prove it); client viewer limited to assigned domains.
+  Status: **accepted 2026-11-05** — tenancy matrix + named acceptance tests (tests/tenancy/test_acceptance_m1.py). CI green at d2e5e4a incl. PostgreSQL (4393 passed). Report: docs/reports/M1.md
 
 ## M2 — DNS engine
 - [ ] Resolver abstraction (system / custom / Unbound), cache, timeouts, explicit result states
@@ -97,4 +98,6 @@ Carried over from M0-07 QA:
 - [ ] Landing pagination (the landing caps at 1000 domains)
 - [ ] Mixed-script heuristic false positives (U+00B7 Catalan middle dot, U+02BC, ZWJ) and possible false negatives for scripts sharing a first word in the unicodedata name: use Script_Extensions data
 - [ ] Move `mixed_script` to app/core/domain_names.py
+- [ ] app/services/domains.py hardcodes MembershipRole.CLIENT_VIEWER in list and set_access; use is_domain_restricted
+- [ ] The matrix guard's create_app() uses env settings, not world.settings (QA nit)
 - [ ] HTMX under CSP `script-src 'self'` is unverified, maintainer to confirm against https://htmx.org/docs/ (set includeIndicatorStyles=false and allowEval=false when vendored)

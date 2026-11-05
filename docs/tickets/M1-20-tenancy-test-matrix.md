@@ -16,4 +16,10 @@ Acceptance criteria:
 - Runs on SQLite and, when TEST_DATABASE_URL is set, PostgreSQL (CI from M1-07).
 - From M1-19 QA: app/web/deps.py:114 hardcodes MembershipRole.CLIENT_VIEWER. Use the single source `_DOMAIN_RESTRICTED_ROLES` from app/core/permissions.py:112, or expose a public helper there; no hardcoded role in deps.py. Test covers it.
 New i18n keys: none
-Status: todo
+Status: done (merged into dev, QA APPROVE + delta)
+Outcome:
+- Matrix covers 16 routes, 236 generated cases per DB, plus a route-coverage guard using the internal `fastapi.routing.iter_route_contexts` (fastapi pinned <0.163).
+- 8 (method, path) exemptions, documented in docs/TESTING.md.
+- A WorldMutated baseline guard.
+- No isolation bugs found.
+- QA mutation runs (dropping a tenant filter) fail the matrix and both named acceptance tests.
