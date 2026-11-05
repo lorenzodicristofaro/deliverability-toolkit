@@ -1,40 +1,24 @@
-# HANDOFF — 2026-11-05
+# HANDOFF — 2026-11-05 (session 2)
 
 Resume with `/gm`.
 
-## Current milestone: M1 — Core platform (auth + multi-tenancy skeleton)
-Tickets: docs/tickets/M1-01..M1-20. GM decisions recorded in M1-01 ("GM decisions").
-
-## Ticket status
+## Current milestone: M1 — Core platform
 | Ticket | Status |
 |---|---|
-| M1-01..M1-12 | done (merged into dev, QA APPROVE, pushed) |
-| M1-13 argon2 + sessions | todo — a coder was started and STOPPED by the GM before finishing (session end). Discard its worktree/branch (`git worktree list`, `git branch --list 'feature/m1-13*'`) and restart M1-13 from scratch on current dev. |
-| M1-14..M1-20 | todo |
+| M1-01..M1-19 | done (merged into dev, QA APPROVE, CI green on PG at f9b0e4b) |
+| M1-15 hotfix (NUL bytes in login email, PG-only) | done (73f62f1) |
+| M1-20 tenancy matrix + M1 acceptance | in-progress: coder (opus) stopped by the usage limit while writing tests/tenancy/conftest.py; worktree .claude/worktrees/agent-af4ff2fdb27996f4d (uncommitted WIP). Resume that coder, or restart M1-20 from dev f9b0e4b. |
 
-Suggested order after 11/12: 13, 14, 16, 15, 17, 18, 19, 20.
+## Open maintainer decisions (unverified / to confirm)
+- Domain name rules: single-label, all-numeric TLD, underscore and surrounding whitespace are rejected (M1-18).
+- SecLists common-password list: the xato.net source dataset terms are unverified (before public release).
+- HTMX under CSP `script-src 'self'`: unverified (M1-16).
+- Cleanup: stale worktrees in .claude/worktrees/ and local branch feature/m1-13-auth-core (the auto-mode classifier denied removal).
 
-## Maintainer decisions this session
-- Instance admin has NO tenant data access via the flag alone; with a membership, exactly what the
-  membership allows (ARCHITECTURE §4 item 6). Impersonation: possible future feature, not planned.
-
-## GM decisions this session (not escalated)
-- Tenant delete CASCADE; users with memberships cannot be deleted (RESTRICT), deactivate instead (ARCHITECTURE §4 item 7).
-- Non-ASCII domain names rejected until M1-18 adds IDNA 2008 (dependency allowed there).
-
-## Follow-ups already routed into tickets
-- M1-16: eager locale catalogue validation at startup + Accept-Language 4 KB cap (from M1-09 QA).
-
-## Process rules (from this session)
-- Merge gate: run checks with `set -o pipefail`; commit/push only on exit 0 (a red dev was pushed once on 2026-11-05 and fixed in 525d45c).
-- Parallel tickets: the second QA runs the full suite on a trial merge with the first already on dev.
-
-## Notes
-- `gh run watch` exits 1 with the repo token (no Checks permission): poll `gh run view` instead.
-  Optional for the maintainer: add "Checks: read" to the fine-grained token.
-- Local `docker compose up` needs SECRET_KEY and ENCRYPTION_KEY (>= 32 chars) in `.env`.
+## Process notes
+- PG tests only run in CI (see memory pg-tests-ci-only): watch dev CI after every merge.
 
 ## Next 3 steps
-1. M1-13 argon2 + sessions (opus).
-2. M1-14 CSRF + security headers (opus).
-3. M1-16 templates/dark mode (includes the M1-09 follow-up), then M1-15 login.
+1. Finish M1-20, then QA, merge and dev CI.
+2. Full suite on dev; if green, merge dev → qa, push qa and watch CI.
+3. Write docs/reports/M1.md (max 30 lines); ask the maintainer about the decisions above.
