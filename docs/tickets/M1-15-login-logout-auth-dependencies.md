@@ -14,5 +14,7 @@ Acceptance criteria:
 - Every new endpoint has a tenancy/permission test: anonymous denied, user of tenant A cannot switch to tenant B, inactive user cannot log in.
 - Redirect targets after login are validated as local paths (open-redirect test).
 - Log lines contain no credentials.
+- Validate session active_tenant_id against the user's active membership when building TenantContext, failing closed.
+- Callers pass SessionPolicy.from_settings(settings).
 New i18n keys: auth.login.title, auth.login.email, auth.login.password, auth.login.submit, auth.login.failed, auth.login.throttled, auth.logout, auth.tenant_switch.denied (en + it)
 Status: todo

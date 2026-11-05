@@ -15,4 +15,5 @@ Acceptance criteria:
 - Leak checks: error bodies and logs for a cross-tenant request do not contain tenant B names.
 - Runs on SQLite and, when TEST_DATABASE_URL is set, PostgreSQL (CI from M1-07).
 New i18n keys: none
+Deferred follow-up (from M1-13, not an M1-20 criterion): throttle the last_seen_at write on each resolve_session (production change; report to GM as a new ticket, e.g. in M1-15 or a later hardening ticket).
 Status: todo

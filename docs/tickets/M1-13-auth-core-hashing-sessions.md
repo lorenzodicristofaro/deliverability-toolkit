@@ -14,4 +14,5 @@ Acceptance criteria:
 - Tests: wrong password, unknown user, tampered cookie, expired, revoked, inactive user, password change revokes other sessions. No secrets in logs.
 - Passwords are never logged or placed in exceptions.
 New i18n keys: none
-Status: todo
+Status: done
+Outcome: Timeouts live in Settings as SESSION_IDLE_TIMEOUT_MINUTES=30 and SESSION_ABSOLUTE_TIMEOUT_MINUTES=720. SessionPolicy.from_settings() is now required by callers (no implicit defaults). argon2-cffi 25.1.0 defaults are pinned by a test. Merged into dev, QA APPROVE.
