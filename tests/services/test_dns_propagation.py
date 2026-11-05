@@ -323,3 +323,128 @@ async def test_cache_bypassed_and_not_shared() -> None:
     assert len(fs.resolver("default").questions) == 2  # live query despite warm cache
     assert len(other_cached) == 0  # propagation did not populate any cache
     assert rep.verdict is Verdict.inconsistent  # distinct resolvers gave distinct answers
+
+
+class Fixed:
+    def __init__(self, state: ResultState) -> None:
+        self.identity = f"fixed:{state}"
+        self.state = state
+
+    async def resolve(self, question: DnsQuestion) -> DnsResult:
+        return DnsResult(question, self.state, detail_code="stub")
+
+
+async def test_blocked_among_agreeing_stays_consistent() -> None:
+    fs = mk(AGREE, AGREE, AGREE, AGREE)
+    rep = await check_propagation(
+        "example.com",
+        "A",
+        ["p", "q"],
+        default_resolver=fs.resolver("default"),
+        address_factory=lambda e, ad: (
+            Fixed(ResultState.blocked) if ad == "10.0.0.2" else fs.resolver(ad)
+        ),
+        catalog=E,
+    )
+    blocked = next(r for r in rep.rows if r.address == "10.0.0.2")
+    assert blocked.state is ResultState.blocked
+    assert blocked.group is None
+    assert rep.verdict is Verdict.consistent
+    assert (rep.evaluated_count, rep.not_evaluated_count) == (3, 1)
+
+
+async def test_real_factory_private_address_blocked_nothing_sent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import socket
+
+    def boom(*a: Any, **k: Any) -> Any:
+        raise AssertionError("network touched")
+
+    for fn in ("connect", "sendto", "send", "connect_ex"):
+        monkeypatch.setattr(socket.socket, fn, boom)
+    fs = servers({"default": AGREE})
+    rep = await check_propagation(
+        "example.com",
+        "A",
+        ["priv"],
+        default_resolver=fs.resolver("default"),
+        catalog=[entry("priv", ["10.0.0.1"])],
+        min_evaluated=1,
+    )
+    row = rep.rows[1]
+    assert row.state is ResultState.blocked
+    assert row.detail_code is not None
+    assert row.group is None
+    assert rep.not_evaluated_count == 1
+
+
+async def test_name_rdata_case_insensitive_row_keeps_original() -> None:
+    def c(v: str) -> list[dict[str, Any]]:
+        return [a([v], typ="CNAME")]
+
+    fs = mk(c("x.example.net"), c("X.Example.NET"), c("x.example.net"), c("x.example.net"))
+    rep = await check_propagation(
+        "example.com",
+        "CNAME",
+        ["p", "q"],
+        default_resolver=fs.resolver("default"),
+        address_factory=lambda e, ad: fs.resolver(ad),
+        catalog=E,
+    )
+    assert rep.verdict is Verdict.consistent
+    assert rep.rows[1].records[0][2] == "X.Example.NET"
+
+
+async def test_txt_compared_exactly() -> None:
+    def t(v: str) -> list[dict[str, Any]]:
+        return [a([v], typ="TXT")]
+
+    fs = mk(t("v=spf1 -all"), t("V=SPF1 -ALL"), t("v=spf1 -all"), t("v=spf1 -all"))
+    rep = await check_propagation(
+        "example.com",
+        "TXT",
+        ["p", "q"],
+        default_resolver=fs.resolver("default"),
+        address_factory=lambda e, ad: fs.resolver(ad),
+        catalog=E,
+    )
+    assert rep.verdict is Verdict.inconsistent
+
+
+async def test_max_targets_rejected_not_truncated() -> None:
+    cat = [entry(f"r{i}", [f"10.2.{i}.1", f"10.2.{i}.2", f"10.2.{i}.3"]) for i in range(6)]
+    fs = servers({"default": AGREE})
+    with pytest.raises(InvalidLookupInput) as ei:
+        await run(fs, cat, [e.id for e in cat])  # 18 > 16
+    assert (ei.value.field, ei.value.reason) == ("resolver_ids", "too_many_targets")
+    assert fs.all_questions == []
+    sixteen = [entry(f"s{i}", [f"10.3.{i}.1", f"10.3.{i}.2"]) for i in range(8)]
+    fs2 = servers({"default": AGREE, **{x: AGREE for e in sixteen for x in e.addresses}})
+    rep = await run(fs2, sixteen, [e.id for e in sixteen])
+    assert len(rep.rows) == 17
+
+
+async def test_overall_deadline() -> None:
+    fs = mk(AGREE, AGREE, AGREE, AGREE)
+    rep = await check_propagation(
+        "example.com",
+        "A",
+        ["p", "q"],
+        default_resolver=fs.resolver("default"),
+        address_factory=lambda e, ad: Hang() if ad == "10.0.0.1" else fs.resolver(ad),
+        catalog=E,
+        timeout_s=30,
+        deadline_s=0.05,
+    )
+    hung = next(r for r in rep.rows if r.address == "10.0.0.1")
+    assert hung.state is ResultState.timeout
+    assert hung.detail_code == "overall_deadline"
+    assert rep.verdict is Verdict.consistent
+
+
+async def test_no_verified_entries_only_default_inconclusive() -> None:
+    fs = servers({"default": AGREE, "10.0.0.2": AGREE})
+    rep = await run(fs, [entry("u", ["10.0.0.2"], status="unverified")])
+    assert [r.resolver_id for r in rep.rows] == ["default"]
+    assert rep.verdict is Verdict.inconclusive

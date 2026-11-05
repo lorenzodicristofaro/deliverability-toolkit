@@ -5,6 +5,10 @@ default resolver and of EVERY address of each selected public-resolver entry (on
 address, each with its own resolver and so its own cache key). Answers are always live (cache
 bypassed).
 
+nxdomain and nodata are DISTINCT answers (accepted decision), so they never group together.
+Hostname-valued rdata (CNAME, NS, MX, PTR, SOA, SRV) is compared case-insensitively; TXT and
+CAA values are compared exactly. Rows keep the original text.
+
 Aggregation is only among rows that were evaluated (ok or definitive absence). A failure state
 (servfail, timeout, refused, blocked, ...) is "not evaluated": counted separately, never "missing"
 and never in agreement or disagreement.
@@ -27,7 +31,10 @@ from app.dns.types import ALLOWED_RDTYPES, DnsQuestion, DnsResult, Resolver, Res
 from app.services.dns_tools import InvalidLookupInput
 
 MAX_RESOLVERS = 8  # selected public entries per request
+MAX_TARGETS = 16  # addresses across all selected entries (default row not counted)
 MAX_CONCURRENCY = 8
+DEFAULT_DEADLINE_S = 10.0
+_NAME_RDTYPES = frozenset({"CNAME", "NS", "MX", "PTR", "SOA", "SRV"})
 DEFAULT_TIMEOUT_S = 5.0
 DEFAULT_MIN_EVALUATED = 2
 DEFAULT_ID = "default"
@@ -151,7 +158,9 @@ def aggregate(
     for i, row in enumerate(rows):
         if not row.evaluated:
             continue
-        rdata = tuple(sorted({(n, t, d) for n, t, d, _ttl in row.records}))
+        rdata = tuple(
+            sorted({(n, t, d.lower() if t in _NAME_RDTYPES else d) for n, t, d, _ in row.records})
+        )
         keys.setdefault((row.state, rdata), []).append(i)
     groups = tuple(
         AnswerGroup(idx, state, rdata, tuple(members))
@@ -177,6 +186,7 @@ async def check_propagation(
     address_factory: AddressFactory = _build_address,
     catalog: Sequence[PublicResolver] | None = None,
     timeout_s: float = DEFAULT_TIMEOUT_S,
+    deadline_s: float = DEFAULT_DEADLINE_S,
     min_evaluated: int = DEFAULT_MIN_EVALUATED,
     max_concurrency: int = MAX_CONCURRENCY,
 ) -> PropagationReport:
@@ -190,6 +200,9 @@ async def check_propagation(
     if rtype not in ALLOWED_RDTYPES:
         raise InvalidLookupInput("rdtype", "not_allowed")
     entries = _select(resolver_ids, list_public_resolvers() if catalog is None else catalog)
+
+    if sum(len(e.addresses) for e in entries) > MAX_TARGETS:
+        raise InvalidLookupInput("resolver_ids", "too_many_targets")
 
     q = DnsQuestion(name, rtype)
     targets: list[tuple[str, str | None, bool, Resolver]] = [
@@ -206,7 +219,23 @@ async def check_propagation(
         async with sem:
             return await _ask(resolver, q, timeout_s)
 
-    results = await asyncio.gather(*(run(t[3]) for t in targets))
+    tasks = [asyncio.ensure_future(run(t[3])) for t in targets]
+    await asyncio.wait(tasks, timeout=deadline_s)
+    results: list[DnsResult] = []
+    for task in tasks:
+        if task.done():
+            results.append(task.result())
+        else:
+            task.cancel()
+            results.append(
+                DnsResult(
+                    question=q,
+                    state=ResultState.timeout,
+                    elapsed_ms=deadline_s * 1000,
+                    detail_code="overall_deadline",
+                )
+            )
+    await asyncio.gather(*tasks, return_exceptions=True)
     rows, groups, verdict = aggregate(
         [_row(rid, addr, unv, r) for (rid, addr, unv, _), r in zip(targets, results, strict=True)],
         min_evaluated,
