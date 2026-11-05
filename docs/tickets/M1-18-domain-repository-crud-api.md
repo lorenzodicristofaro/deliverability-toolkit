@@ -19,7 +19,7 @@ New i18n keys: api.error.not_found, api.error.forbidden, api.error.conflict, dom
 Status: done (merged into dev, QA APPROVE)
 Outcome:
 - IDNA library: idna 3.20 (BSD-3), called with encode(uts46=True, std3_rules=True, transitional=False). The two flags come from the library signature, not its docs; their behaviour is verified by tests.
-- Rejected names: single-label, all-numeric TLD, underscores, surrounding whitespace. MAINTAINER TO CONFIRM these rules.
+- Rejected names: single-label, all-numeric TLD, underscores. Maintainer decision 2026-11-05: keep those three for tenant domains (the M2 DNS tool accepts underscores in record names, e.g. `_dmarc.`); surrounding whitespace is to be TRIMMED, not rejected (follow-up in TODO.md).
 - PUT /api/v1/domains/{id}/access needs USER_MANAGE + DOMAIN_UPDATE, replace-set semantics, client viewers only.
 - Tenancy matrix: 100 generated cases.
 - Only constraint uq_domains_tenant_id_name maps to 409 (DomainNameTaken).

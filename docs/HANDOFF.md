@@ -7,7 +7,7 @@ Resume with `/gm`.
 - Next milestone: M2 — DNS engine (not yet split into tickets).
 
 ## Open maintainer decisions
-- Domain name rules (M1-18): single-label, all-numeric TLD, underscore and surrounding whitespace are rejected. Confirm.
+- Domain name rules: DECIDED 2026-11-05 (single-label, numeric TLD, underscore rejected for tenant domains; underscores allowed in DNS-tool record names; trim surrounding whitespace). Implement the trim as the first M2 ticket or a small fix.
 - SecLists password list: the xato.net dataset terms are unverified (before public release).
 - HTMX under CSP `script-src 'self'`: unverified (M1-16).
 - `qa` → `main` promotion of M1: maintainer only.
