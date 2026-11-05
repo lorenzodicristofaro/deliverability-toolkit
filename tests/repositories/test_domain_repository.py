@@ -11,12 +11,19 @@ from pathlib import Path
 import pytest
 from alembic import command
 from alembic.config import Config
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.db import create_db_engine, create_session_factory
 from app.core.tenancy import TenantContext
 from app.models import Domain, Tenant
-from app.repositories.domain import DomainNameTaken, DomainRecord, DomainRepository
+from app.repositories.domain import (
+    NAME_CONSTRAINT,
+    DomainNameTaken,
+    DomainRecord,
+    DomainRepository,
+    is_name_conflict,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 KEY = "k" * 40
@@ -135,3 +142,110 @@ def test_delete_is_tenant_scoped(world: World) -> None:
     world.session.commit()
     assert world.repo("b").get(world.domains["b1"]) is not None
     assert world.repo().get(world.domains["a1"]) is None
+
+
+# --- duplicates enforced by the database (pre-check bypassed, e.g. a concurrent insert) -------
+
+
+def _no_precheck(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(DomainRepository, "get_by_name", lambda self, name: None)
+
+
+def test_db_enforced_duplicate_on_create(world: World, monkeypatch: pytest.MonkeyPatch) -> None:
+    _no_precheck(monkeypatch)
+    with pytest.raises(DomainNameTaken) as caught:
+        world.repo().create("a1.example")
+    assert isinstance(caught.value.__cause__, IntegrityError)
+    assert is_name_conflict(caught.value.__cause__)
+    world.session.rollback()
+    assert world.repo().count() == 2
+
+
+def test_db_enforced_duplicate_on_rename(world: World, monkeypatch: pytest.MonkeyPatch) -> None:
+    _no_precheck(monkeypatch)
+    with pytest.raises(DomainNameTaken):
+        world.repo().rename(world.domains["a1"], "shared.example")
+    world.session.rollback()
+    world.session.expire_all()
+    a1 = world.repo().get(world.domains["a1"])
+    assert a1 is not None and a1.name == "a1.example"
+
+
+def test_other_integrity_error_is_not_a_name_conflict(world: World) -> None:
+    """A FK violation (context tenant that does not exist) is re-raised, not DomainNameTaken."""
+    repo = DomainRepository(TenantContext(10**9, None), world.session)
+    with pytest.raises(IntegrityError) as caught:
+        repo.create("fresh.example")
+    assert not isinstance(caught.value, DomainNameTaken)
+    assert not is_name_conflict(caught.value)
+    world.session.rollback()
+
+
+def test_other_integrity_error_on_rename_is_reraised(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    other = IntegrityError("UPDATE domains", {}, Exception("CHECK constraint failed: x"))
+
+    def fail(self: DomainRepository, id_: object, values: object) -> None:
+        raise other
+
+    monkeypatch.setattr(DomainRepository, "update", fail)
+    with pytest.raises(IntegrityError) as caught:
+        world.repo().rename(world.domains["a1"], "fresh.example")
+    assert caught.value is other
+
+
+class _Diag:
+    def __init__(self, name: str | None) -> None:
+        self.constraint_name = name
+
+
+class _PgError(Exception):
+    def __init__(self, name: str | None) -> None:
+        super().__init__("duplicate key value violates unique constraint")
+        self.diag = _Diag(name)
+
+
+class _SqliteError(Exception):
+    def __init__(self, message: str, errorname: str) -> None:
+        super().__init__(message)
+        self.sqlite_errorname = errorname
+
+
+@pytest.mark.parametrize(
+    ("orig", "expected"),
+    [
+        (_PgError(NAME_CONSTRAINT), True),
+        (_PgError("uq_domains_id_tenant_id"), False),
+        (_PgError("fk_domains_tenant_id_tenants"), False),
+        (_PgError(None), False),
+        (
+            _SqliteError(
+                "UNIQUE constraint failed: domains.tenant_id, domains.name",
+                "SQLITE_CONSTRAINT_UNIQUE",
+            ),
+            True,
+        ),
+        (
+            _SqliteError(
+                "UNIQUE constraint failed: domains.id, domains.tenant_id",
+                "SQLITE_CONSTRAINT_UNIQUE",
+            ),
+            False,
+        ),
+        (
+            _SqliteError("FOREIGN KEY constraint failed", "SQLITE_CONSTRAINT_FOREIGNKEY"),
+            False,
+        ),
+        (
+            _SqliteError(
+                "UNIQUE constraint failed: domains.tenant_id, domains.name",
+                "SQLITE_CONSTRAINT_CHECK",
+            ),
+            False,
+        ),
+        (Exception("UNIQUE constraint failed: domains.tenant_id, domains.name"), False),
+    ],
+)
+def test_is_name_conflict(orig: Exception, expected: bool) -> None:
+    assert is_name_conflict(IntegrityError("stmt", {}, orig)) is expected

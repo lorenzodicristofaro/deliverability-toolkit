@@ -36,6 +36,7 @@ from app.core.i18n import t
 from app.core.security import SESSION_COOKIE_NAME, unsign_session_token
 from app.main import create_app
 from app.models import Domain, DomainAccess, Membership, MembershipRole, Tenant, User
+from app.repositories.domain import DomainRepository
 from app.services.auth import SessionPolicy, create_session
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -695,3 +696,19 @@ def test_errors_are_translated(world: World) -> None:
     bad = call(world, "owner", "POST", BASE, json={"name": "bad name"}, headers=headers)
     assert bad.json() == detail("domain.error.invalid_name", "it")
     assert detail("api.error.not_found", "it") != detail("api.error.not_found", "en")
+
+
+@pytest.mark.parametrize("method", ["POST", "PATCH"])
+def test_db_enforced_duplicate_is_409(
+    world: World, monkeypatch: pytest.MonkeyPatch, method: str
+) -> None:
+    """The repository pre-check is bypassed (as in a concurrent insert): the unique constraint
+    still yields a 409, and the session stays usable for the next request."""
+    monkeypatch.setattr(DomainRepository, "get_by_name", lambda self, name: None)
+    path = BASE if method == "POST" else f"{BASE}/{world.domains['unassigned']}"
+    before = snapshot(world)
+    response = call(world, "owner", method, path, json={"name": "assigned.example"})
+    assert response.status_code == 409
+    assert response.json() == detail("api.error.conflict")
+    assert snapshot(world) == before
+    assert call(world, "owner", "GET", BASE).status_code == 200

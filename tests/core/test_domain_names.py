@@ -34,6 +34,7 @@ assert len(NAME_253) == 253
         ("XN--MNCHEN-3YA.DE", "xn--mnchen-3ya.de"),
         ("example。com", "example.com"),  # ideographic full stop (UTS #46 mapping)
         ("ｅｘａｍｐｌｅ.com", "example.com"),  # full-width letters
+        ("exa­mple.com", "example.com"),  # soft hyphen is "ignored" in UTS #46: dropped
         (f"{LABEL_63}.com", f"{LABEL_63}.com"),
         (NAME_253, NAME_253),
         (NAME_253 + ".", NAME_253),

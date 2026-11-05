@@ -2,7 +2,9 @@
 
 IDNA 2008 with UTS #46 mapping via the `idna` package (BSD-3-Clause), NOT the stdlib `idna` codec
 (IDNA 2003). `idna.encode(name, uts46=True, std3_rules=True, transitional=False)`:
-- UTS #46 mapping: case folding, full-width characters and ideographic dots are mapped;
+- UTS #46 mapping: case folding, full-width characters and ideographic dots are mapped, and
+  characters UTS #46 marks "ignored" are silently dropped (e.g. U+00AD SOFT HYPHEN:
+  "exa\\u00admple.com" becomes "example.com");
 - non-transitional processing: deviation characters such as "ß" are kept (IDNA 2008), not mapped
   to "ss" (IDNA 2003 behaviour);
 - STD3 rules: only letters, digits and hyphen in the ASCII result (so no "_", "*", "/", spaces).

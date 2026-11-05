@@ -12,10 +12,44 @@ from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 
+from sqlalchemy import Table, UniqueConstraint
+from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.exc import IntegrityError
 
 from app.models import Domain
 from app.repositories.base import DEFAULT_LIMIT, MAX_LIMIT, TenantScopedRepository, coerce_id
+
+# The per-tenant unique name constraint (naming convention in app.models.base).
+NAME_CONSTRAINT = "uq_domains_tenant_id_name"
+
+
+def _name_constraint_columns() -> tuple[str, ...]:
+    table = sa_inspect(Domain).local_table
+    if not isinstance(table, Table):
+        raise RuntimeError("the domains model is not mapped to a table")
+    for constraint in table.constraints:
+        if isinstance(constraint, UniqueConstraint) and constraint.name == NAME_CONSTRAINT:
+            return tuple(column.name for column in constraint.columns)
+    raise RuntimeError(f"{NAME_CONSTRAINT} is not defined on the domains table")
+
+
+# SQLite does not report constraint names, only "UNIQUE constraint failed: <table>.<col>, ...".
+_SQLITE_NAME_MESSAGE = "UNIQUE constraint failed: " + ", ".join(
+    f"{Domain.__tablename__}.{column}" for column in _name_constraint_columns()
+)
+
+
+def is_name_conflict(exc: IntegrityError) -> bool:
+    """True only if `exc` is a violation of NAME_CONSTRAINT. PostgreSQL (psycopg) names the
+    constraint in `diag.constraint_name`; SQLite only names the columns, which are taken from the
+    model's constraint definition. Any other IntegrityError (FK, check, other unique) is False."""
+    orig = exc.orig
+    diag = getattr(orig, "diag", None)
+    if diag is not None:
+        return getattr(diag, "constraint_name", None) == NAME_CONSTRAINT
+    if getattr(orig, "sqlite_errorname", None) == "SQLITE_CONSTRAINT_UNIQUE":
+        return str(orig) == _SQLITE_NAME_MESSAGE
+    return False
 
 
 class DomainNameTaken(Exception):
@@ -74,6 +108,8 @@ class DomainRepository(TenantScopedRepository[Domain]):
         try:
             return self.add(Domain(name=name))
         except IntegrityError as exc:
+            if not is_name_conflict(exc):
+                raise
             raise DomainNameTaken from exc
 
     def rename(self, id_: object, name: str) -> Domain | None:
@@ -88,4 +124,6 @@ class DomainRepository(TenantScopedRepository[Domain]):
         try:
             return self.update(current.id, {"name": name})
         except IntegrityError as exc:
+            if not is_name_conflict(exc):
+                raise
             raise DomainNameTaken from exc
