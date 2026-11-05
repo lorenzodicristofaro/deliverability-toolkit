@@ -30,9 +30,9 @@ from dataclasses import dataclass
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import Field, StrictBool, StrictStr
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictStr
 
-from app.api.v1.domains import Body, _error, _parse, _Strict
+from app.api.v1._common import Body, _error, _parse, _Strict
 from app.core.config import ResolverAddr
 from app.core.domain_names import InvalidDomainName, to_dns_name
 from app.core.i18n import t
@@ -45,8 +45,10 @@ from app.dns.knowledge import PublicResolver, RootHints, RootServer, root_hints
 from app.dns.trace import (
     DEFAULT_LIMITS,
     AddressPolicy,
+    HopKind,
     QueryServer,
     TraceHop,
+    TraceOutcome,
     TraceReport,
     query_server_for,
     trace,
@@ -56,9 +58,11 @@ from app.services.dns_propagation import (
     AddressFactory,
     PropagationReport,
     PropagationRow,
+    Verdict,
     check_propagation,
 )
 from app.services.dns_tools import (
+    FcrdnsState,
     InvalidLookupInput,
     LookupReport,
     LookupResolvers,
@@ -371,10 +375,186 @@ async def _run(request: Request, work: Awaitable[dict[str, Any]]) -> dict[str, A
         return _deadline_json()
 
 
+# --- response models (OpenAPI schemas; every ResultState is part of the contract) ---------------
+
+
+class _Out(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+class RecordOut(_Out):
+    name: str
+    rdtype: str
+    ttl: int
+    rdata: str
+
+
+class TypeResultOut(_Out):
+    rdtype: str
+    state: ResultState
+    evaluated: bool  # False for every failure state
+    records: list[RecordOut]
+    ttl_min: int | None
+    authenticated_data: bool
+    elapsed_ms: float
+    server: str | None
+    detail_code: str | None
+
+
+class LookupSummaryOut(_Out):
+    evaluated: bool
+    found: list[str]
+    absent: list[str]
+    failed: list[str]
+
+
+class LookupOut(_Out):
+    name: str
+    resolver: str
+    resolver_identity: str
+    results: list[TypeResultOut]
+    summary: LookupSummaryOut
+    authenticated_data: bool
+    elapsed_ms: float
+
+
+class ForwardCheckOut(_Out):
+    ptr_name: str
+    results: list[TypeResultOut]
+    matches: bool | None  # None: could not be evaluated
+
+
+class ReverseOut(_Out):
+    ip: str
+    ptr_name: str
+    resolver: str
+    resolver_identity: str
+    ptr: TypeResultOut
+    fcrdns: FcrdnsState
+    forward: list[ForwardCheckOut]
+    detail_code: str | None
+    evaluated: bool
+    elapsed_ms: float
+
+
+class HopOut(_Out):
+    kind: HopKind
+    zone: str
+    name: str
+    rdtype: str
+    state: ResultState
+    evaluated: bool
+    server_name: str | None
+    server_addr: str | None
+    rcode: int | None
+    detail_code: str | None
+    referral_zone: str | None
+    referral_ns: list[str]
+    records: list[RecordOut]
+    authenticated_data: bool
+    elapsed_ms: float
+
+
+class TraceOut(_Out):
+    name: str
+    rdtype: str
+    outcome: TraceOutcome
+    state: ResultState  # ok/nxdomain/nodata, else error
+    evaluated: bool
+    hops: list[HopOut]
+    answer: list[RecordOut]
+    final_zone: str | None
+    final_server: str | None
+    queries_sent: int
+    elapsed_ms: float
+    detail_code: str | None
+
+
+class PropagationRowOut(_Out):
+    resolver: str
+    address: str | None
+    unverified: bool
+    state: ResultState
+    evaluated: bool
+    records: list[RecordOut]
+    ttl_min: int | None
+    group: int | None
+    elapsed_ms: float
+    detail_code: str | None
+
+
+class GroupRecordOut(_Out):
+    name: str
+    rdtype: str
+    rdata: str
+
+
+class AnswerGroupOut(_Out):
+    index: int
+    state: ResultState
+    rdata: list[GroupRecordOut]
+    members: list[int]
+
+
+class PropagationOut(_Out):
+    name: str
+    rdtype: str
+    verdict: Verdict
+    evaluated: bool
+    rows: list[PropagationRowOut]
+    groups: list[AnswerGroupOut]
+    evaluated_count: int
+    not_evaluated_count: int
+    min_evaluated: int
+    includes_unverified: bool
+    elapsed_ms: float
+
+
+class DeadlineOut(_Out):
+    """The whole request ran out of time: not evaluated."""
+
+    state: ResultState
+    evaluated: bool
+    detail_code: str
+
+
+class InvalidRequestDetail(_Out):
+    key: str
+    message: str
+    field: str
+    reason: str
+
+
+class InvalidRequestOut(_Out):
+    detail: InvalidRequestDetail
+
+
+_ERRORS: dict[int | str, dict[str, Any]] = {
+    422: {"model": InvalidRequestOut, "description": "Invalid input: codes only, no echo"},
+}
+
+
+# --- OpenAPI request bodies ---------------------------------------------------------------------
+# Bodies are read and validated by `_payload` (strict JSON, no echo), not by FastAPI, so the
+# handlers declare no body parameter; the request schema is documented through `openapi_extra`
+# (generated from the same strict model, inline: FastAPI only registers components for models it
+# parses itself).
+
+
+def _body_doc(model: type[_Strict]) -> dict[str, Any]:
+    schema = model.model_json_schema(ref_template="#/components/schemas/{model}")
+    return {"requestBody": {"required": True, "content": {"application/json": {"schema": schema}}}}
+
+
 # --- routes -------------------------------------------------------------------------------------
 
 
-@router.post("/lookup")
+@router.post(
+    "/lookup",
+    response_model=LookupOut | DeadlineOut,
+    responses=_ERRORS,
+    openapi_extra=_body_doc(LookupIn),
+)
 async def dns_lookup(
     request: Request, _ctx: Access, backend: Backend, body: Body
 ) -> dict[str, Any]:
@@ -393,7 +573,12 @@ async def dns_lookup(
     return await _run(request, work())
 
 
-@router.post("/reverse")
+@router.post(
+    "/reverse",
+    response_model=ReverseOut | DeadlineOut,
+    responses=_ERRORS,
+    openapi_extra=_body_doc(ReverseIn),
+)
 async def dns_reverse(
     request: Request, _ctx: Access, backend: Backend, body: Body
 ) -> dict[str, Any]:
@@ -412,7 +597,12 @@ async def dns_reverse(
     return await _run(request, work())
 
 
-@router.post("/trace")
+@router.post(
+    "/trace",
+    response_model=TraceOut | DeadlineOut,
+    responses=_ERRORS,
+    openapi_extra=_body_doc(TraceIn),
+)
 async def dns_trace(request: Request, _ctx: Access, backend: Backend, body: Body) -> dict[str, Any]:
     payload = _payload(request, TraceIn, body)
 
@@ -437,7 +627,12 @@ async def dns_trace(request: Request, _ctx: Access, backend: Backend, body: Body
     return await _run(request, work())
 
 
-@router.post("/propagation")
+@router.post(
+    "/propagation",
+    response_model=PropagationOut | DeadlineOut,
+    responses=_ERRORS,
+    openapi_extra=_body_doc(PropagationIn),
+)
 async def dns_propagation(
     request: Request, _ctx: Access, backend: Backend, body: Body
 ) -> dict[str, Any]:

@@ -25,6 +25,7 @@ from app.core import i18n
 from app.core.config import Settings
 from app.core.db import create_db_engine, create_session_factory
 from app.core.i18n import t
+from app.dns.cache import CachingResolver
 from app.dns.types import DnsQuestion, DnsResult, ResultState
 from app.main import create_app
 from app.models import Membership
@@ -51,11 +52,6 @@ def _strict_mode() -> Iterator[None]:
 
 
 @pytest.fixture
-def servers() -> FakeServerSet:
-    return fake_backend()[1]
-
-
-@pytest.fixture
 def world(db_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[World]:
     monkeypatch.setenv("DATABASE_URL", db_url)
     monkeypatch.setenv("SECRET_KEY", KEY)
@@ -79,7 +75,7 @@ def world(db_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[World]:
         engine.dispose()
 
 
-def use(world: World, backend_servers: FakeServerSet | None = None, **zones: Any) -> FakeServerSet:
+def use(world: World, **zones: Any) -> FakeServerSet:
     """Swap the backend of the running app (custom zones)."""
     backend, fs = fake_backend(zones or None)
     world.client.app.dependency_overrides[dns_backend] = lambda: backend  # type: ignore[attr-defined]
@@ -239,10 +235,31 @@ def test_lookup_public_resolver_selector(world: World) -> None:
     assert body.json()["resolver"] == "public:google"
 
 
-def test_lookup_defaults_and_no_cache(world: World) -> None:
+def test_lookup_defaults(world: World) -> None:
     assert post(world, "lookup", {"name": "example.com"}).status_code == 200
-    r = post(world, "lookup", {"name": "example.com", "type": "A", "no_cache": True})
-    assert r.status_code == 200
+
+
+def test_no_cache_reaches_the_inner_resolver(world: World) -> None:
+    fs = fake_backend()[1]
+    inner = fs.resolver("default")
+    base, _ = fake_backend()
+    cached = dns_tools.DnsBackend(
+        lookup=dns_tools.LookupResolvers(CachingResolver(inner)),
+        address_factory=base.address_factory,
+        query_server=base.query_server,
+        root_hints=base.root_hints,
+        policy=base.policy,
+    )
+    world.client.app.dependency_overrides[dns_backend] = lambda: cached  # type: ignore[attr-defined]
+    body = {"name": "example.com", "type": "A"}
+    assert post(world, "lookup", body).status_code == 200
+    assert len(inner.questions) == 1
+    assert post(world, "lookup", body).status_code == 200
+    assert len(inner.questions) == 1  # a normal repeat is served from the cache
+    assert post(world, "lookup", {**body, "no_cache": True}).status_code == 200
+    assert len(inner.questions) == 2  # no_cache goes to the resolver
+    assert post(world, "lookup", body).status_code == 200
+    assert len(inner.questions) == 2  # and the cache is untouched afterwards
 
 
 # --- input errors: 422 with codes only, no echo -----------------------------------------------
@@ -531,3 +548,53 @@ def test_lifespan_logs_resolver_config(world: World, caplog: pytest.LogCaptureFi
         getattr(r, "event", None) == "config.resolver" and "resolver mode=" in r.getMessage()
         for r in caplog.records
     )
+
+
+# --- no DNS work for unauthorised requests ----------------------------------------------------
+
+
+@pytest.mark.parametrize("path", PATHS)
+@pytest.mark.parametrize(
+    "who,tenant,status", [("anon", "a", 401), ("viewer", "a", 403), ("analyst", "b", 404)]
+)
+def test_unauthorised_requests_do_no_dns_work(
+    world: World, path: str, who: str, tenant: str, status: int
+) -> None:
+    backend, fs = fake_backend()
+    built: list[int] = []
+
+    def counting() -> dns_tools.DnsBackend:
+        built.append(1)
+        return backend
+
+    world.client.app.dependency_overrides[dns_backend] = counting  # type: ignore[attr-defined]
+    r = call(world, who, "POST", f"{BASE}/{path}", json=BODIES[path], tenant=tenant)
+    assert r.status_code == status
+    assert built == []  # the backend is never even built
+    assert fs.all_questions == [] and fs.server_queries == []
+
+
+# --- OpenAPI ----------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("path", PATHS)
+def test_openapi_documents_request_and_response(path: str) -> None:
+    schema = create_app().openapi()
+    op = schema["paths"][f"{BASE}/{path}"]["post"]
+    body = op["requestBody"]["content"]["application/json"]["schema"]
+    assert op["requestBody"]["required"] is True
+    assert body["additionalProperties"] is False and body["properties"]
+    ok = op["responses"]["200"]["content"]["application/json"]["schema"]
+    refs = {x["$ref"].rsplit("/", 1)[1] for x in ok["anyOf"]}
+    assert len(refs) == 2 and "DeadlineOut" in refs
+    assert refs <= set(schema["components"]["schemas"])
+    assert "$ref" in op["responses"]["422"]["content"]["application/json"]["schema"]
+
+
+def test_openapi_exposes_every_result_state() -> None:
+    components = create_app().openapi()["components"]["schemas"]
+    states = {s.value for s in ResultState}
+    assert set(components["TypeResultOut"]["properties"]["state"]["$ref"].split("/")[-1:]) == {
+        "ResultState"
+    }
+    assert set(components["ResultState"]["enum"]) == states
