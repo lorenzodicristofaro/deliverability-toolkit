@@ -36,7 +36,7 @@ Carried over from M0-07 QA:
   - [x] M2-05 backends system/custom/Unbound (dnspython dependency, opus)
   - [x] M2-06 TTL cache
   - [x] M2-07 public resolver list + root hints data files (unverified entries flagged)
-  - [ ] M2-08 lookup + reverse service
+  - [x] M2-08 lookup + reverse service
   - [ ] M2-09 trace (opus)
   - [ ] M2-10 propagation
   - [x] M2-11 `dns.tools` permission (opus)
