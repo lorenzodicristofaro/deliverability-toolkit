@@ -17,7 +17,7 @@ from alembic import command
 from alembic.config import Config
 from argon2 import PasswordHasher
 from pydantic import SecretStr
-from sqlalchemy import select, text
+from sqlalchemy import event, select, text
 from sqlalchemy.orm import Session
 
 from app.core import security
@@ -25,6 +25,7 @@ from app.core.config import Settings
 from app.core.db import create_db_engine, create_session_factory
 from app.core.security import hash_password, hash_session_token, unsign_session_token
 from app.models import Tenant, User, UserSession
+from app.models.user import MAX_EMAIL_LENGTH
 from app.services import auth
 from app.services.auth import (
     SessionPolicy,
@@ -129,6 +130,68 @@ def test_unknown_user_runs_dummy_verify(
     monkeypatch.setattr(security, "verify_password", spy)
     assert _login(env, email, PASSWORD) is None
     assert len(calls) == 1  # same argon2 work as a real account
+
+
+LONG_LOCAL = "a" * (MAX_EMAIL_LENGTH - len("@example.com"))
+REJECTED_BEFORE_QUERY = [
+    "alice@example.com\x00",  # NUL: PostgreSQL text raises DataError
+    "\x00alice@example.com",
+    "ali\x00ce@example.com",
+    "alice@exa\x01mple.com",  # other C0 controls
+    "alice@example.com\x1b",
+    "alice@example.com\x7f",  # DEL
+    "alice@exa\x85mple.com",  # C1 (NEL)
+    "alice@example.com\ud800",  # lone surrogate: not encodable as UTF-8
+    "a" + LONG_LOCAL + "@example.com",  # 255 chars: over the cap
+    "a" * 5000 + "@example.com",
+]
+
+
+@pytest.mark.parametrize("email", REJECTED_BEFORE_QUERY)
+def test_unusable_email_rejected_before_any_query(
+    env: Env, email: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert auth.lookup_email(email) is None
+    statements: list[str] = []
+    calls: list[str] = []
+    real = security.verify_password
+
+    def spy(stored: str, pw: str, hasher: PasswordHasher = FAST) -> bool:
+        calls.append(stored)
+        return real(stored, pw, hasher)
+
+    def record(*args: Any) -> None:
+        statements.append(args[2])
+
+    monkeypatch.setattr(security, "verify_password", spy)
+    bind = env.db.get_bind()
+    event.listen(bind, "before_cursor_execute", record)
+    try:
+        assert _login(env, email, PASSWORD) is None
+    finally:
+        event.remove(bind, "before_cursor_execute", record)
+    assert statements == []  # never reaches the database
+    assert len(calls) == 1  # timing: still one argon2 verification
+
+
+@pytest.mark.parametrize(
+    ("email", "expected"),
+    [
+        ("Alice@Example.com", "alice@example.com"),
+        (" alice@example.com\t", "alice@example.com"),  # surrounding whitespace is stripped
+        (LONG_LOCAL + "@example.com", LONG_LOCAL + "@example.com"),  # exactly 254: allowed
+        ("x@ex\u00e4mple.com", "x@ex\u00e4mple.com"),  # non-ASCII is not a control character
+        ("jos\u00e9@example.com", "jos\u00e9@example.com"),  # Unicode local part
+        ("alice@example.com\x00", None),
+        ("alice@example.com\x9f", None),
+        ("a" + LONG_LOCAL + "@example.com", None),
+        ("not-an-email", None),
+        (None, None),
+        (b"alice@example.com", None),
+    ],
+)
+def test_lookup_email(email: Any, expected: str | None) -> None:
+    assert auth.lookup_email(email) == expected
 
 
 def test_rehash_on_login_when_parameters_change(env: Env) -> None:

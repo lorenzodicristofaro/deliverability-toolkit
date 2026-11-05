@@ -39,6 +39,7 @@ from app.services.auth import (
     SessionPolicy,
     authenticate,
     create_session,
+    lookup_email,
     resolve_session,
     revoke_session,
 )
@@ -145,6 +146,8 @@ async def login(request: Request, db: DbDep, settings: SettingsDep) -> Response:
     email = form_value(form, "email")
     password = form_value(form, "password")
     next_path = safe_next(form_value(form, "next"))
+    # Unusable input (control characters, over-long, malformed) is not echoed back to the page.
+    shown_email = email if lookup_email(email) is not None else ""
     ip = _client_ip(request)
     throttle = login_throttle(request)
 
@@ -154,7 +157,7 @@ async def login(request: Request, db: DbDep, settings: SettingsDep) -> Response:
     if wait > 0:
         logger.warning("login throttled", extra={"event": "auth.login_throttled"})
         page = _login_page(
-            request, status_code=429, next_path=next_path, email=email, error="throttled"
+            request, status_code=429, next_path=next_path, email=shown_email, error="throttled"
         )
         page.headers["Retry-After"] = str(max(1, math.ceil(wait)))
         return page
@@ -165,7 +168,7 @@ async def login(request: Request, db: DbDep, settings: SettingsDep) -> Response:
     if issued is None:  # the failure was already counted by acquire()
         logger.info("login failed", extra={"event": "auth.login_failed"})
         return _login_page(
-            request, status_code=401, next_path=next_path, email=email, error="failed"
+            request, status_code=401, next_path=next_path, email=shown_email, error="failed"
         )
     throttle.record_success(ip, email)
     response = RedirectResponse(next_path, status_code=303)
