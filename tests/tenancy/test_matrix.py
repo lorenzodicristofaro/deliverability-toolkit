@@ -42,9 +42,11 @@ import app.api
 import app.web
 from app.core.i18n import t
 from app.core.security import SESSION_COOKIE_NAME
+from app.core.tenancy import TenantContext
 from app.main import create_app
+from app.repositories import repo_for
 from app.web import deps
-from tests.tenancy.conftest import ROLES, World, leaks
+from tests.tenancy.conftest import ROLES, World, WorldMutated, assert_pristine, leaks
 
 ROOT = Path(__file__).resolve().parents[2]
 TESTING_DOC = ROOT / "docs" / "TESTING.md"
@@ -132,6 +134,9 @@ class Entry:
     body: Body | None = None
     own: Mapping[str, int] = field(default_factory=dict)  # role -> status, target "own"
     smuggle: Mapping[str, int] = field(default_factory=dict)  # role -> status, "smuggle"
+    # (role, target) -> reason: a known isolation bug, reported as a ticket and NOT fixed here.
+    # The case is marked xfail(strict=True), so it fails again once the bug is fixed.
+    xfail: Mapping[tuple[str, str], str] = field(default_factory=dict)
 
 
 def _by_role(writers: int, readers: int) -> dict[str, int]:
@@ -184,13 +189,20 @@ MATRIX: dict[tuple[str, str], Entry] = {
     ("PUT", "/api/v1/domains/{domain_id}/access"): Entry(Kind.DOMAIN, body=_access),
 }
 
-# Public routes, all methods. Keep this minimal: each needs a reason here AND in docs/TESTING.md.
-EXEMPT: dict[str, str] = {
-    "/healthz": "liveness probe for orchestrators; no session, no tenant data",
-    "/login": "pre-session login form; resolves no tenant context (tests/web/test_auth_endpoints)",
-    "/setup": "first-run wizard, 404 once any user exists (tests/web/test_setup)",
-    "/static": "packaged CSS/JS (StaticFiles mount); no session, no data",
-    "/language": "sets the language cookie only; no session or tenant data",
+# Public routes by (method, path): a new method on an exempt path is NOT exempt. Keep this
+# minimal: each needs a reason here AND a row in docs/TESTING.md.
+_HEALTH = "liveness probe for orchestrators; no session, no tenant data"
+_LOGIN = "pre-session login; resolves no tenant context (tests/web/test_auth_endpoints)"
+_SETUP = "first-run wizard, 404 once any user exists (tests/web/test_setup)"
+EXEMPT: dict[tuple[str, str], str] = {
+    ("GET", "/healthz"): _HEALTH,
+    ("HEAD", "/healthz"): _HEALTH,
+    ("GET", "/login"): _LOGIN,
+    ("POST", "/login"): _LOGIN,
+    ("GET", "/setup"): _SETUP,
+    ("POST", "/setup"): _SETUP,
+    (MOUNT, "/static"): "packaged CSS/JS (StaticFiles mount); no session, no data",
+    ("POST", "/language"): "sets the language cookie only; no session or tenant data",
 }
 
 # Targets per kind (besides "anon"). The viewer additionally gets "unassigned" on DOMAIN routes.
@@ -215,9 +227,18 @@ class Case:
         return f"{self.leaf.method} {self.leaf.path} [{self.role}/{self.target}]"
 
 
+def uncovered(leaves: list[Leaf]) -> list[str]:
+    """Leaf routes that are neither a MATRIX entry nor an EXEMPT (method, path)."""
+    return sorted(
+        f"{leaf.method} {leaf.path}"
+        for leaf in leaves
+        if leaf.key not in EXEMPT and leaf.key not in MATRIX
+    )
+
+
 def generate_cases(leaves: list[Leaf]) -> Iterator[Case]:
     for leaf in leaves:
-        if leaf.path in EXEMPT:
+        if leaf.key in EXEMPT:
             continue
         entry = MATRIX.get(leaf.key)
         if entry is None:  # uncovered route: one failing case (and the guard test fails)
@@ -236,6 +257,12 @@ def generate_cases(leaves: list[Leaf]) -> Iterator[Case]:
 
 
 CASES = list(generate_cases(LEAVES))
+
+
+def _param(case: Case) -> Any:
+    reason = case.entry.xfail.get((case.role, case.target)) if case.entry else None
+    marks = [pytest.mark.xfail(strict=True, reason=reason)] if reason else []
+    return pytest.param(case, id=case.id, marks=marks)
 
 
 # --- route-table guard -------------------------------------------------------------------------
@@ -296,27 +323,39 @@ def test_enumeration_finds_the_app_routes() -> None:
 def test_every_route_is_in_the_matrix_or_exempt() -> None:
     unknown = [leaf for leaf in LEAVES if leaf.method == "?"]
     assert unknown == [], "unsupported route type: extend leaf_routes and the matrix"
-    uncovered = sorted(
-        f"{leaf.method} {leaf.path}"
-        for leaf in LEAVES
-        if leaf.path not in EXEMPT and leaf.key not in MATRIX
-    )
-    assert uncovered == [], "add a MATRIX entry (or a documented EXEMPT reason) for each"
+    assert uncovered(LEAVES) == [], "add a MATRIX entry (or a documented EXEMPT reason)"
+
+
+def test_exemption_is_per_method() -> None:
+    """A new verb on an exempt path (e.g. DELETE /login) is not exempt by inheritance."""
+    login = next(leaf for leaf in LEAVES if leaf.key == ("POST", "/login"))
+    added = [
+        Leaf("DELETE", "/login", "delete_login", login.route),
+        Leaf("PUT", "/healthz", "put_health", login.route),
+        Leaf("GET", "/static", "static_get", login.route),
+    ]
+    assert uncovered([*LEAVES, *added]) == ["DELETE /login", "GET /static", "PUT /healthz"]
+    generated = [c for c in generate_cases([*LEAVES, *added]) if c.target == "uncovered"]
+    assert sorted(c.id for c in generated) == [
+        "DELETE /login [-/uncovered]",
+        "GET /static [-/uncovered]",
+        "PUT /healthz [-/uncovered]",
+    ]
 
 
 def test_matrix_and_exemptions_have_no_stale_entries() -> None:
     keys = {leaf.key for leaf in LEAVES}
-    paths = {leaf.path for leaf in LEAVES}
     assert sorted(set(MATRIX) - keys) == []
-    assert sorted(set(EXEMPT) - paths) == []
-    assert not {p for _, p in MATRIX} & set(EXEMPT)
+    assert sorted(set(EXEMPT) - keys) == []
+    assert not set(MATRIX) & set(EXEMPT)
+    assert not {p for _, p in MATRIX} & {p for _, p in EXEMPT}
 
 
 def test_exemptions_are_documented() -> None:
     doc = TESTING_DOC.read_text(encoding="utf-8")
-    for path, reason in EXEMPT.items():
+    for (method, path), reason in EXEMPT.items():
         assert reason
-        assert f"`{path}`" in doc, f"{path} exemption is not documented in docs/TESTING.md"
+        assert f"`{method} {path}`" in doc, f"{method} {path} is not documented in TESTING.md"
 
 
 def test_matrix_routes_require_a_session_and_exempt_ones_no_tenant() -> None:
@@ -328,7 +367,7 @@ def test_matrix_routes_require_a_session_and_exempt_ones_no_tenant() -> None:
             continue
         if leaf.key in MATRIX:
             assert depends_on(leaf.route, deps.current_session), leaf.key
-        else:
+        elif leaf.key in EXEMPT:
             assert not depends_on(leaf.route, deps.current_session), leaf.key
             assert not depends_on(leaf.route, deps.tenant_ctx), leaf.key
 
@@ -378,10 +417,29 @@ def _listed_ids(case: Case, response: Any) -> set[int]:
     return {int(m) for m in ROW.findall(response.text)}
 
 
-@pytest.mark.parametrize("case", CASES, ids=[c.id for c in CASES])
+def _remove_probe(w: World, role: str) -> None:
+    """Delete the domain a successful "smuggle" create added to tenant A (restores the
+    baseline for the next case)."""
+    domains = repo_for(TenantContext(w.tenants["a"], None), w.db).domains
+    probe = domains.get_by_name(_rename(w, role)["name"])
+    if probe is not None:
+        domains.delete(probe.id)
+        w.db.commit()
+
+
+@pytest.mark.parametrize("case", [_param(c) for c in CASES])
 def test_matrix(world: World, logs: pytest.LogCaptureFixture, case: Case) -> None:
     assert case.entry is not None, f"route not covered by the tenancy matrix: {case.id}"
+    try:
+        _check_case(world, logs, case)
+    finally:
+        if case.target == "smuggle":
+            _remove_probe(world, case.role)
+
+
+def _check_case(world: World, logs: pytest.LogCaptureFixture, case: Case) -> None:
     entry = case.entry
+    assert entry is not None
     before_a, before_b = world.state("a"), world.state("b")
     tenant = "b" if case.target.startswith("b_session") else "a"
     fresh = entry.kind in (Kind.SESSION, Kind.SWITCH)  # these consume/rotate the session
@@ -435,12 +493,53 @@ def test_matrix(world: World, logs: pytest.LogCaptureFixture, case: Case) -> Non
             assert {world.domains["assigned"], world.domains["unassigned"]} <= ids
 
 
+# Exempt routes requested below as every role. POST /login and POST /setup are not: they are
+# covered by tests/web/test_auth_endpoints.py and tests/web/test_setup.py (docs/TESTING.md).
+EXEMPT_PROBES: tuple[tuple[str, str, int], ...] = (
+    ("GET", "/healthz", 200),
+    ("HEAD", "/healthz", 200),
+    ("GET", "/login", 200),
+    ("GET", "/setup", 404),
+    ("GET", "/static/app.css", 200),
+)
+
+
 @pytest.mark.parametrize("who", ["anon", *ROLES])
 def test_exempt_routes_leak_nothing(world: World, logs: pytest.LogCaptureFixture, who: str) -> None:
-    for method, path in (("GET", "/healthz"), ("GET", "/login"), ("GET", "/setup")):
+    for method, path, status in EXEMPT_PROBES:
         response = world.send(who, method, path)
-        assert response.status_code in (200, 303, 404), path
-        assert leaks(world, response, logs) == [], path
+        assert response.status_code == status, (method, path)
+        assert leaks(world, response, logs) == [], (method, path)
     response = world.send(who, "POST", "/language", form={"lang": "it", "next": "/"})
     assert response.status_code == 303
     assert leaks(world, response, logs) == []
+
+
+def test_mutated_world_is_detected(seeded_world: World) -> None:
+    """Self-test of the baseline guard: a change to either tenant makes the next test's `world`
+    fixture fail loudly instead of letting later cases pass vacuously."""
+    assert_pristine(seeded_world)
+    b_domains = repo_for(TenantContext(seeded_world.tenants["b"], None), seeded_world.db).domains
+    secret = seeded_world.domains["secret"]
+    original = b_domains.get(secret)
+    assert original is not None
+    original_name = original.name
+    b_domains.rename(secret, "renamed-by-a-buggy-case.example")
+    seeded_world.db.commit()
+    try:
+        with pytest.raises(WorldMutated, match=r"tenants \['b'\]"):
+            assert_pristine(seeded_world)
+    finally:
+        b_domains.rename(secret, original_name)
+        seeded_world.db.commit()
+    assert_pristine(seeded_world)
+    a_domains = repo_for(TenantContext(seeded_world.tenants["a"], None), seeded_world.db).domains
+    extra = a_domains.create("left-behind.example")
+    seeded_world.db.commit()
+    try:
+        with pytest.raises(WorldMutated, match=r"tenants \['a'\]"):
+            assert_pristine(seeded_world)
+    finally:
+        a_domains.delete(extra.id)
+        seeded_world.db.commit()
+    assert_pristine(seeded_world)

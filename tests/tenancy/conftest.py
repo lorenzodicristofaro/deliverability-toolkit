@@ -12,7 +12,10 @@ service creates them yet (M2 tenant/user management).
 
 The world is module scoped (one schema per test module and database) and runs on SQLite and, when
 TEST_DATABASE_URL is set, on PostgreSQL. Every cross-tenant request must fail, so the shared state
-stays as seeded; tests that change sessions (logout, switch) use fresh sessions. No network.
+stays as seeded; tests that change sessions (logout, switch) use fresh sessions. The `world`
+fixture compares both tenants with the seeded baseline before every test and fails loudly
+(`WorldMutated`) when they differ, so a case that mutated the world cannot make later cases pass
+vacuously. Tests that create data on purpose remove it before they end. No network.
 """
 
 from __future__ import annotations
@@ -87,6 +90,7 @@ class World:
     domains: dict[str, int]  # "assigned", "unassigned" (A); "secret", "idn" (B)
     b_secrets: tuple[str, ...]
     cookies: dict[tuple[str, str], str] = field(default_factory=dict)
+    baseline: dict[str, tuple[Any, ...]] = field(default_factory=dict)  # tenant -> seeded state
 
     def user(self, who: str) -> User:
         return self.db.scalars(select(User).where(User.id == self.users[who])).one()
@@ -247,7 +251,7 @@ def _b_secrets(db: Session, tenant_b: int) -> tuple[str, ...]:
         ),
     ],
 )
-def world(
+def seeded_world(
     request: pytest.FixtureRequest, tmp_path_factory: pytest.TempPathFactory
 ) -> Iterator[World]:
     if request.param == "sqlite":
@@ -267,9 +271,11 @@ def world(
         application = create_app(settings)
         try:
             with TestClient(application, raise_server_exceptions=True) as client:
-                yield World(
+                seeded = World(
                     client, db, settings, tenants, users, domains, _b_secrets(db, tenants["b"])
                 )
+                seeded.baseline = {t: seeded.state(t) for t in ("a", "b")}
+                yield seeded
         finally:
             db.close()
             app_engine = getattr(application.state, "db_engine", None)
@@ -278,6 +284,30 @@ def world(
             engine.dispose()
             if request.param == "postgresql":
                 _reset_postgres(db_url)
+
+
+class WorldMutated(AssertionError):
+    """The shared world no longer matches its seeded baseline."""
+
+
+def assert_pristine(world: World) -> None:
+    """Fail loudly if either tenant differs from the seeded baseline: an earlier test changed
+    the shared module-scoped world, so later cases could pass vacuously (e.g. a deleted tenant B
+    domain makes every "404 for tenant B's domain" case trivially true). The earlier test that
+    changed it is the suspect, not the one failing here."""
+    changed = [t for t, state in world.baseline.items() if world.state(t) != state]
+    if not world.baseline or changed:
+        raise WorldMutated(
+            f"tenancy world differs from its seeded baseline (tenants {changed or 'unknown'}): "
+            "an earlier test mutated it; every later result in this module is untrustworthy"
+        )
+
+
+@pytest.fixture
+def world(seeded_world: World) -> World:
+    """The shared world, checked against the seeded baseline before every test."""
+    assert_pristine(seeded_world)
+    return seeded_world
 
 
 def leaks(world: World, response: Any, caplog: pytest.LogCaptureFixture) -> list[str]:
