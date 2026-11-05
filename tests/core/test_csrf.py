@@ -32,7 +32,8 @@ from app.main import create_app
 KEY = "k" * 40
 SECRET = SecretStr("s" * 40)
 OTHER = SecretStr("t" * 40)
-METHODS = ["POST", "PUT", "PATCH", "DELETE"]
+# PROPFIND: a custom method is checked too (deny by default).
+METHODS = ["POST", "PUT", "PATCH", "DELETE", "PROPFIND"]
 FORM = "application/x-www-form-urlencoded"
 
 
@@ -334,3 +335,23 @@ def test_missing_settings_fail_closed() -> None:
         "/ui/action", headers={csrf.CSRF_HEADER: SESSION_CSRF, **_cookie_header(AUTH)}
     )
     assert response.status_code == 403
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "status"),
+    [
+        ("PROPFIND", "/nope", 403),  # unknown method on an unknown path: refused before routing
+        ("MKCOL", "/ui/action", 403),
+        ("propfind", "/ui/action", 403),
+        ("TRACE", "/ui/token", 405),  # safe set: not checked, route rejects the method
+        ("OPTIONS", "/nope", 404),
+    ],
+)
+def test_deny_by_default_for_non_safe_methods(
+    client: TestClient, method: str, path: str, status: int
+) -> None:
+    assert client.request(method, path).status_code == status
+
+
+def test_safe_methods_set() -> None:
+    assert frozenset({"GET", "HEAD", "OPTIONS", "TRACE"}) == csrf.SAFE_METHODS

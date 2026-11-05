@@ -1,7 +1,9 @@
 """CSRF protection for cookie-authenticated UI routes (M1-14).
 
-Every POST, PUT, PATCH and DELETE request must carry a CSRF token, either in the `X-CSRF-Token`
-header (HTMX) or in the `csrf_token` field of an `application/x-www-form-urlencoded` body.
+Deny by default: every request whose method is not GET, HEAD, OPTIONS or TRACE (so POST, PUT,
+PATCH, DELETE and any custom method such as PROPFIND) must carry a CSRF token, either in the
+`X-CSRF-Token` header (HTMX) or in the `csrf_token` field of an
+`application/x-www-form-urlencoded` body.
 Missing or invalid token -> 403 with the `csrf.invalid` message. GET, HEAD, OPTIONS and TRACE are
 not checked (they must not change state). `/healthz` is exempt so its behaviour is unchanged.
 
@@ -54,7 +56,8 @@ CSRF_INVALID_KEY = "csrf.invalid"
 CSRF_HEADER: Final = "X-CSRF-Token"
 CSRF_FORM_FIELD: Final = "csrf_token"
 CSRF_COOKIE_NAME: Final = "dt_csrf"
-UNSAFE_METHODS: Final = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+# Deny by default: only these methods skip the check.
+SAFE_METHODS: Final = frozenset({"GET", "HEAD", "OPTIONS", "TRACE"})
 EXEMPT_PATHS: Final = frozenset({"/healthz"})
 MAX_FORM_BYTES: Final = 1024 * 1024
 _FORM_CONTENT_TYPE = "application/x-www-form-urlencoded"
@@ -182,7 +185,7 @@ class CSRFMiddleware:
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if (
             scope["type"] != "http"
-            or scope.get("method", "").upper() not in UNSAFE_METHODS
+            or scope.get("method", "").upper() in SAFE_METHODS
             or scope.get("path") in EXEMPT_PATHS
         ):
             await self.app(scope, receive, send)

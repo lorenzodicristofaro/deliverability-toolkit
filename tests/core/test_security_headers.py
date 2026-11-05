@@ -41,6 +41,10 @@ def _app(base_url: str) -> FastAPI:
         response.headers["X-Frame-Options"] = "ALLOWALL"
         return {}
 
+    @app.get("/t/boom")
+    def boom() -> None:
+        raise RuntimeError("secret-detail-do-not-leak")
+
     @app.get("/t/error")
     def error() -> None:
         raise HTTPException(status_code=418)
@@ -111,3 +115,29 @@ def test_no_hsts_without_settings() -> None:
     response = c.get("/healthz")
     assert "strict-transport-security" not in response.headers
     assert response.headers["x-content-type-options"] == "nosniff"
+
+
+@pytest.mark.parametrize(
+    ("base_url", "https"), [("http://localhost:8000", False), ("https://example.test", True)]
+)
+def test_unhandled_exception_500_has_headers_and_no_details(base_url: str, https: bool) -> None:
+    with TestClient(_app(base_url), raise_server_exceptions=False) as c:
+        response = c.get("/t/boom")
+    assert response.status_code == 500
+    for name, value in EXPECTED.items():
+        assert response.headers.get_list(name) == [value], name
+    if https:
+        assert response.headers.get_list("strict-transport-security") == [HSTS_VALUE]
+    else:
+        assert "strict-transport-security" not in response.headers
+    assert response.text == "Internal Server Error"
+    assert "secret-detail" not in response.text
+    assert "RuntimeError" not in response.text
+
+
+def test_unhandled_exception_still_propagates() -> None:
+    with (
+        TestClient(_app("http://localhost:8000")) as c,
+        pytest.raises(RuntimeError, match="secret-detail"),
+    ):
+        c.get("/t/boom")

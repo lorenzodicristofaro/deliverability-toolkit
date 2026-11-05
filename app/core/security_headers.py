@@ -15,11 +15,13 @@ Exact values (set unconditionally; a route cannot loosen them):
 
 The tests assert that these exact values are sent; they make no claim about how a given browser
 enforces them. BASE_URL is read from `app.state.settings` (set by the lifespan); when settings are
-not available HSTS is omitted and the other headers are still sent.
+not available HSTS is omitted and the other headers are still sent. Responses for unhandled
+exceptions (500) carry the same headers (see the `except` branch in the middleware).
 """
 
 from __future__ import annotations
 
+from http import HTTPStatus
 from typing import Final
 
 from starlette.datastructures import MutableHeaders
@@ -32,6 +34,8 @@ CONTENT_SECURITY_POLICY: Final = (
     "form-action 'self'; frame-ancestors 'none'"
 )
 HSTS_VALUE: Final = "max-age=31536000"
+# Protocol reason phrase (not a translatable UI string), identical to Starlette's default 500 body.
+_ERROR_BODY: Final = HTTPStatus.INTERNAL_SERVER_ERROR.phrase.encode("ascii")
 SECURITY_HEADERS: Final[tuple[tuple[str, str], ...]] = (
     ("Content-Security-Policy", CONTENT_SECURITY_POLICY),
     ("X-Content-Type-Options", "nosniff"),
@@ -56,9 +60,12 @@ class SecurityHeadersMiddleware:
             await self.app(scope, receive, send)
             return
         hsts = _https(scope)
+        started = False
 
         async def send_wrapper(message: Message) -> None:
+            nonlocal started
             if message["type"] == "http.response.start":
+                started = True
                 headers = MutableHeaders(scope=message)
                 for name, value in SECURITY_HEADERS:
                     headers[name] = value
@@ -66,4 +73,21 @@ class SecurityHeadersMiddleware:
                     headers["Strict-Transport-Security"] = HSTS_VALUE
             await send(message)
 
-        await self.app(scope, receive, send_wrapper)
+        try:
+            await self.app(scope, receive, send_wrapper)
+        except Exception:
+            # Starlette's ServerErrorMiddleware sits outside user middleware, so its 500 would
+            # carry none of these headers. Send the 500 here (generic body: the HTTP reason
+            # phrase, as Starlette does; no exception details), then re-raise so the error is
+            # still logged and propagated. ServerErrorMiddleware then sees the response as
+            # started and does not send a second one.
+            if not started:
+                await send_wrapper(
+                    {
+                        "type": "http.response.start",
+                        "status": 500,
+                        "headers": [(b"content-type", b"text/plain; charset=utf-8")],
+                    }
+                )
+                await send({"type": "http.response.body", "body": _ERROR_BODY})
+            raise
