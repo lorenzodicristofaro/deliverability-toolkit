@@ -102,20 +102,29 @@ def _aware(value: datetime) -> datetime:
 # --- passwords ------------------------------------------------------------------------------------
 
 
+def lookup_email(email: object) -> str | None:
+    """The normalized email to query `users` with, or None when the input cannot be a stored
+    address: not a str, or rejected by `normalize_email` (malformed, longer than
+    MAX_EMAIL_LENGTH, control character or surrogate). Callers treat None like an unknown user."""
+    if not isinstance(email, str):
+        return None
+    try:
+        return normalize_email(email)  # the same rule the model validator applies on storage
+    except ValueError:
+        return None
+
+
 def authenticate(
     db: Session, email: object, password: object, *, hasher: PasswordHasher = DEFAULT_HASHER
 ) -> User | None:
     """The active user with this email and password, or None. Unknown, malformed or password-less
     accounts still run one argon2 verification (dummy) so timing does not reveal them. On success
-    the hash is upgraded when the hasher parameters changed (rehash-on-login)."""
+    the hash is upgraded when the hasher parameters changed (rehash-on-login). Input rejected by
+    `lookup_email` (NUL/control characters, over-long) never reaches the database."""
     user: User | None = None
-    if isinstance(email, str):
-        try:
-            normalized = normalize_email(email)
-        except ValueError:
-            normalized = None
-        if normalized is not None:
-            user = db.scalars(select(User).where(User.email == normalized)).one_or_none()
+    normalized = lookup_email(email)
+    if normalized is not None:
+        user = db.scalars(select(User).where(User.email == normalized)).one_or_none()
     if user is None or user.password_hash is None or not isinstance(password, str):
         dummy_verify(password, hasher)
         return None

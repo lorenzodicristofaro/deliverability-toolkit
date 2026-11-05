@@ -311,6 +311,9 @@ def test_normalize_domain_name_rejects_malformed(raw: str) -> None:
         ("STRASSE@example.de", "strasse@example.de"),
         ("Straße@example.de", "straße@example.de"),  # lower(), not casefold(): no ß -> ss
         ('"a@b"@example.com', '"a@b"@example.com'),
+        ("jos\u00e9@example.com", "jos\u00e9@example.com"),  # Unicode local part
+        ("a" * 242 + "@example.com", "a" * 242 + "@example.com"),  # 254 chars: the cap
+        (" " + "a" * 242 + "@example.com\t", "a" * 242 + "@example.com"),  # cap after strip
     ],
 )
 def test_normalize_email(raw: str, expected: str) -> None:
@@ -319,7 +322,22 @@ def test_normalize_email(raw: str, expected: str) -> None:
 
 @pytest.mark.parametrize(
     "raw",
-    ["", "   ", "user.example.com", "@example.com", "user@", "@", "us er@example.com"],
+    [
+        "",
+        "   ",
+        "user.example.com",
+        "@example.com",
+        "user@",
+        "@",
+        "us er@example.com",
+        "user@example.com\x00",  # NUL: PostgreSQL text rejects it
+        "us\x00er@example.com",
+        "user@exa\x01mple.com",  # other C0 controls
+        "user@example.com\x7f",  # DEL
+        "user@exa\x85mple.com",  # C1
+        "user@example.com\ud800",  # lone surrogate
+        "a" * 243 + "@example.com",  # 255 chars: over the cap
+    ],
 )
 def test_normalize_email_rejects_malformed(raw: str) -> None:
     with pytest.raises(ValueError):

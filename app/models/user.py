@@ -1,12 +1,20 @@
 """Users. Instance admin is `is_instance_admin` (M1-01 Q4a); per ARCHITECTURE section 4 item 6 the
 flag grants no access to tenant data by itself."""
 
+import unicodedata
 from datetime import datetime
 
 from sqlalchemy import Boolean, DateTime, Index, Integer, String, func, text
 from sqlalchemy.orm import Mapped, mapped_column, validates
 
 from app.models.base import Base
+
+# RFC 5321 caps a forward path at 256 octets including the angle brackets, so an address is at
+# most 254 characters (the column stays String(320); this is the stricter, enforced limit).
+MAX_EMAIL_LENGTH = 254
+# Control characters (Cc: NUL, C0, DEL, C1) and lone surrogates (Cs) never belong in an address;
+# PostgreSQL text rejects NUL and unencodable surrogates outright (DataError).
+_REJECTED_CATEGORIES = frozenset({"Cc", "Cs"})
 
 
 class User(Base):
@@ -36,9 +44,12 @@ class User(Base):
 def normalize_email(email: str) -> str:
     """Strip and lowercase (str.lower, matching the lower(email) index; casefold would rewrite
     e.g. "ß" to "ss"). Lowercasing in Python also covers non-ASCII, which SQLite's lower() does
-    not. Only a minimal shape check: one "@" with non-empty local part and domain."""
+    not. Only a minimal shape check: one "@" with non-empty local part and domain, at most
+    MAX_EMAIL_LENGTH characters after stripping, no whitespace, control character or surrogate."""
     value = email.strip().lower()
     local, sep, domain = value.rpartition("@")
-    if not sep or not local or not domain or any(c.isspace() for c in value):
+    if not sep or not local or not domain or len(value) > MAX_EMAIL_LENGTH:
+        raise ValueError("invalid email address")
+    if any(c.isspace() or unicodedata.category(c) in _REJECTED_CATEGORIES for c in value):
         raise ValueError("invalid email address")
     return value
