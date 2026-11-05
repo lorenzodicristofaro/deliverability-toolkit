@@ -12,6 +12,7 @@ zones:
     - {name: example.com, type: A, ttl: 300, rdata: [192.0.2.10], ad: true}   # ad optional
     - {name: example.com, type: TXT, ttl: 300, rdata: [["part1 ", "part2"]]}   # multi-string TXT
     - {name: x.example.com, type: A, state: servfail, rcode: 2}               # explicit failure
+    - {name: y.example.com, type: A, state: nxdomain, aa: false}              # non-authoritative
     - referral: {zone: example.com, ns: [{name: ns1.example.net, addr: 192.0.2.3}]}
 ```
 
@@ -31,5 +32,10 @@ zones:
 - `query_server` callers must check `reply.referral` before `reply.result.state` (a referral
   reply carries the placeholder state `nodata`). `resolve()` models a recursive server only.
   `FakeServerSet.server_queries` lists every `query_server` call, unknown addresses included.
+- `aa` (optional boolean, default `true`) is the AA flag reported as `ServerReply.authoritative`.
+  Data a server serves (listed entries and the derived `nodata`/`nxdomain`) is authoritative by
+  default; set `aa: false` on an entry to model a non-authoritative/lame answer. Referral replies
+  and unreachable addresses are always `authoritative=False`. Trace (M2-09) accepts
+  `nxdomain`/`nodata` as final only from an authoritative reply. A non-boolean `aa` fails loading.
 - `rcode` agreement follows `DnsResult`: `nxdomain` = 3, `nodata` = 0, any other failure state
   must not use 0 or 3. TXT strings must be latin-1 encodable.
