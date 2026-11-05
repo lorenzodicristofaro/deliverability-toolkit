@@ -1,0 +1,110 @@
+/* Base styles (M1-16). Palette contrast is checked by tests/web/test_templating.py. */
+:root {
+  color-scheme: light dark;
+  --bg: #ffffff;
+  --surface: #f3f5f8;
+  --text: #1a1d21;
+  --muted: #4a5260;
+  --link: #0b5cad;
+  --accent: #0b5cad;
+  --on-accent: #ffffff;
+  --border: #7b8494;
+  --focus: #0b5cad;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #12151a;
+    --surface: #1b2027;
+    --text: #e8eaed;
+    --muted: #aab2bf;
+    --link: #7db7f5;
+    --accent: #7db7f5;
+    --on-accent: #0d1117;
+    --border: #7b8494;
+    --focus: #7db7f5;
+  }
+}
+
+:root[data-theme="dark"] {
+  --bg: #12151a;
+  --surface: #1b2027;
+  --text: #e8eaed;
+  --muted: #aab2bf;
+  --link: #7db7f5;
+  --accent: #7db7f5;
+  --on-accent: #0d1117;
+  --border: #7b8494;
+  --focus: #7db7f5;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 1rem/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+a { color: var(--link); }
+
+:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.skip-link {
+  position: absolute;
+  left: 0.5rem;
+  top: -4rem;
+  padding: 0.5rem 1rem;
+  background: var(--accent);
+  color: var(--on-accent);
+  z-index: 10;
+}
+.skip-link:focus { top: 0.5rem; }
+
+.site-header { background: var(--surface); border-bottom: 1px solid var(--border); }
+.nav {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem 1.5rem;
+  padding: 0.75rem 1rem;
+  max-width: 64rem;
+  margin: 0 auto;
+}
+.brand { font-weight: 700; color: var(--text); text-decoration: none; }
+.nav-links { display: flex; gap: 1rem; list-style: none; margin: 0; padding: 0; }
+.nav-tools { display: flex; gap: 0.75rem; align-items: center; margin-left: auto; }
+.lang-switch { display: flex; gap: 0.25rem; align-items: center; margin: 0; }
+.lang-label { color: var(--muted); margin-right: 0.25rem; }
+
+button {
+  font: inherit;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 0.25rem;
+  padding: 0.25rem 0.75rem;
+  min-height: 2.25rem;
+  cursor: pointer;
+}
+button[aria-current="true"] {
+  background: var(--accent);
+  color: var(--on-accent);
+  border-color: var(--accent);
+}
+
+/* The toggle shows the theme it switches to. */
+.theme-to-light { display: none; }
+:root[data-theme="dark"] .theme-to-light { display: inline; }
+:root[data-theme="dark"] .theme-to-dark { display: none; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .theme-to-light { display: inline; }
+  :root:not([data-theme="light"]) .theme-to-dark { display: none; }
+}
+
+main { max-width: 64rem; margin: 0 auto; padding: 1.5rem 1rem; }
+main:focus { outline: none; }

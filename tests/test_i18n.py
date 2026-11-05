@@ -233,3 +233,55 @@ def test_resolve_language(
 
 def test_resolve_language_bad_default_is_en() -> None:
     assert resolve_language(default="xx") == "en"
+
+
+# --- startup validation and header cap (M1-16) -------------------------------------------------
+
+
+@pytest.fixture
+def locales_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
+    monkeypatch.setattr(i18n, "LOCALES_DIR", tmp_path)
+    i18n.load_catalogue.cache_clear()
+    yield tmp_path
+    i18n.load_catalogue.cache_clear()
+
+
+def test_validate_catalogues_passes_on_the_real_locales() -> None:
+    i18n.validate_catalogues()
+
+
+def test_validate_catalogues_fails_on_empty_dir(locales_dir: Path) -> None:
+    with pytest.raises(FileNotFoundError):
+        i18n.validate_catalogues()
+
+
+@pytest.mark.parametrize("content", ["{not json", "[1, 2]", '"text"', ""])
+def test_validate_catalogues_fails_on_invalid_file(locales_dir: Path, content: str) -> None:
+    (locales_dir / "en.json").write_text("{}", encoding="utf-8")
+    (locales_dir / "it.json").write_text(content, encoding="utf-8")
+    with pytest.raises(ValueError):  # JSONDecodeError is a ValueError
+        i18n.validate_catalogues()
+
+
+def test_validate_catalogues_fails_when_one_language_is_missing(locales_dir: Path) -> None:
+    (locales_dir / "en.json").write_text("{}", encoding="utf-8")
+    with pytest.raises(FileNotFoundError):
+        i18n.validate_catalogues()
+
+
+def test_app_startup_aborts_with_empty_locales_dir(locales_dir: Path) -> None:
+    from fastapi.testclient import TestClient
+
+    from app.core.config import Settings
+    from app.main import create_app
+
+    app = create_app(Settings(secret_key="k" * 40, encryption_key="k" * 40))  # type: ignore[call-arg]
+    with pytest.raises(FileNotFoundError), TestClient(app):
+        pass
+
+
+def test_accept_language_header_is_truncated_to_4kb() -> None:
+    padding = "xx," * 2000  # 6000 characters of unsupported tags
+    assert parse_accept_language(padding + "it") == []  # "it" lies beyond the 4 KB cap
+    assert parse_accept_language("it," + padding) == ["it"]
+    assert i18n.MAX_ACCEPT_LANGUAGE_LENGTH == 4096
