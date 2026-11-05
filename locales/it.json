@@ -15,6 +15,7 @@
   "csrf.invalid": "Token di sicurezza non valido o mancante. Ricarica la pagina e riprova.",
   "setup.email": "Email dell'amministratore",
   "setup.error.email_invalid": "Inserisci un indirizzo email valido.",
+  "setup.error.password_common": "Questa password è troppo comune o contiene il tuo indirizzo email o il nome dell'applicazione. Scegline un'altra.",
   "setup.error.password_long": "La password è troppo lunga.",
   "setup.error.password_mismatch": "Le password non coincidono.",
   "setup.error.password_short": "La password è troppo corta.",

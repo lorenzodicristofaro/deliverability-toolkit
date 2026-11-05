@@ -27,6 +27,15 @@ composition rules SHALL be imposed; each Unicode code point counts as one charac
 normalisation that section recommends is NOT applied, because login (app.services.auth) does
 not normalise either; changing both together is a follow-up.
 
+Blocklist (the same section requires comparing new passwords against a blocklist): an offline,
+minimal check. Refused, case-insensitively and ignoring whitespace: a password equal to or
+containing the email address, its local part (containment only from 4 characters on, so a
+one-letter local part does not ban every password using that letter) or the application name;
+and a password in the bundled list `password_lists/common_passwords.txt` (derived from a
+SecLists list, MIT licence; source, commit and derivation are in the file header; the directory
+is not called `data/`, which .gitignore reserves for runtime data). A breached-password corpus
+(e.g. a k-anonymity lookup or an offline dump) is NOT included: follow-up.
+
 Nothing here logs; no exception carries the token or the password. The caller commits for
 `issue_setup_token`; `complete_setup` commits or rolls back itself.
 """
@@ -40,6 +49,8 @@ import secrets
 import unicodedata
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from functools import cache
+from pathlib import Path
 from typing import Any, cast
 
 from argon2 import PasswordHasher
@@ -52,13 +63,13 @@ from app.core.security import DEFAULT_HASHER, TOKEN_BYTES, hash_password, hash_s
 from app.core.tenancy import TenantContext
 from app.models import InstanceSetup, MembershipRole, Tenant, User
 from app.models.instance_setup import SINGLETON_ID
-from app.models.user import normalize_email
 from app.repositories import repo_for
-from app.services.auth import IssuedSession, SessionPolicy, create_session
+from app.services.auth import IssuedSession, SessionPolicy, create_session, lookup_email
 
 PASSWORD_MIN_LENGTH = 15
 PASSWORD_MAX_LENGTH = 128
-EMAIL_MAX_LENGTH = 320
+COMMON_PASSWORDS_FILE = Path(__file__).resolve().parent / "password_lists" / "common_passwords.txt"
+_LOCAL_PART_MIN_CONTAINED = 4
 TENANT_NAME_MAX_LENGTH = 200
 _SLUG_MAX_LENGTH = 63
 _TOKEN_LENGTH = 43  # secrets.token_urlsafe(32)
@@ -69,6 +80,7 @@ ERROR_EMAIL_INVALID = "setup.error.email_invalid"
 ERROR_PASSWORD_SHORT = "setup.error.password_short"
 ERROR_PASSWORD_LONG = "setup.error.password_long"
 ERROR_PASSWORD_MISMATCH = "setup.error.password_mismatch"
+ERROR_PASSWORD_COMMON = "setup.error.password_common"
 ERROR_TENANT_NAME_INVALID = "setup.error.tenant_name_invalid"
 
 
@@ -105,9 +117,43 @@ def _has_forbidden_chars(value: str, categories: frozenset[str]) -> bool:
 
 
 # Control characters (NUL included) and lone surrogates break text columns (PostgreSQL refuses
-# NUL); format characters are also refused in an email address.
+# NUL). Emails get the same rule from `lookup_email`; format characters (Cf) are refused too.
 _NAME_FORBIDDEN = frozenset({"Cc", "Cs"})
-_EMAIL_FORBIDDEN = frozenset({"Cc", "Cs", "Cf"})
+_EMAIL_EXTRA_FORBIDDEN = frozenset({"Cf"})
+
+
+def setup_email(email: str) -> str | None:
+    """The normalised admin email, or None if unusable (lookup_email rules: shape, at most
+    MAX_EMAIL_LENGTH, no control character or surrogate; plus no format character)."""
+    normalized = lookup_email(email)
+    if normalized is None or _has_forbidden_chars(normalized, _EMAIL_EXTRA_FORBIDDEN):
+        return None
+    return normalized
+
+
+@cache
+def common_passwords() -> frozenset[str]:
+    """The bundled blocklist (casefolded entries; comment lines skipped). Read once."""
+    lines = COMMON_PASSWORDS_FILE.read_text(encoding="utf-8").splitlines()
+    return frozenset(line for line in lines if line and not line.startswith("#"))
+
+
+def _squash(value: str) -> str:
+    return "".join(value.casefold().split())
+
+
+def is_blocklisted(password: str, *, email: str, app_name: str) -> bool:
+    """True if the password is common or derived from the email or the application name."""
+    candidate = _squash(password)
+    if password.casefold() in common_passwords() or candidate in common_passwords():
+        return True
+    local = _squash(email.rpartition("@")[0])
+    if candidate == local:
+        return True
+    contained = [_squash(email), _squash(app_name)]
+    if len(local) >= _LOCAL_PART_MIN_CONTAINED:
+        contained.append(local)
+    return any(term and term in candidate for term in contained)
 
 
 # --- state ----------------------------------------------------------------------------------------
@@ -165,22 +211,19 @@ def verify_setup_token(db: Session, token: object) -> bool:
 
 
 def validate_setup_form(
-    email: str, password: str, confirm: str, tenant_name: str
+    email: str, password: str, confirm: str, tenant_name: str, *, app_name: str
 ) -> tuple[SetupInput | None, list[str]]:
     """The validated input, or None and the i18n keys of every error. No DB access."""
     errors: list[str] = []
-    normalized: str | None = None
-    if len(email) <= EMAIL_MAX_LENGTH and not _has_forbidden_chars(email, _EMAIL_FORBIDDEN):
-        try:
-            normalized = normalize_email(email)
-        except ValueError:
-            normalized = None
+    normalized = setup_email(email)
     if normalized is None:
         errors.append(ERROR_EMAIL_INVALID)
     if len(password) < PASSWORD_MIN_LENGTH:
         errors.append(ERROR_PASSWORD_SHORT)
     elif len(password) > PASSWORD_MAX_LENGTH:
         errors.append(ERROR_PASSWORD_LONG)
+    elif is_blocklisted(password, email=normalized or email, app_name=app_name):
+        errors.append(ERROR_PASSWORD_COMMON)
     if not hmac.compare_digest(password.encode("utf-8"), confirm.encode("utf-8")):
         errors.append(ERROR_PASSWORD_MISMATCH)
     name = tenant_name.strip()

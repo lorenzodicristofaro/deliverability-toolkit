@@ -16,7 +16,7 @@
   <p>
     <label for="setup-email">{{ t("setup.email") }}</label>
     <input id="setup-email" name="email" type="email" autocomplete="username" required
-           maxlength="320" value="{{ email }}">
+           maxlength="{{ email_max }}" value="{{ email }}">
   </p>
   <p>
     <label for="setup-password">{{ t("setup.password") }}</label>

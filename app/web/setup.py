@@ -1,7 +1,11 @@
 """First-run setup wizard (M1-17, GM decisions Q4a and Q6).
 
 - At startup (`prepare_setup`, called by the lifespan) a pending setup gets a fresh one-time
-  setup token, logged ONCE at WARNING on the `app.setup` logger; only its digest is stored.
+  setup token, logged ONCE at WARNING on the `app.setup.token` logger; only its digest is stored.
+  DECISION (whatever LOG_LEVEL is): that logger has its own level, WARNING, so the root level
+  set from LOG_LEVEL (e.g. ERROR) cannot drop the record; it still goes through the root JSON
+  handler and its secret masking. Python checks only the emitting logger's level and the
+  handlers' levels when a record propagates, and the root handler has no level of its own.
   It is re-issued at every process start while setup is pending (the previous one stops
   working). If the database cannot be read at startup the token is issued on the first request
   that finds setup pending.
@@ -35,6 +39,7 @@ from starlette.concurrency import run_in_threadpool
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from app.core.config import Settings
+from app.models.user import MAX_EMAIL_LENGTH
 from app.services.auth import SessionPolicy
 from app.services.setup import (
     PASSWORD_MAX_LENGTH,
@@ -42,15 +47,19 @@ from app.services.setup import (
     SetupOutcome,
     complete_setup,
     issue_setup_token,
+    setup_email,
     setup_required,
     validate_setup_form,
     verify_setup_token,
 )
 from app.web import auth as web_auth
 from app.web.deps import DbDep, SettingsDep, _session_factory
-from app.web.templating import form_value, read_form, render
+from app.web.templating import APP_NAME, form_value, read_form, render
 
 logger = logging.getLogger("app.setup")
+# Own level: the token line must reach the operator even with LOG_LEVEL above WARNING.
+token_logger = logging.getLogger("app.setup.token")
+token_logger.setLevel(logging.WARNING)
 
 SETUP_PATH: Final = "/setup"
 EXEMPT_PATHS: Final = frozenset({"/healthz", SETUP_PATH, "/language"})
@@ -79,7 +88,7 @@ def _issue_and_log(app: FastAPI, db: Session) -> None:
         db.commit()
         setattr(app.state, _ISSUED_ATTR, True)
     if token is not None:
-        logger.warning(
+        token_logger.warning(
             "First-run setup is pending. Open %s and enter this one-time setup token: %s "
             "(a new token is issued at every restart until setup is completed)",
             SETUP_PATH,
@@ -161,6 +170,7 @@ def _page(
         tenant_name=tenant_name,
         password_min=PASSWORD_MIN_LENGTH,
         password_max=PASSWORD_MAX_LENGTH,
+        email_max=MAX_EMAIL_LENGTH,
     )
 
 
@@ -183,7 +193,9 @@ async def setup_submit(request: Request, db: DbDep, settings: SettingsDep) -> Re
     await run_in_threadpool(_ensure_pending, request)
     email = form_value(form, "email")
     tenant_name = form_value(form, "tenant_name")
-    keep = {"email": email, "tenant_name": tenant_name}
+    # Unusable email input (control characters, over-long, malformed) is not echoed back,
+    # like the login page's `shown_email`.
+    keep = {"email": email if setup_email(email) is not None else "", "tenant_name": tenant_name}
     ip = web_auth._client_ip(request)
     throttle = web_auth.login_throttle(request)
 
@@ -200,7 +212,11 @@ async def setup_submit(request: Request, db: DbDep, settings: SettingsDep) -> Re
     throttle.record_success(ip, SETUP_THROTTLE_ACCOUNT)
 
     data, errors = validate_setup_form(
-        email, form_value(form, "password"), form_value(form, "password_confirm"), tenant_name
+        email,
+        form_value(form, "password"),
+        form_value(form, "password_confirm"),
+        tenant_name,
+        app_name=APP_NAME,
     )
     if data is None:
         return _page(request, status_code=400, errors=errors, **keep)

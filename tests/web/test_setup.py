@@ -37,6 +37,7 @@ from app.services import setup as svc
 from app.services.auth import SessionPolicy
 from app.services.login_throttle import LoginThrottle
 from app.web import auth as web_auth
+from app.web.templating import APP_NAME
 
 ROOT = Path(__file__).resolve().parents[2]
 KEY = "k" * 40
@@ -46,6 +47,19 @@ POLICY = SessionPolicy.from_settings(
     Settings(secret_key=KEY, encryption_key=KEY)  # type: ignore[call-arg]
 )
 HTML = {"Accept": "text/html"}
+
+
+def _pw(n: int) -> str:
+    """An n-character password that is not on the bundled blocklist."""
+    return ("Kv7q" * 40)[:n]
+
+
+LISTED = "1qaz2wsx3edc4rfv"  # an entry of the bundled common-password list
+
+
+def _both(value: str) -> dict[str, str]:
+    """Password and confirmation form fields with the same value."""
+    return {"password": value, "password_confirm": value}
 
 
 class Clock:
@@ -62,9 +76,11 @@ class Env:
     factory: sessionmaker[Session]
     caplog: pytest.LogCaptureFixture
 
-    def app(self) -> FastAPI:
+    def app(self, log_level: str = "INFO") -> FastAPI:
         application = create_app(
-            Settings(database_url=self.db_url, secret_key=KEY, encryption_key=KEY)  # type: ignore[call-arg]
+            Settings(  # type: ignore[call-arg]
+                database_url=self.db_url, secret_key=KEY, encryption_key=KEY, log_level=log_level
+            )
         )
         application.state.login_throttle = LoginThrottle(clock=Clock())
         return application
@@ -409,6 +425,9 @@ def test_token_attempts_are_throttled(env: Env, running: Running) -> None:
         ({"email": "admin@example.com\x7f"}, "valid email"),
         ({"email": "ad​min@example.com"}, "valid email"),
         ({"email": "a" * 310 + "@example.com"}, "valid email"),
+        ({"email": "a" * 243 + "@example.com"}, "valid email"),  # 255 > MAX_EMAIL_LENGTH
+        (_both(LISTED.upper()), "too common"),
+        (_both("admin@example.com"), "too common"),
         ({"tenant_name": "Agency\x00One"}, "invalid characters"),
         ({"tenant_name": "Agency\nOne"}, "invalid characters"),
         ({"tenant_name": "Agency\x1bOne"}, "invalid characters"),
@@ -438,17 +457,19 @@ def test_validation_reports_every_error_in_italian(running: Running) -> None:
 @pytest.mark.parametrize(
     ("password", "ok"),
     [
-        ("a" * 14, False),
-        ("a" * 15, True),
+        (_pw(14), False),
+        (_pw(15), True),
         ("é" * 15, True),  # code points, not bytes
         ("🔑" * 15, True),
         ("a b c d e f g h", True),  # spaces allowed, no composition rules
-        ("a" * 128, True),
-        ("a" * 129, False),
+        (_pw(128), True),
+        (_pw(129), False),
     ],
 )
 def test_password_length_policy(password: str, ok: bool) -> None:
-    data, errors = svc.validate_setup_form("a@example.com", password, password, "")
+    data, errors = svc.validate_setup_form(
+        "a@example.com", password, password, "", app_name=APP_NAME
+    )
     assert (data is not None) is ok
     assert bool(errors) is not ok
 
@@ -469,11 +490,105 @@ def test_slugify(name: str, slug: str) -> None:
 
 
 def test_setup_input_repr_hides_password() -> None:
-    data, _ = svc.validate_setup_form("a@example.com", PASSWORD, PASSWORD, "")
+    data, _ = svc.validate_setup_form("a@example.com", PASSWORD, PASSWORD, "", app_name=APP_NAME)
     assert PASSWORD not in repr(data)
 
 
+@pytest.mark.parametrize(
+    ("password", "email", "blocked"),
+    [
+        ("1qaz2wsx3edc4rfv", "a@example.com", True),  # on the bundled list
+        ("1QAZ2WSX3EDC4RFV", "a@example.com", True),  # case-insensitive
+        ("qwerty 123456789", "a@example.com", True),  # whitespace ignored
+        ("admin@example.com", "admin@example.com", True),  # equal to the email
+        ("my admin@example.com pass", "admin@example.com", True),  # contains the email
+        ("ADMINISTRATOR", "administrator@example.com", True),  # equal to the local part
+        ("xx-sysadmin-2026-xx", "sysadmin@example.com", True),  # contains the local part
+        ("bob is not my password", "bob@example.com", False),  # local part < 4: equality only
+        ("bob", "bob@example.com", True),
+        ("Deliverability Toolkit 2026!", "a@example.com", True),  # app name
+        ("mydeliverabilitytoolkit", "a@example.com", True),  # app name, no space
+        (_pw(20), "kv7q@example.com", True),  # contains the local part (4 chars)
+        (PASSWORD, "admin@example.com", False),
+        (_pw(20), "admin@example.com", False),
+    ],
+)
+def test_password_blocklist(password: str, email: str, blocked: bool) -> None:
+    assert svc.is_blocklisted(password, email=email, app_name=APP_NAME) is blocked
+
+
+def test_bundled_blocklist_has_provenance_and_entries() -> None:
+    raw = svc.COMMON_PASSWORDS_FILE.read_text(encoding="utf-8")
+    assert "source: SecLists" in raw and "MIT" in raw and "verified_on:" in raw
+    entries = svc.common_passwords()
+    assert len(entries) > 10_000
+    assert all(e == e.casefold() and len(e) >= svc.PASSWORD_MIN_LENGTH for e in entries)
+    assert not any(e.startswith("#") for e in entries)
+
+
+def test_common_password_rejected_in_italian(running: Running) -> None:
+    running.client.cookies.set("dt_lang", "it")
+    response = _post(running, **_both(LISTED))
+    assert response.status_code == 400
+    assert "troppo comune" in response.text
+
+
+@pytest.mark.parametrize(
+    ("email", "shown"),
+    [
+        ("admin\x00@example.com", False),
+        ("admin@exa\x01mple.com", False),
+        ("a" * 243 + "@example.com", False),
+        ("not-an-email", False),
+        ("admin@example.com", True),
+    ],
+)
+def test_rejected_email_is_not_echoed(running: Running, email: str, shown: bool) -> None:
+    response = _post(running, email=email, password=_pw(10), password_confirm=_pw(10))
+    assert response.status_code == 400
+    assert ('value="admin@example.com"' in response.text) is shown
+    assert 'id="setup-email" name="email" type="email" autocomplete="username" required' in (
+        response.text
+    )
+    if not shown:
+        assert re.search(r'maxlength="254" value=""', response.text)
+
+
+def test_email_field_maxlength_is_max_email_length(running: Running) -> None:
+    assert 'maxlength="254"' in running.client.get("/setup").text
+    data, _ = svc.validate_setup_form(
+        "a" * 242 + "@example.com", PASSWORD, PASSWORD, "", app_name=APP_NAME
+    )
+    assert data is not None  # exactly 254 characters
+
+
 # --- logs -----------------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("level", ["ERROR", "CRITICAL"])
+def test_token_reaches_operator_whatever_log_level(
+    env: Env, capsys: pytest.CaptureFixture[str], level: str
+) -> None:
+    root = logging.getLogger()
+    handlers, root_level = list(root.handlers), root.level
+    application = env.app(log_level=level)
+    try:
+        with TestClient(application) as client:
+            client.get("/healthz")
+    finally:
+        root.handlers[:] = handlers
+        root.setLevel(root_level)
+        application.state.db_engine.dispose()
+    (token,) = env.tokens()
+    err = capsys.readouterr().err
+    lines = [line for line in err.splitlines() if token in line]
+    assert len(lines) == 1
+    assert '"level": "WARNING"' in lines[0]
+    assert '"logger": "app.setup.token"' in lines[0]
+    assert '"logger": "app.request"' not in err  # INFO lines are still filtered out
+
+
+# --- logs: secrets --------------------------------------------------------------------------------
 
 
 def test_no_password_or_token_in_logs(env: Env, running: Running) -> None:
@@ -497,7 +612,7 @@ def _issue(env: Env) -> str:
 
 
 def _input(email: str) -> svc.SetupInput:
-    data, errors = svc.validate_setup_form(email, PASSWORD, PASSWORD, "")
+    data, errors = svc.validate_setup_form(email, PASSWORD, PASSWORD, "", app_name=APP_NAME)
     assert data is not None, errors
     return data
 
