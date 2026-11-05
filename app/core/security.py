@@ -69,13 +69,8 @@ def needs_rehash(stored_hash: str, hasher: PasswordHasher = DEFAULT_HASHER) -> b
         return True
 
 
-_dummy_hashes: dict[tuple[int, int, int, int, int, int], str] = {}
-
-
-def dummy_verify(password: object, hasher: PasswordHasher = DEFAULT_HASHER) -> None:
-    """Spend the same work as a real verification (unknown user / no password set), so response
-    time does not reveal whether an account exists. The result is always discarded."""
-    key = (
+def _hasher_key(hasher: PasswordHasher) -> tuple[int, int, int, int, int, int]:
+    return (
         hasher.time_cost,
         hasher.memory_cost,
         hasher.parallelism,
@@ -83,6 +78,19 @@ def dummy_verify(password: object, hasher: PasswordHasher = DEFAULT_HASHER) -> N
         hasher.salt_len,
         int(hasher.type.value),
     )
+
+
+# Precomputed at import for the default hasher, so the first unknown-user login does not pay
+# (and reveal) the extra cost of creating the dummy hash. Other hashers (tests) are cached lazily.
+_dummy_hashes: dict[tuple[int, int, int, int, int, int], str] = {
+    _hasher_key(DEFAULT_HASHER): DEFAULT_HASHER.hash(secrets.token_urlsafe(16))
+}
+
+
+def dummy_verify(password: object, hasher: PasswordHasher = DEFAULT_HASHER) -> None:
+    """Spend the same work as a real verification (unknown user / no password set), so response
+    time does not reveal whether an account exists. The result is always discarded."""
+    key = _hasher_key(hasher)
     dummy = _dummy_hashes.get(key)
     if dummy is None:
         dummy = _dummy_hashes.setdefault(key, hasher.hash(secrets.token_urlsafe(16)))

@@ -200,7 +200,9 @@ missing-key test in CI; user and tenant language preference.
 `ENCRYPTION_KEY`, `RESOLVER_MODE` (`system|custom|unbound`), `RESOLVER_ADDRS` (comma-separated `host:port`,
 IP literals, IPv6 as `[::1]:5353`, default port 53),
 `ROLE`, `ALLOW_SMTP_CHECKS` (default false), `ALLOW_REGISTRATION` (default false),
-`BASE_URL`, `SMTP_*` for notifications, `LOG_LEVEL`.
+`BASE_URL`, `SMTP_*` for notifications, `LOG_LEVEL`,
+`SESSION_IDLE_TIMEOUT_MINUTES` (default 30) and `SESSION_ABSOLUTE_TIMEOUT_MINUTES`
+(default 720 = 12 h): both must be > 0 and idle <= absolute, otherwise startup fails.
 
 ## 12. Observability
 

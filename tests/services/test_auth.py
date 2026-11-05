@@ -293,6 +293,36 @@ def test_password_change_revokes_other_sessions(env: Env) -> None:
     assert _login(env, "alice@example.com", new_password) is not None
 
 
+NAIVE = datetime(2026, 11, 5, 12, 0)
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda env: _issue(env, now=NAIVE),
+        lambda env: resolve_session(env.db, "x", SECRET, policy=POLICY, now=NAIVE),
+        lambda env: revoke_session(env.db, 1, now=NAIVE),
+        lambda env: revoke_all_sessions(env.db, env.alice.id, now=NAIVE),
+        lambda env: change_password(env.db, env.alice.id, "new pw", hasher=FAST, now=NAIVE),
+    ],
+    ids=["create", "resolve", "revoke", "revoke_all", "change_password"],
+)
+def test_naive_now_rejected(env: Env, call: Any) -> None:
+    old_hash = env.alice.password_hash
+    live = _issue(env)
+    with pytest.raises(ValueError, match="timezone-aware"):
+        call(env)
+    assert env.alice.password_hash == old_hash
+    assert _resolve(env, live.cookie_value) is not None
+
+
+@pytest.mark.parametrize("keep", ["1", 1.0, True, 0, -1, 2**80, [1]])
+def test_revoke_all_malformed_except_revokes_everything(env: Env, keep: Any) -> None:
+    sessions = [_issue(env) for _ in range(2)]
+    assert revoke_all_sessions(env.db, env.alice.id, except_session_id=keep, now=T0) == 2
+    assert all(_resolve(env, s.cookie_value) is None for s in sessions)
+
+
 def test_password_change_unknown_user(env: Env) -> None:
     assert change_password(env.db, 999_999, "x", hasher=FAST) is False
     assert change_password(env.db, "1", "x", hasher=FAST) is False  # type: ignore[arg-type]

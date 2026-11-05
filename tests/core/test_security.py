@@ -107,6 +107,10 @@ def test_dummy_verify_runs_a_verification(password: Any, monkeypatch: pytest.Mon
     assert len(calls) == 1 and calls[0].startswith("$argon2id$v=19$m=8,t=1,p=1$")
 
 
+def test_default_dummy_hash_precomputed_at_import() -> None:
+    assert security._hasher_key(security.DEFAULT_HASHER) in security._dummy_hashes
+
+
 def test_session_token_and_digest() -> None:
     token = new_session_token()
     assert len(token) == 43 and token != new_session_token()

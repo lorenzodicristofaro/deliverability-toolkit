@@ -84,6 +84,16 @@ def _utcnow() -> datetime:
     return datetime.now(UTC)
 
 
+def _now(now: datetime | None) -> datetime:
+    """`now`, or the current UTC time. A naive `now` is refused: it cannot be compared with the
+    stored UTC timestamps without guessing its timezone."""
+    if now is None:
+        return _utcnow()
+    if now.tzinfo is None or now.utcoffset() is None:
+        raise ValueError("now must be timezone-aware")
+    return now
+
+
 def _aware(value: datetime) -> datetime:
     # SQLite returns naive datetimes for DateTime(timezone=True); everything is stored in UTC.
     return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
@@ -130,13 +140,14 @@ def change_password(
 ) -> bool:
     """Set a new password and revoke every other session of the user (the current one, if given,
     survives). False if the user does not exist. Password policy is enforced by the caller."""
+    current = _now(now)  # validate before changing anything
     uid = coerce_id(user_id)
     user = None if uid is None else db.scalars(select(User).where(User.id == uid)).one_or_none()
     if user is None:
         return False
     user.password_hash = hash_password(new_password, hasher)
     db.flush()
-    revoke_all_sessions(db, user.id, except_session_id=keep_session_id, now=now)
+    revoke_all_sessions(db, user.id, except_session_id=keep_session_id, now=current)
     return True
 
 
@@ -155,7 +166,7 @@ def create_session(
     """Store a new session for `user` (its token hash only) and return the signed cookie value."""
     if user.id is None or not user.is_active:
         raise ValueError("sessions can only be created for an active, persisted user")
-    current = now or _utcnow()
+    current = _now(now)
     token = new_session_token()
     row = UserSession(
         token_hash=hash_session_token(token),
@@ -185,10 +196,10 @@ def resolve_session(
     """The live session for a cookie value, or None if the cookie is malformed or tampered, or
     the session is unknown, revoked, past its absolute or idle expiry, or its user is inactive.
     A successful resolve refreshes `last_seen_at`."""
+    current = _now(now)
     token = unsign_session_token(cookie_value, secret_key)
     if token is None:
         return None
-    current = now or _utcnow()
     stmt = (
         select(UserSession, User.is_active)
         .join(User, User.id == UserSession.user_id)
@@ -215,7 +226,7 @@ def revoke_session(db: Session, session_id: object, *, now: datetime | None = No
     result = db.execute(
         update(UserSession)
         .where(UserSession.id == sid, UserSession.revoked_at.is_(None))
-        .values(revoked_at=now or _utcnow())
+        .values(revoked_at=_now(now))
         .execution_options(synchronize_session="fetch")
     )
     return bool(cast(CursorResult[Any], result).rowcount)
@@ -225,17 +236,19 @@ def revoke_all_sessions(
     db: Session,
     user_id: object,
     *,
-    except_session_id: int | None = None,
+    except_session_id: object = None,
     now: datetime | None = None,
 ) -> int:
-    """Revoke every live session of the user except `except_session_id`; returns how many."""
+    """Revoke every live session of the user except `except_session_id`; returns how many.
+    A malformed `except_session_id` keeps no session (fail closed: everything is revoked)."""
     uid = coerce_id(user_id)
     if uid is None:
         return 0
     stmt = update(UserSession).where(UserSession.user_id == uid, UserSession.revoked_at.is_(None))
-    if except_session_id is not None:
-        stmt = stmt.where(UserSession.id != except_session_id)
+    keep = coerce_id(except_session_id)
+    if keep is not None:
+        stmt = stmt.where(UserSession.id != keep)
     result = db.execute(
-        stmt.values(revoked_at=now or _utcnow()).execution_options(synchronize_session="fetch")
+        stmt.values(revoked_at=_now(now)).execution_options(synchronize_session="fetch")
     )
     return int(cast(CursorResult[Any], result).rowcount)
