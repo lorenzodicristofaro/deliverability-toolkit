@@ -18,7 +18,9 @@ Acceptance criteria:
 - Tests (table-driven, no network): every range above both v4 and v6 incl. mapped forms, malformed input (empty, hostnames, `1.2.3.4:99999`, `[::1`), trusted private address allowed, same address as untrusted blocked.
 - No import of dnspython or sockets in this module (pure functions).
 New i18n keys: none (reason codes only; UI keys in M2-13)
-Status: todo
+Status: done
 Open question for maintainer: see Context (system-mode egress is not policy-checkable; free-form resolver input deferred to M7).
 
 GM decision 2026-11-05: proposed rule CONFIRMED (both open questions): free-form resolver input deferred to M7; UNTRUSTED targets must use port 53. Recorded in ARCHITECTURE section 7. Ticket may merge on QA APPROVE.
+
+GM note: startup INFO log (log_resolver_config call in main.py lifespan) carried to M2-05/M2-12. QA nits (NAT64/6to4 allowed when embedded v4 allowed; parse_target tolerates surrounding whitespace) accepted.
