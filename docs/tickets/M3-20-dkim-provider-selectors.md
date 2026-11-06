@@ -16,7 +16,7 @@ Acceptance criteria:
 - Tests: a shipped-file test asserts every verified entry has a vendor-domain https source and a provider. Add table rows for any new schema field.
 New i18n keys: none
 Note: post-acceptance follow-up, requested by maintainer 2026-11-06. Depends on external facts not yet verified; nothing may be filled from memory. Report section (to be completed by the coder) must list per-customer patterns and "not found in official docs" vendors with URLs checked.
-Status: todo
+Status: done
 
 ## Research report
 Researched 2026-11-06 with WebFetch on vendor domains only. "Verified" = the fetched official page states the selector name. Note: WebFetch returns a model-summarised view of each page, so the maintainer should spot-check the quoted strings against the URLs.

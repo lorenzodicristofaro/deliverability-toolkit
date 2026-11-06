@@ -73,7 +73,7 @@ Carried over from M0-07 QA:
   - [x] M3-17 Authentication tab UI
   - [x] M3-18 CLI `check` command (tenant-less free check)
   - [x] M3-19 acceptance tests + docs/CHECKS.md
-  - [ ] M3-20 DKIM seed: provider selectors and selector→provider mapping (post-acceptance follow-up, requested by maintainer 2026-11-06)
+  - [x] M3-20 DKIM seed: provider selectors and selector→provider mapping (post-acceptance follow-up, requested by maintainer 2026-11-06)
 - Accept: results identical across UI, API and CLI; table-driven tests with malformed records.
   Status: **accepted 2026-11-06** — tests/checks/test_acceptance_m3.py (service = API = CLI byte-equal, UI status/codes equal, DNS failure → error on all surfaces, zero DNS on denial); CI green at 0e3511a incl. PostgreSQL (9434 passed). Report: docs/reports/M3.md
 
