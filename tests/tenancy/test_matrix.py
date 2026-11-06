@@ -233,6 +233,7 @@ MATRIX: dict[tuple[str, str], Entry] = {
     ("POST", "/api/v1/checks/free"): Entry(Kind.DNS, body=_check_free, own=_DNS_OWN),
     # DKIM SSE streams (app.web.checks_stream): check.run on the domain / dns.tools (free).
     # The free route needs `?name=`; without it permitted roles get 422 (decided before streaming).
+    ("GET", "/domains/{domain_id}/authentication"): Entry(Kind.DOMAIN),
     ("GET", "/domains/{domain_id}/authentication/dkim/stream"): Entry(Kind.DOMAIN),
     ("GET", "/tools/dkim/stream"): Entry(Kind.DNS, own={**_by_role(422, 422), "viewer": 403}),
 }
