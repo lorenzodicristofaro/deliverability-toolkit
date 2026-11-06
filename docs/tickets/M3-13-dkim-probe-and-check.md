@@ -15,4 +15,4 @@ Acceptance criteria:
 - DNS failure states (SERVFAIL, timeout, refused, blocked) on any lookup the check depends on yield status `error` via CheckResult.build(evaluated=False), never `ok` or a 'missing' finding; table test with recorded failing zones. (DKIM probe, GM rule: failed selectors are always listed in DKIM_PROBE_ERRORS. If at least one selector is `found`, the overall status follows the findings. If none is found and any selector failed, status is `error` (the failed one may be the real selector, so never report DKIM_NO_SELECTOR_FOUND alone). Only when every selector is `not_found` is DKIM_NO_SELECTOR_FOUND emitted.)
 - fetch_cname may return state ok with an empty target ('' from a '.' CNAME); treat a falsy target as a malformed delegation (selector state `error`, never `found`/`not_found`); test it (M3-03 QA nit).
 New i18n keys: finding.DKIM_*.title/detail/remediation (en + it)
-Status: todo
+Status: done

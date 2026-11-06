@@ -61,17 +61,17 @@ Carried over from M0-07 QA:
   - [x] M3-05 DMARC parser (opus)
   - [x] M3-06 DKIM key record parser (opus)
   - [x] M3-07 SPF recursive resolution engine (opus)
-  - [ ] M3-08 SPF check: findings, flattening hints (opus)
+  - [x] M3-08 SPF check: findings, flattening hints (opus)
   - [x] M3-09 organizational domain helper (public suffix source unverified)
   - [x] M3-10 DMARC check + org-domain fallback
-  - [ ] M3-11 DMARC external report authorization (opus)
+  - [x] M3-11 DMARC external report authorization (opus)
   - [x] M3-12 DKIM selector seed + loader (unverified entries flagged)
-  - [ ] M3-13 DKIM probe engine + check
+  - [x] M3-13 DKIM probe engine + check
   - [x] M3-14 `check.run` permission (opus)
-  - [ ] M3-15 checks REST endpoints
+  - [x] M3-15 checks REST endpoints
   - [ ] M3-16 DKIM SSE stream
   - [ ] M3-17 Authentication tab UI
-  - [ ] M3-18 CLI `check` command (tenant-less free check)
+  - [x] M3-18 CLI `check` command (tenant-less free check)
   - [ ] M3-19 acceptance tests + docs/CHECKS.md
 - Accept: results identical across UI, API and CLI; table-driven tests with malformed records.
 
@@ -126,6 +126,11 @@ Carried over from M0-07 QA:
 - [ ] M7: DNS egress cannot detect an operator NAT64 prefix inside 2000::/3 embedding a private IPv4 (app/dns/egress.py); handle in the guarded client
 - [ ] Per-user rate limiting for free tools (DNS trace/propagation); M2 has per-request caps only
 - [ ] Seed staleness: a host clock behind a seed `verified_on` makes the knowledge loader raise at runtime; consider a tolerance (M2-07 QA nit)
+- [ ] Shared result-list serializer in app/services/checks.py, used by API and CLI (now duplicated one-liners) (M3-18).
+- [ ] CLI catches private typer._click UsageError (no public equivalent in typer 0.28); pin typer<0.29 or add a guard test (M3-18 QA).
+- [ ] Tenancy matrix filler sends a literal {check_id}; substitute `spf` (M3-15 QA nit).
+- [ ] DKIM_TEST_MODE text 'Some receivers treat such signatures differently' is unsourced; cite RFC 6376 3.6.1 t=y or soften (M3-13 QA nit).
+- [ ] DMARC external: an unparseable record next to a valid one also emits a low AUTH_RECORD_INVALID (M3-11 QA nit, acceptable).
 - [x] (M2-01) Domain names: trim surrounding whitespace in `to_ascii_domain` instead of rejecting it (maintainer decision 2026-11-05); update the M1-18 tests. Underscores stay rejected for tenant domains, but the M2 DNS tool must accept them in record names.
 - [ ] Public `security.mac(label, msg, key)` helper, to replace csrf.py's import of private helpers
 - [ ] CSRF exemption for future bearer-token API routes

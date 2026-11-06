@@ -14,4 +14,4 @@ Acceptance criteria:
 - Uses the shared service only; no DB access, no network in tests (fake resolver injected through the same factory seam as the API dependency).
 - Tests via Typer's CliRunner: each exit code, json shape, text in en and it, malformed domain, unknown check, DNS failure zone.
 New i18n keys: cli.check.* (en + it) for text-mode headings only
-Status: todo
+Status: done

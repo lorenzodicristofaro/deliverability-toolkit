@@ -20,4 +20,4 @@ Facts from M3-07 (app/checks/spf_tree.py) the check must honour:
 - `a` is void when A is absent; the AAAA state is in TermLookup.states.
 - `truncated` implies lookup_count > 10, which is a lower bound. Report it as too-many-lookups (SPF_TOO_MANY_LOOKUPS / SPF_RESOLUTION_TRUNCATED), never ok.
 - An include target with no SPF record is permerror (SPF_INCLUDE_NOT_FOUND), not void.
-Status: todo
+Status: done

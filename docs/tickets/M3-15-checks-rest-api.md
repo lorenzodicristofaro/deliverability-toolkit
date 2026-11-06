@@ -2,6 +2,7 @@
 Milestone: M3
 Branch: feature/m3-15-checks-api
 Files in scope: app/api/v1/checks.py, app/main.py (router registration only), app/web/deps.py (resolver/ctx dependency only, keep tiny), tests/api/test_checks_api.py, tests/tenancy/ (route classification for the new routes, required by the route-coverage guard)
+Note: Router registered in app/api/__init__.py (the /api/v1 registry), not app/main.py; accepted by GM.
 Out of scope: SSE (M3-16), UI, persistence of results (decision below)
 Depends on: M3-08, M3-10, M3-13, M3-14 (M3-11 may land after; the endpoint returns whatever the DMARC check returns)
 Parallel-safe: no (app/main.py router registry)
@@ -15,4 +16,4 @@ Acceptance criteria:
 - Resolver comes from the overridable dependency (M2-04 fake in tests); no network. Per-request caps (ids list size) enforced. OpenAPI schemas present; route-coverage guard passes.
 - Risk noted: no per-user rate limiting yet (already in TODO follow-ups); checks fan out many DNS queries (DKIM probe), so the concurrency bound is per request only.
 New i18n keys: none (API returns codes)
-Status: todo
+Status: done

@@ -15,5 +15,7 @@ Acceptance criteria:
 - Tenancy sweep: every M3 route appears in the route-coverage matrix.
 - `docs/CHECKS.md`: Check interface, finding code list with severities, how to add a check, CLI exit codes, the free-vs-tenant permission split, what is unverified.
 - For every registered check, a recorded zone that returns SERVFAIL and one that times out both yield `error` through the service, API and CLI.
+- Note: API and CLI each serialize result lists as '[' + ','.join(model_dump_json()) + ']' (app/api/v1/checks.py _json and app/cli/check.py render_json): assert byte-equality service = API = CLI for single, ids-list (request order) and `all` (sorted by id).
+- Note: Check ids: dkim, dmarc, spf; DMARC result includes data.report_destinations (M3-11).
 New i18n keys: none
 Status: todo

@@ -16,4 +16,4 @@ Acceptance criteria:
 - Authorization records at `<target>._report._dmarc.<dest>` normally carry only `v=DMARC1`: ignore the parser's missing_policy issue there (M3-05 note); any other parse error is reported.
 - A rua/ruf mailto URI encoding several addresses (%2C) has no single domain from the M3-05 parser: report it as not checkable (finding, not a crash), never as authorized.
 New i18n keys: finding.DMARC_EXTERNAL_*.title/detail/remediation (en + it)
-Status: todo
+Status: done
