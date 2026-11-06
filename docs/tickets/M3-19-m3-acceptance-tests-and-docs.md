@@ -19,4 +19,5 @@ Acceptance criteria:
 - Note: Check ids: dkim, dmarc, spf; DMARC result includes data.report_destinations (M3-11).
 - For every denied case (anonymous, foreign tenant, unassigned client viewer, check.run=false toggle) on the REST check routes, the DKIM SSE routes and the Authentication tab, assert the fake DNS backend received ZERO queries (M3-17 QA should-fix, extended to all surfaces).
 New i18n keys: none
-Status: todo
+Note: Round 3 by a fresh coder (human-approved after QA round 2 failed: UI assertion was never called); branch feature/m3-19-acceptance-r3.
+Status: done

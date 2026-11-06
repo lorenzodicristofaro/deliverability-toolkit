@@ -13,4 +13,4 @@ Acceptance criteria:
 - Works without JS for SPF/DMARC; DKIM streaming uses native `EventSource` from a same-origin static file (HTMX under CSP `script-src 'self'` is UNVERIFIED, M1-16, so do not depend on it); non-JS fallback shows a link to the REST result or a noscript note.
 - Client viewer: sees the tab for assigned domains, 403/404 page for others; analyst/admin/owner all domains; tenancy/permission tests for the route.
 New i18n keys: checks.tab.authentication, checks.status.{ok,warn,fail,info,error}, checks.severity.*, checks.spf.title, checks.dmarc.title, checks.dkim.title, checks.run_again (en + it)
-Status: todo
+Status: done

@@ -14,4 +14,4 @@ Acceptance criteria:
 - Response headers: `Cache-Control: no-store`, `X-Accel-Buffering: no`; works under the existing CSP (no inline script).
 - Rows show the static note that selectors cannot be enumerated (key `checks.dkim.not_enumerable`).
 New i18n keys: checks.dkim.row.*, checks.dkim.not_enumerable, checks.dkim.done (en + it)
-Status: todo
+Status: done

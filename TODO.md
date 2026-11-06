@@ -48,11 +48,11 @@ Carried over from M0-07 QA:
   Status: **accepted 2026-11-06** — tests/dns/test_acceptance_m2.py; CI green at 8083cc5 incl. PostgreSQL (6577 passed). Report: docs/reports/M2.md
 
 ## M3 — SPF, DKIM, DMARC
-- [ ] Parsers + checks with Finding codes, remediation texts (en/it)
-- [ ] SPF recursive resolution, lookup/void counts, flattening hints
-- [ ] DKIM selector probe with seeded selector list, streaming results via SSE
-- [ ] DMARC incl. external report authorization
-- [ ] Domain page "Authentication" tab, CLI `check` command, REST endpoints
+- [x] Parsers + checks with Finding codes, remediation texts (en/it)
+- [x] SPF recursive resolution, lookup/void counts, flattening hints
+- [x] DKIM selector probe with seeded selector list, streaming results via SSE
+- [x] DMARC incl. external report authorization
+- [x] Domain page "Authentication" tab, CLI `check` command, REST endpoints
 - Tickets (docs/tickets/):
   - [x] M3-01 Check interface + CheckResult/Finding models
   - [x] M3-02 check registry + runner service
@@ -69,11 +69,12 @@ Carried over from M0-07 QA:
   - [x] M3-13 DKIM probe engine + check
   - [x] M3-14 `check.run` permission (opus)
   - [x] M3-15 checks REST endpoints
-  - [ ] M3-16 DKIM SSE stream
-  - [ ] M3-17 Authentication tab UI
+  - [x] M3-16 DKIM SSE stream
+  - [x] M3-17 Authentication tab UI
   - [x] M3-18 CLI `check` command (tenant-less free check)
-  - [ ] M3-19 acceptance tests + docs/CHECKS.md
+  - [x] M3-19 acceptance tests + docs/CHECKS.md
 - Accept: results identical across UI, API and CLI; table-driven tests with malformed records.
+  Status: **accepted 2026-11-06** — tests/checks/test_acceptance_m3.py (service = API = CLI byte-equal, UI status/codes equal, DNS failure → error on all surfaces, zero DNS on denial); CI green at <SHA> incl. PostgreSQL. Report: docs/reports/M3.md
 
 ## M4 — Original (headers) analyzer
 - [ ] Upload/paste `.eml` or headers; Received chain with delays; Authentication-Results; ARC
