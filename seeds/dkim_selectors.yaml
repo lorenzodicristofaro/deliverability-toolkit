@@ -87,56 +87,85 @@ selectors:
   - name: km1
     provider: klaviyo
     record_type: cname
-    notes: Klaviyo static-routing DKIM CNAME, marketing send type; numbering continues (e.g. km3) for further domains
+    notes: Klaviyo static-routing DKIM CNAME, marketing send type; numbering continues with the next pair for further domains
     status: verified
     sources:
       - https://help.klaviyo.com/hc/en-us/articles/115000357752
   - name: km2
     provider: klaviyo
     record_type: cname
-    notes: Klaviyo static-routing DKIM CNAME, marketing send type; numbering continues (e.g. km3) for further domains
+    notes: Klaviyo static-routing DKIM CNAME, marketing send type; numbering continues with the next pair for further domains
     status: verified
     sources:
       - https://help.klaviyo.com/hc/en-us/articles/115000357752
   - name: kt1
     provider: klaviyo
     record_type: cname
-    notes: Klaviyo static-routing DKIM CNAME, transactional send type; numbering continues (e.g. km3) for further domains
+    notes: Klaviyo static-routing DKIM CNAME, transactional send type; numbering continues with the next pair for further domains
     status: verified
     sources:
       - https://help.klaviyo.com/hc/en-us/articles/115000357752
   - name: kt2
     provider: klaviyo
     record_type: cname
-    notes: Klaviyo static-routing DKIM CNAME, transactional send type; numbering continues (e.g. km3) for further domains
+    notes: Klaviyo static-routing DKIM CNAME, transactional send type; numbering continues with the next pair for further domains
     status: verified
     sources:
       - https://help.klaviyo.com/hc/en-us/articles/115000357752
   - name: ks1
     provider: klaviyo
     record_type: cname
-    notes: Klaviyo static-routing DKIM CNAME, service send type; numbering continues (e.g. km3) for further domains
+    notes: Klaviyo static-routing DKIM CNAME, service send type; numbering continues with the next pair for further domains
     status: verified
     sources:
       - https://help.klaviyo.com/hc/en-us/articles/115000357752
   - name: ks2
     provider: klaviyo
     record_type: cname
-    notes: Klaviyo static-routing DKIM CNAME, service send type; numbering continues (e.g. km3) for further domains
+    notes: Klaviyo static-routing DKIM CNAME, service send type; numbering continues with the next pair for further domains
     status: verified
     sources:
       - https://help.klaviyo.com/hc/en-us/articles/115000357752
   - name: kl1
     provider: klaviyo
     record_type: cname
-    notes: Klaviyo static-routing DKIM CNAME, legacy static send type; numbering continues (e.g. km3) for further domains
+    notes: Klaviyo static-routing DKIM CNAME, legacy static send type; numbering continues with the next pair for further domains
     status: verified
     sources:
       - https://help.klaviyo.com/hc/en-us/articles/115000357752
   - name: kl2
     provider: klaviyo
     record_type: cname
-    notes: Klaviyo static-routing DKIM CNAME, legacy static send type; numbering continues (e.g. km3) for further domains
+    notes: Klaviyo static-routing DKIM CNAME, legacy static send type; numbering continues with the next pair for further domains
     status: verified
     sources:
       - https://help.klaviyo.com/hc/en-us/articles/115000357752
+  # ml01/ml02 and acdkim1/acdkim2 verified_on 2026-11-07 (the file has only a file-level verified_on, no per-entry field)
+  - name: ml01
+    provider: mailup
+    record_type: cname
+    notes: MailUp DKIM CNAME; fixed pair; CNAME to mlNN.dkim.musvc.com; source is MailUp's help centre hosted on Atlassian, supplied by the maintainer
+    status: verified
+    sources:
+      - https://helpmailup.atlassian.net/wiki/spaces/MM/pages/37519747/DKIM+non+trovato
+  - name: ml02
+    provider: mailup
+    record_type: cname
+    notes: MailUp DKIM CNAME; fixed pair; CNAME to mlNN.dkim.musvc.com; source is MailUp's help centre hosted on Atlassian, supplied by the maintainer
+    status: verified
+    sources:
+      - https://helpmailup.atlassian.net/wiki/spaces/MM/pages/37519747/DKIM+non+trovato
+  - name: acdkim1
+    provider: activecampaign
+    record_type: cname
+    notes: ActiveCampaign DKIM CNAME; fixed pair; CNAME; stated in the DNS-records screenshot of the official article (UI shows the name as 'acdkim1.domainkey'); target truncated in source
+    status: verified
+    sources:
+      - https://help.activecampaign.com/hc/en-us/articles/206903370-SPF-DKIM-and-DMARC-Authentication
+  - name: acdkim2
+    provider: activecampaign
+    record_type: cname
+    notes: ActiveCampaign DKIM CNAME; fixed pair; CNAME; stated in the DNS-records screenshot of the official article (UI shows the name as 'acdkim2.domainkey'); target truncated in source
+    status: verified
+    sources:
+      - https://help.activecampaign.com/hc/en-us/articles/206903370-SPF-DKIM-and-DMARC-Authentication
