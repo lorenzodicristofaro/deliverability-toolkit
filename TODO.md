@@ -74,7 +74,7 @@ Carried over from M0-07 QA:
   - [x] M3-18 CLI `check` command (tenant-less free check)
   - [x] M3-19 acceptance tests + docs/CHECKS.md
 - Accept: results identical across UI, API and CLI; table-driven tests with malformed records.
-  Status: **accepted 2026-11-06** — tests/checks/test_acceptance_m3.py (service = API = CLI byte-equal, UI status/codes equal, DNS failure → error on all surfaces, zero DNS on denial); CI green at <SHA> incl. PostgreSQL. Report: docs/reports/M3.md
+  Status: **accepted 2026-11-06** — tests/checks/test_acceptance_m3.py (service = API = CLI byte-equal, UI status/codes equal, DNS failure → error on all surfaces, zero DNS on denial); CI green at 0e3511a incl. PostgreSQL (9434 passed). Report: docs/reports/M3.md
 
 ## M4 — Original (headers) analyzer
 - [ ] Upload/paste `.eml` or headers; Received chain with delays; Authentication-Results; ARC
