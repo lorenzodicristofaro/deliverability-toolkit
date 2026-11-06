@@ -285,6 +285,7 @@ def test_service_api_cli_byte_equal(
     for check_id in ("spf", "dmarc", "dkim"):
         text, _ = all_surfaces(rig, monkeypatch, make, [check_id], mode="single")
         docs[check_id] = json.loads(text)
+    assert_ui_equals(rig, docs)  # the Authentication tab, same zone
     ids = ["spf", "dmarc", "dkim"]  # request order, not sorted
     listed, _ = all_surfaces(rig, monkeypatch, make, ids, mode="list")
     assert [d["check_id"] for d in json.loads(listed)] == ids
@@ -322,17 +323,67 @@ SECTION = re.compile(
 FINDING = re.compile(r'<li data-code="([A-Z0-9_]+)" data-severity="(\w+)">')
 
 
+UI_CHECKS = ("spf", "dmarc")  # rendered server-side; DKIM arrives over SSE (tested below)
+
+
+def compare_ui(html: str, docs: dict[str, dict[str, Any]]) -> None:
+    """Each UI check has exactly one section whose data-status and ordered (data-code,
+    data-severity) pairs equal the service result. Service findings need a non-empty UI list."""
+    found: dict[str, list[re.Match[str]]] = {}
+    for m in SECTION.finditer(html):
+        found.setdefault(m.group(1), []).append(m)
+    for check_id in UI_CHECKS:
+        sections = found.get(check_id, [])
+        assert len(sections) == 1, (check_id, "expected exactly one section", len(sections))
+        status, body = sections[0].group(2), sections[0].group(3)
+        assert status == docs[check_id]["status"], (check_id, status)
+        ui = FINDING.findall(body)
+        expected = [(f["code"], f["severity"]) for f in docs[check_id]["findings"]]
+        if expected:
+            assert ui, (check_id, "service has findings, UI list is empty")
+        assert ui == expected, check_id
+
+
 def assert_ui_equals(rig: Rig, docs: dict[str, dict[str, Any]]) -> None:
     """The Authentication tab shows the same status and (code, severity) list as the service."""
     w = rig.world
     r = call(w, "analyst", "GET", f"/domains/{w.domains['assigned']}/authentication", headers=HTML)
-    assert r.status_code == 200
-    sections = {m.group(1): m for m in SECTION.finditer(r.text)}
-    for check_id in ("spf", "dmarc"):
-        m = sections[check_id]
-        assert m.group(2) == docs[check_id]["status"], check_id
-        ui = FINDING.findall(m.group(3))
-        assert ui == [(f["code"], f["severity"]) for f in docs[check_id]["findings"]], check_id
+    assert r.status_code == 200, r.status_code
+    compare_ui(r.text, docs)
+
+
+_UI_DOCS: dict[str, dict[str, Any]] = {
+    "spf": {"status": "fail", "findings": [{"code": "SPF_MISSING", "severity": "high"}]},
+    "dmarc": {"status": "ok", "findings": []},
+}
+_UI_SPF = (
+    '<section class="check-result" data-testid="check-spf" data-status="fail">'
+    '<ul><li data-code="SPF_MISSING" data-severity="high">x</li></ul></section>'
+)
+_UI_DMARC = '<section class="check-result" data-testid="check-dmarc" data-status="ok"></section>'
+_UI_OK = _UI_SPF + _UI_DMARC
+
+
+@pytest.mark.parametrize(
+    "html",
+    [
+        pytest.param(_UI_SPF, id="no-dmarc"),
+        pytest.param(_UI_DMARC, id="no-spf"),
+        pytest.param("", id="empty-page"),
+        pytest.param("<section", id="truncated"),
+        pytest.param(_UI_OK + _UI_DMARC, id="duplicate-section"),
+        pytest.param(_UI_OK.replace('"fail"', '"warn"'), id="wrong-status"),
+        pytest.param(_UI_OK.replace('"high"', '"low"'), id="wrong-severity"),
+        pytest.param(_UI_OK.replace("SPF_MISSING", "SPF_OTHER"), id="wrong-code"),
+        pytest.param(re.sub(r"<li.*?</li>", "", _UI_OK), id="findings-dropped"),
+        pytest.param(_UI_OK.replace("check-dmarc", "check-dmarcx"), id="malformed-testid"),
+    ],
+)
+def test_ui_comparison_rejects_mismatch(html: str) -> None:
+    """Non-vacuity of compare_ui: missing, duplicated or differing sections fail."""
+    compare_ui(_UI_OK, _UI_DOCS)  # the baseline passes
+    with pytest.raises(AssertionError):
+        compare_ui(html, _UI_DOCS)
 
 
 # --- errors are errors ---------------------------------------------------------------------------
