@@ -13,6 +13,9 @@ Rules (SPEC section 3, ARCHITECTURE section 4 items 3 and 6):
   nothing inside a tenant: there the membership role and domain access decide, like for anyone
   else (maintainer decision 2026-11-04). This rule lives only in `_instance_flag_allows`.
 - Client viewers read only domains assigned through DomainAccess.
+- Role matrix (tenant-level / domain-level actions beyond the domain CRUD set):
+    owner, admin, analyst: dns.tools, check.run, message.analyze
+    client_viewer:         check.run (assigned domains only); never dns.tools or message.analyze
 - Per-user feature toggles can only deny: a toggle keyed by the action value that is not exactly
   `True` denies that action; toggles never grant anything.
 """
@@ -45,6 +48,15 @@ class Action(enum.StrEnum):
     # viewers only on assigned domains (`_domain_allowed`); deniable per user with the toggle
     # `{"check.run": false}`. Free (tenant-less) checks use DNS_TOOLS instead.
     CHECK_RUN = "check.run"
+    # Offline analysis of a pasted message (headers/body) (M4-06). A dedicated action because
+    # none fits: `dns.tools` means raw DNS queries and toggles are keyed by action value, so
+    # `{"dns.tools": false}` would also silently switch off this offline parser; `check.run` is
+    # domain-level (needs a DomainResource and a registered domain) while a pasted message has
+    # no domain, so reusing it would force a fake domain id. The analyzer touches no tenant data
+    # but processes user-supplied content and costs CPU: it needs an active membership (no
+    # anonymous use), is tenant-level, deniable per user with `{"message.analyze": false}`, and
+    # like dns.tools is never granted to client viewers.
+    MESSAGE_ANALYZE = "message.analyze"
 
 
 # --- Resources -------------------------------------------------------------------------------
@@ -82,6 +94,7 @@ _RESOURCE_KIND: Mapping[Action, type[Resource]] = MappingProxyType(
         Action.DOMAIN_DELETE: DomainResource,
         Action.DNS_TOOLS: TenantResource,
         Action.CHECK_RUN: DomainResource,
+        Action.MESSAGE_ANALYZE: TenantResource,
     }
 )
 
@@ -107,16 +120,23 @@ ROLE_ACTIONS: Mapping[MembershipRole, frozenset[Action]] = MappingProxyType(
                 Action.USER_MANAGE,
                 Action.DNS_TOOLS,
                 Action.CHECK_RUN,
+                Action.MESSAGE_ANALYZE,
             }
         )
         | _DOMAIN_ALL,
         # Domains and inviting users; not owner settings.
         MembershipRole.ADMIN: frozenset(
-            {Action.TENANT_READ, Action.USER_MANAGE, Action.DNS_TOOLS, Action.CHECK_RUN}
+            {
+                Action.TENANT_READ,
+                Action.USER_MANAGE,
+                Action.DNS_TOOLS,
+                Action.CHECK_RUN,
+                Action.MESSAGE_ANALYZE,
+            }
         )
         | _DOMAIN_ALL,
-        # Sees all domains, runs checks and uses the raw DNS tools; no user/integration
-        # management, no domain changes.
+        # Sees all domains, runs checks, uses the raw DNS tools and the message analyzer; no
+        # user/integration management, no domain changes.
         MembershipRole.ANALYST: frozenset(
             {
                 Action.TENANT_READ,
@@ -124,11 +144,13 @@ ROLE_ACTIONS: Mapping[MembershipRole, frozenset[Action]] = MappingProxyType(
                 Action.DOMAIN_READ,
                 Action.DNS_TOOLS,
                 Action.CHECK_RUN,
+                Action.MESSAGE_ANALYZE,
             }
         ),
         # Read-only, assigned domains only (enforced in `_domain_allowed`). Runs checks on those
         # domains (M3 has no persistence: viewing the Authentication tab IS running the check).
-        # No raw DNS tools: not in this set, so no toggle or DomainAccess grant can give it.
+        # No raw DNS tools and no message analyzer: not in this set, so no toggle or DomainAccess
+        # grant can give them.
         MembershipRole.CLIENT_VIEWER: frozenset(
             {Action.TENANT_READ, Action.DOMAIN_LIST, Action.DOMAIN_READ, Action.CHECK_RUN}
         ),
