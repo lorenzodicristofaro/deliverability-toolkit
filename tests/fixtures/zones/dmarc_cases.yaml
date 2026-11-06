@@ -1,0 +1,25 @@
+# Hand-written. Reserved names only. example.com itself has no _dmarc record on purpose.
+zones:
+  default:
+    - {name: healthy.example.com, type: A, ttl: 300, rdata: [192.0.2.10]}
+    - {name: _dmarc.healthy.example.com, type: TXT, ttl: 300, rdata: ["v=DMARC1; p=reject; rua=mailto:dmarc@example.com"]}
+    - {name: _dmarc.none.example.com, type: TXT, ttl: 300, rdata: ["v=DMARC1; p=none; rua=mailto:dmarc@example.com"]}
+    - {name: _dmarc.quarantine.example.com, type: TXT, ttl: 300, rdata: ["v=DMARC1; p=quarantine; pct=50; rua=mailto:dmarc@example.com; ruf=mailto:f@example.com; adkim=s"]}
+    - {name: _dmarc.weaksp.example.com, type: TXT, ttl: 300, rdata: ["v=DMARC1; p=reject; sp=none; rua=mailto:dmarc@example.com"]}
+    - {name: _dmarc.norua.example.com, type: TXT, ttl: 300, rdata: ["v=DMARC1; p=reject"]}
+    - name: _dmarc.multi.example.com
+      type: TXT
+      ttl: 300
+      rdata: ["v=DMARC1; p=none", "v=DMARC1; p=reject"]
+    - name: _dmarc.mixed.example.com
+      type: TXT
+      ttl: 300
+      rdata: ["some other text", "v=spf1 -all", "v=DMARC1; p=none; rua=mailto:dmarc@example.com"]
+    - {name: _dmarc.nodmarc.example.com, type: TXT, ttl: 300, rdata: ["not a dmarc record"]}
+    - {name: _dmarc.malformed.example.com, type: TXT, ttl: 300, rdata: ["v=DMARC1; p=bogus; pct=abc; rua=mailto:dmarc@example.com"]}
+    - {name: _dmarc.nop.example.com, type: TXT, ttl: 300, rdata: ["v=DMARC1; rua=mailto:dmarc@example.com"]}
+    - {name: _dmarc.nop-norua.example.com, type: TXT, ttl: 300, rdata: ["v=DMARC1"]}
+    - {name: _dmarc.badsp.example.com, type: TXT, ttl: 300, rdata: ["v=DMARC1; p=reject; sp=zzz; rua=mailto:dmarc@example.com"]}
+    - {name: _dmarc.example.net, type: TXT, ttl: 300, rdata: ["v=DMARC1; p=reject; rua=mailto:dmarc@example.net"]}
+    - {name: sub.example.net, type: A, ttl: 300, rdata: [192.0.2.20]}
+    - {name: _dmarc.own.sub.example.net, type: TXT, ttl: 300, rdata: ["v=DMARC1; p=none; rua=mailto:dmarc@example.net"]}
