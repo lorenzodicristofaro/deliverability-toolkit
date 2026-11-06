@@ -17,3 +17,4 @@ zones:
     - {name: incmissing.example.com, type: TXT, ttl: 300, rdata: ["v=spf1 include:absent.example.org -all"]}
     - {name: redirmissing.example.com, type: TXT, ttl: 300, rdata: ["v=spf1 redirect=absent.example.org"]}
     - {name: blk.example.com, type: TXT, ttl: 300, rdata: ["v=spf1 include:blocked.example.net -all"]}
+    - {name: synroot.example.com, type: TXT, ttl: 300, rdata: ["v=spf1 include:okinc.example.net foo -all"]}

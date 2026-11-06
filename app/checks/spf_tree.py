@@ -12,11 +12,15 @@ Counting rules (RFC 7208 section 4.6.4):
   syntactically valid terms are counted; a ``redirect`` is ignored (not counted, not followed)
   when the record has an ``all`` mechanism (section 6.1).
 - Void lookups are terms whose query is answered NXDOMAIN or NODATA: the TXT query of an
-  ``include`` target, the MX query of ``mx``, the A query of ``exists`` and, for ``a``, the
-  A and AAAA queries when BOTH are absent (the receiver asks one family only, so "void for
-  every receiver" is the conservative reading). An ``include`` target that answers TXT
-  records none of which is SPF is NOT void (RCODE 0 with answers) but is still recorded as
-  ``no_record`` (section 5.2: permerror).
+  ``include`` or ``redirect`` target, the MX query of ``mx``, the A query of ``exists`` and
+  the A query of ``a``. For ``a`` this models the dominant IPv4 receiver (which asks A only);
+  the AAAA state is queried and recorded on the term for diagnostics but does not decide
+  voidness. A failure on either query is an error, never void. An ``include`` target that
+  answers TXT records none of which is SPF is NOT void (RCODE 0 with answers) but is still
+  recorded as ``no_record`` (section 5.2: permerror).
+- Syntax errors (section 4.6: check_host() returns permerror as soon as the record has a
+  syntax error anywhere): a record that is not ``is_valid`` is kept on the node with its
+  issues and ``syntax_error=True``; none of its terms are counted or followed.
 - ``mx``: the number of MX hosts is the number of address lookups the term needs; it is
   exposed per term and compared against :data:`MX_ADDRESS_LIMIT`. MX host addresses are not
   resolved. ``ptr`` and terms with macros cannot be resolved without a sender context: they
@@ -30,6 +34,11 @@ Bounds: depth (:data:`MAX_DEPTH`), nodes (:data:`MAX_NODES`) and distinct querie
 (:data:`MAX_QUERIES`) are capped; hitting a cap stops descent and sets ``truncated``. Every
 (name, type) is queried at most once per run (memo). A domain already on the current path is
 not fetched again: the node is marked ``loop=True``.
+
+Truncation keeps ``evaluated=True``: no cap can be reached with 10 lookups or fewer (depth 13
+needs 13 include/redirect terms, 100 fetched nodes need 99, and each lookup term causes at most
+two queries, so 250 queries need over 100 terms). A truncated tree has therefore already
+exceeded :data:`LOOKUP_LIMIT` and its ``lookup_count`` is a lower bound.
 """
 
 from __future__ import annotations
@@ -97,6 +106,7 @@ class SpfNode:
     multiple_records: bool = False
     loop: bool = False
     truncated: bool = False
+    syntax_error: bool = False  # record kept with its issues; terms not counted or followed
 
     @property
     def terms(self) -> tuple[SpfTerm, ...]:
@@ -122,6 +132,10 @@ class SpfNode:
 
 @dataclass(frozen=True, slots=True)
 class SpfTree:
+    """Whole-tree result. ``truncated`` means a resource cap stopped resolution; that is only
+    reachable after more than :data:`LOOKUP_LIMIT` lookup terms, so ``lookup_count`` is then a
+    lower bound and the limit is already exceeded. ``evaluated`` stays True in that case."""
+
     domain: str
     root: SpfNode
     lookup_count: int
@@ -273,6 +287,17 @@ async def _node(run: _Run, name: str, via: NodeVia, depth: int, path: tuple[str,
             multiple_records=True,
         )
     record = parse_spf(spf[0])
+    if not record.is_valid:
+        # RFC 7208 4.6: permerror at parse time; nothing in the record is evaluated.
+        return SpfNode(
+            domain=name,
+            via=via,
+            depth=depth,
+            dns_state=fetched.state,
+            records=spf,
+            record=record,
+            syntax_error=True,
+        )
     lookups = await _lookups(run, name, record, depth, (*path, name))
     return SpfNode(
         domain=name,
@@ -314,7 +339,7 @@ async def _term(
     if term.name in ("include", "redirect"):
         via: NodeVia = "include" if term.name == "include" else "redirect"
         child = await _node(run, target, via, depth + 1, path)
-        void = term.name == "include" and child.dns_state in _ABSENT
+        void = child.dns_state in _ABSENT
         if void:
             run.void_count += 1
         states: tuple[tuple[str, ResultState], ...] = (
@@ -339,7 +364,8 @@ async def _term(
         answers.append((rdtype, got[0], got[1]))
     addr_states = tuple((rt, st) for rt, st, _ in answers)
     error = next((st for _, st, _ in answers if st.is_failure), None)
-    void = error is None and all(st in _ABSENT for _, st, _ in answers)
+    # Voidness is decided by the first rdtype (A for ``a``/``exists``, MX for ``mx``).
+    void = error is None and answers[0][1] in _ABSENT
     if void:
         run.void_count += 1
     mx_hosts: int | None = None

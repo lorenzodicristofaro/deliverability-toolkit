@@ -44,7 +44,7 @@ def test_limits_are_rfc_values() -> None:
         ("counts", "eleven.example.com", 11, 0, True, False, 4),
         ("counts", "voids2.example.com", 2, 2, True, False, 1),
         ("counts", "voids3.example.com", 3, 3, True, False, 2),
-        ("counts", "v6only.example.com", 1, 0, True, False, 1),
+        ("counts", "v6only.example.com", 1, 1, True, False, 1),
         ("counts", "mxten.example.com", 1, 0, True, False, 1),
         ("counts", "mxmany.example.com", 1, 0, True, False, 1),
         ("counts", "inclplain.example.com", 1, 0, True, False, 2),
@@ -60,13 +60,14 @@ def test_limits_are_rfc_values() -> None:
         ("failures", "to.example.com", 1, 0, False, False, 1),
         ("failures", "trunc.example.com", 1, 0, False, False, 2),
         ("failures", "rootfail.example.com", 0, 0, False, False, 1),
-        ("failures", "mal.example.com", 2, 0, True, False, 3),
+        ("failures", "mal.example.com", 1, 0, True, False, 2),
+        ("failures", "synroot.example.com", 0, 0, True, False, 1),
         ("failures", "multi.example.com", 0, 0, True, False, 1),
         ("failures", "incmulti.example.com", 1, 0, True, False, 2),
         ("failures", "nospf.example.com", 0, 0, True, False, 1),
         ("failures", "nothing.example.com", 0, 0, True, False, 1),
         ("failures", "incmissing.example.com", 1, 1, True, False, 2),
-        ("failures", "redirmissing.example.com", 1, 0, True, False, 2),
+        ("failures", "redirmissing.example.com", 1, 1, True, False, 2),
     ],
 )
 async def test_tree_counters(
@@ -126,10 +127,35 @@ async def test_voids_and_nodata_vs_nxdomain() -> None:
     assert by["include"].child.missing_target and by["include"].child.error is None
 
 
-async def test_a_with_only_aaaa_is_not_void() -> None:
+async def test_a_void_decided_by_a_query_aaaa_recorded() -> None:
     tree = await resolve_spf(_zone("counts"), "v6only.example.com")
     (lk,) = tree.root.lookups
-    assert not lk.void and lk.error is None
+    assert lk.void and lk.error is None
+    assert dict(lk.states) == {"A": ResultState.nodata, "AAAA": ResultState.ok}
+
+
+@pytest.mark.parametrize(
+    ("a_entry", "aaaa_state", "error"),
+    [
+        ({"rdata": ["192.0.2.1"], "ttl": 60}, "servfail", ResultState.servfail),
+        ({"state": "nxdomain"}, "timeout", ResultState.timeout),
+        ({"state": "servfail"}, "nxdomain", ResultState.servfail),
+    ],
+)
+async def test_a_failure_on_either_family_is_error_not_void(
+    a_entry: dict[str, Any], aaaa_state: str, error: ResultState
+) -> None:
+    resolver = _fake(
+        [
+            _txt("fam.test", "v=spf1 a:h.fam.test -all"),
+            {"name": "h.fam.test", "type": "A", **a_entry},
+            {"name": "h.fam.test", "type": "AAAA", "state": aaaa_state},
+        ]
+    )
+    tree = await resolve_spf(resolver, "fam.test")
+    (lk,) = tree.root.lookups
+    assert lk.error is error and not lk.void
+    assert tree.void_count == 0 and not tree.evaluated
 
 
 @pytest.mark.parametrize(
@@ -204,6 +230,7 @@ async def test_deep_chain_truncated_at_depth_cap() -> None:
     last = tree.nodes()[-1]
     assert last.truncated and last.depth == MAX_DEPTH + 1 and last.dns_state is None
     assert max(n.depth for n in tree.nodes() if not n.truncated) == MAX_DEPTH
+    assert tree.lookup_count > LOOKUP_LIMIT and tree.evaluated
 
 
 @pytest.mark.parametrize(
@@ -256,10 +283,19 @@ async def test_blocked_is_error() -> None:
 async def test_malformed_record_inside_include() -> None:
     tree = await resolve_spf(_zone("failures"), "mal.example.com")
     bad = _find(tree, "badrec.example.net")
-    assert bad.record is not None and not bad.record.is_valid
+    assert bad.syntax_error and bad.record is not None and not bad.record.is_valid
     assert {"unknown_mechanism", "bad_ip", "empty_value"} <= set(bad.record.issue_codes())
-    assert [lk.term.raw for lk in bad.lookups] == ["include:okinc.example.net"]
-    assert tree.evaluated
+    assert bad.lookups == () and bad.children == ()
+    assert tree.lookup_count == 1 and tree.evaluated
+
+
+async def test_malformed_root_record_not_evaluated() -> None:
+    resolver = _zone("failures")
+    tree = await resolve_spf(resolver, "synroot.example.com")
+    assert tree.root.syntax_error and tree.root.records and tree.root.lookups == ()
+    assert tree.root.record is not None
+    assert "unknown_mechanism" in tree.root.record.issue_codes()
+    assert [q.name for q in resolver.questions] == ["synroot.example.com"]
 
 
 async def test_multiple_records_kept_and_not_followed() -> None:
@@ -283,6 +319,8 @@ async def test_redirect_to_missing_is_recorded() -> None:
     tree = await resolve_spf(_zone("failures"), "redirmissing.example.com")
     (child,) = tree.root.children
     assert child.via == "redirect" and child.missing_target
+    (lk,) = tree.root.lookups
+    assert lk.void and tree.void_count == 1
 
 
 def _fake(entries: list[dict[str, Any]]) -> FakeResolver:
@@ -302,6 +340,7 @@ async def test_node_cap_bounds_wide_tree() -> None:
     tree = await resolve_spf(resolver, "wide.test")
     fetched = [n for n in tree.nodes() if not n.truncated]
     assert len(fetched) == MAX_NODES and tree.truncated
+    assert tree.lookup_count > LOOKUP_LIMIT and tree.evaluated
     assert len(resolver.questions) == tree.query_count == MAX_NODES
 
 
@@ -310,6 +349,7 @@ async def test_query_cap_bounds_hostile_record() -> None:
     resolver = _fake([_txt("hostile.test", f"v=spf1 {terms} -all")])
     tree = await resolve_spf(resolver, "hostile.test")
     assert tree.truncated and tree.query_count == MAX_QUERIES == len(resolver.questions)
+    assert tree.lookup_count > LOOKUP_LIMIT and tree.evaluated
 
 
 @pytest.mark.parametrize(
