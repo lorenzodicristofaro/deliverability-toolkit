@@ -147,19 +147,21 @@ async def dkim_events(
     # `probe_selectors` is an async generator; it is typed as an iterator, we need `aclose`.
     probe = cast("AsyncGenerator[SelectorResult, None]", probe_selectors(ctx, domain, names))
     try:
-        try:
-            async with asyncio.timeout(deadline_s):
-                async for res in probe:
-                    results.append(res)
-                    yield sse("selector", _render(lang, kind="row", row=_row(res)))
-        except TimeoutError:
-            complete = False
-        summary = {
-            "probed": len(results),
-            "found": sum(r.state == "found" for r in results),
-            "not_found": sum(r.state == "not_found" for r in results),
-            "errors": sum(r.state == "error" for r in results),
-        }
+        deadline = asyncio.get_running_loop().time() + deadline_s
+        while True:
+            try:
+                # Only the wait for the next selector is bounded; the yield below is outside
+                # any timeout scope, so a slow consumer can never lose the `done` event.
+                async with asyncio.timeout_at(deadline):
+                    res = await anext(probe)
+            except StopAsyncIteration:
+                break
+            except TimeoutError:
+                complete = False
+                await probe.aclose()
+                break
+            results.append(res)
+            yield sse("selector", _render(lang, kind="row", row=_row(res)))
         result = summarize(
             domain,
             results,
@@ -170,6 +172,13 @@ async def dkim_events(
         )
         if on_result is not None:
             on_result(result)
+        states = [sel["state"] for sel in result.data["selectors"]]
+        summary = {
+            "probed": result.data["probed"],
+            "found": result.data["found"],
+            "not_found": states.count("not_found"),
+            "errors": states.count("error"),
+        }
         yield sse(
             "done",
             _render(

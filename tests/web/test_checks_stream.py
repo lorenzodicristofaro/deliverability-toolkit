@@ -423,3 +423,27 @@ async def test_deadline_result_is_error_not_ok() -> None:
         )
     ]
     assert got[0].status == "error"
+
+
+async def test_slow_consumer_past_the_deadline_still_gets_done() -> None:
+    from app.dns.types import ResultState
+
+    class FastThenHang(Hanging):
+        async def resolve(self, question: DnsQuestion) -> DnsResult:
+            if question.name.startswith("fast."):
+                return DnsResult(question=question, state=ResultState.nxdomain, rcode=3)
+            return await super().resolve(question)
+
+    resolver = FastThenHang()
+    ctx = CheckContext(resolver=resolver)
+    got: list[Any] = []
+    events = dkim_events(
+        ctx, "example.com", "en", selectors=["fast", "slow"], deadline_s=0.05, on_result=got.append
+    )
+    frames = [await anext(events)]
+    await asyncio.sleep(0.15)  # the consumer is slow: the deadline passes between frames
+    frames.extend([f async for f in events])
+    assert [parse(f)[0][0] for f in frames] == ["selector", "done"]
+    assert 'data-status="error"' in frames[-1] and 'data-complete="0"' in frames[-1]
+    assert got[0].status == "error"
+    assert resolver.cancelled == resolver.started >= 1
