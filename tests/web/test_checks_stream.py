@@ -29,6 +29,7 @@ from app.models import Membership
 from app.web.checks_stream import dkim_events, sse
 from tests.api.test_domains import B_SECRET_NAME, KEY, ROOT, World, _seed, call
 from tests.support.dns_backend import fake_backend
+from tests.support.dns_zones import parse_zones
 
 SELECTORS = [s.name for s in list_selectors()]
 HOSTILE = 'v=DKIM1; k=rsa; p="><script>alert(1)</script><img src=x onerror=alert(2)>'
@@ -362,6 +363,7 @@ async def test_deadline_stops_the_probe_and_reports_incomplete() -> None:
     assert len(frames) == 1
     event, data = parse(frames[0])[0]
     assert event == "done"
+    assert 'data-status="error"' in data
     assert 'data-complete="0"' in data and "dkim-findings" in data and "data-code" not in data
     assert resolver.cancelled == resolver.started == 2
 
@@ -395,3 +397,29 @@ async def test_hostile_selector_name_is_escaped() -> None:
     body = "".join(frames)
     assert "<b>" not in body
     assert "&lt;b&gt;evil&lt;/b&gt;" in body
+
+
+async def test_done_result_equals_dkim_check_run() -> None:
+    from app.checks.dkim import DkimCheck
+    from app.checks.models import Target
+
+    servers = parse_zones({"zones": ZONES})
+    ctx = CheckContext(resolver=servers.resolver("default"))
+    got: list[Any] = []
+    [f async for f in dkim_events(ctx, "assigned.example", "en", on_result=got.append)]
+    expected = await DkimCheck().run(ctx, Target(domain="assigned.example"))
+    zero = {"started_at": expected.started_at, "duration_ms": 0}
+    assert got[0].model_copy(update=zero) == expected.model_copy(update=zero)
+    assert expected.status == "error" or expected.findings  # a non-trivial comparison
+
+
+async def test_deadline_result_is_error_not_ok() -> None:
+    got: list[Any] = []
+    ctx = CheckContext(resolver=Hanging())
+    [
+        f
+        async for f in dkim_events(
+            ctx, "example.com", "en", selectors=["a"], deadline_s=0.05, on_result=got.append
+        )
+    ]
+    assert got[0].status == "error"

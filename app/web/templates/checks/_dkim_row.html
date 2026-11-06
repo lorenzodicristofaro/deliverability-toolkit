@@ -20,7 +20,7 @@
   <p class="dkim-note">{{ t("checks.dkim.not_enumerable") }}</p>
 </div>
 {% else %}
-<div class="dkim-done" data-testid="dkim-done" data-complete="{{ "1" if complete else "0" }}">
+<div class="dkim-done" data-testid="dkim-done" data-complete="{{ "1" if complete else "0" }}" data-status="{{ status }}">
   <p>{{ t("checks.dkim.done", probed=summary.probed, found=summary.found, not_found=summary.not_found, errors=summary.errors) }}</p>
   {% if not complete %}<p role="alert">{{ t("checks.dkim.deadline") }}</p>{% endif %}
   <ul class="dkim-findings">

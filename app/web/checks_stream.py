@@ -13,7 +13,8 @@ Events: one `selector` event per selector in completion order (data = an escaped
 `checks/_dkim_row.html`), then one `done` event with the summary and findings. A failed selector
 is a row in the `error` state, never an empty or "not found" row. The whole stream has an overall
 deadline (`STREAM_DEADLINE_S`); when it expires the probe is stopped and `done` says the result is
-incomplete (no findings are claimed). A client disconnect cancels the response task; the `finally`
+incomplete (status `error`, no aggregate findings). A client disconnect cancels the response task;
+the `finally`
 closes the probe generator, which cancels its in-flight lookups.
 
 The client (M3-17) must close its EventSource on `done`, otherwise the browser reconnects.
@@ -22,16 +23,17 @@ The client (M3-17) must close its EventSource on `done`, otherwise the browser r
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncGenerator, AsyncIterator, Sequence
+import time
+from collections.abc import AsyncGenerator, AsyncIterator, Callable, Sequence
 from typing import Annotated, Final, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
 from app.api.v1.checks import ResolverDep
-from app.checks.dkim import SelectorResult, _selector_findings, probe_selectors
+from app.checks.dkim import SelectorResult, probe_selectors, summarize
 from app.checks.dkim_selectors import list_selectors
-from app.checks.models import CheckContext, Finding, finding
+from app.checks.models import CheckContext, CheckResult
 from app.core.domain_names import InvalidDomainName, to_ascii_domain, to_dns_name
 from app.core.i18n import t
 from app.core.permissions import Action, DomainResource, TenantResource, can
@@ -109,26 +111,6 @@ def sse(event: str, html: str) -> str:
     return f"event: {event}\n" + "".join(f"data: {line}\n" for line in lines) + "\n"
 
 
-def _summary_findings(results: Sequence[SelectorResult]) -> list[Finding]:
-    """The findings `DkimCheck.run` builds for these results (kept in step with it)."""
-    findings: list[Finding] = []
-    for r in results:
-        findings.extend(_selector_findings(r))
-    failed = [r for r in results if r.state == "error"]
-    if failed:
-        findings.append(
-            finding(
-                "DKIM_PROBE_ERRORS",
-                "low",
-                {"count": len(failed), "total": len(results)},
-                [f"{r.selector}: {r.reason}" for r in failed],
-            )
-        )
-    elif results and not any(r.state == "found" for r in results):
-        findings.append(finding("DKIM_NO_SELECTOR_FOUND", "info", {"count": len(results)}))
-    return findings
-
-
 def _render(lang: str, **context: object) -> str:
     return env.get_template(TEMPLATE).render(
         lang=lang, t=lambda key, **params: t(key, lang, **params), **context
@@ -154,11 +136,14 @@ async def dkim_events(
     *,
     selectors: Sequence[str] | None = None,
     deadline_s: float = STREAM_DEADLINE_S,
+    on_result: Callable[[CheckResult], None] | None = None,
 ) -> AsyncIterator[str]:
     """SSE frames for one probe run. Closing this generator closes the probe."""
     names = tuple(selectors) if selectors is not None else tuple(s.name for s in list_selectors())
     results: list[SelectorResult] = []
     complete = True
+    started = ctx.clock()
+    t0 = time.monotonic()
     # `probe_selectors` is an async generator; it is typed as an iterator, we need `aclose`.
     probe = cast("AsyncGenerator[SelectorResult, None]", probe_selectors(ctx, domain, names))
     try:
@@ -175,10 +160,26 @@ async def dkim_events(
             "not_found": sum(r.state == "not_found" for r in results),
             "errors": sum(r.state == "error" for r in results),
         }
-        findings = _summary_findings(results) if complete else []
+        result = summarize(
+            domain,
+            results,
+            names,
+            started_at=started,
+            duration_ms=int((time.monotonic() - t0) * 1000),
+            complete=complete,
+        )
+        if on_result is not None:
+            on_result(result)
         yield sse(
             "done",
-            _render(lang, kind="done", summary=summary, findings=findings, complete=complete),
+            _render(
+                lang,
+                kind="done",
+                summary=summary,
+                findings=result.findings,
+                complete=complete,
+                status=result.status,
+            ),
         )
     finally:
         await probe.aclose()
