@@ -53,6 +53,26 @@ Carried over from M0-07 QA:
 - [ ] DKIM selector probe with seeded selector list, streaming results via SSE
 - [ ] DMARC incl. external report authorization
 - [ ] Domain page "Authentication" tab, CLI `check` command, REST endpoints
+- Tickets (docs/tickets/):
+  - [ ] M3-01 Check interface + CheckResult/Finding models
+  - [ ] M3-02 check registry + runner service
+  - [ ] M3-03 TXT/CNAME fetch helper
+  - [ ] M3-04 SPF parser (opus)
+  - [ ] M3-05 DMARC parser (opus)
+  - [ ] M3-06 DKIM key record parser (opus)
+  - [ ] M3-07 SPF recursive resolution engine (opus)
+  - [ ] M3-08 SPF check: findings, flattening hints (opus)
+  - [ ] M3-09 organizational domain helper (public suffix source unverified)
+  - [ ] M3-10 DMARC check + org-domain fallback
+  - [ ] M3-11 DMARC external report authorization (opus)
+  - [ ] M3-12 DKIM selector seed + loader (unverified entries flagged)
+  - [ ] M3-13 DKIM probe engine + check
+  - [ ] M3-14 `check.run` permission (opus)
+  - [ ] M3-15 checks REST endpoints
+  - [ ] M3-16 DKIM SSE stream
+  - [ ] M3-17 Authentication tab UI
+  - [ ] M3-18 CLI `check` command (tenant-less free check)
+  - [ ] M3-19 acceptance tests + docs/CHECKS.md
 - Accept: results identical across UI, API and CLI; table-driven tests with malformed records.
 
 ## M4 — Original (headers) analyzer
