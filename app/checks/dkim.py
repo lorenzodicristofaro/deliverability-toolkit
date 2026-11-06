@@ -29,6 +29,7 @@ import time
 from collections import deque
 from collections.abc import AsyncIterator, Iterable, Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, Literal
 
 from app.checks.dkim_selectors import list_selectors
@@ -200,6 +201,57 @@ def _selector_data(res: SelectorResult) -> dict[str, Any]:
     }
 
 
+def summarize(
+    target: str,
+    results: Sequence[SelectorResult],
+    names: Sequence[str],
+    *,
+    started_at: datetime,
+    duration_ms: int,
+    complete: bool = True,
+) -> CheckResult:
+    """The single source of the DKIM result (check, API, CLI and the SSE ``done`` event).
+
+    ``names`` is the probe order; results are sorted by it. With ``complete=False`` (the probe
+    was cut short) the result is never evaluated, so its status is ``error``, and the aggregate
+    findings (which need every selector) are not emitted.
+    """
+    order = {n: i for i, n in enumerate(names)}
+    ordered = sorted(results, key=lambda r: order.get(r.selector, len(order)))
+    findings: list[Finding] = []
+    for r in ordered:
+        findings.extend(_selector_findings(r))
+    failed = [r for r in ordered if r.state == "error"]
+    found = [r for r in ordered if r.state == "found"]
+    if complete:
+        if failed:
+            findings.append(
+                finding(
+                    "DKIM_PROBE_ERRORS",
+                    "low",
+                    {"count": len(failed), "total": len(ordered)},
+                    [f"{r.selector}: {r.reason}" for r in failed],
+                )
+            )
+        elif ordered and not found:  # every selector is not_found
+            findings.append(finding("DKIM_NO_SELECTOR_FOUND", "info", {"count": len(ordered)}))
+    evaluated = complete and bool(ordered) and (bool(found) or not failed)
+    return CheckResult.build(
+        check_id=DkimCheck.id,
+        target=target,
+        findings=findings,
+        evaluated=evaluated,
+        started_at=started_at,
+        duration_ms=duration_ms,
+        data={
+            "enumerable": False,
+            "probed": len(ordered),
+            "found": len(found),
+            "selectors": [_selector_data(r) for r in ordered],
+        },
+    )
+
+
 class DkimCheck:
     id = "dkim"
 
@@ -219,39 +271,11 @@ class DkimCheck:
         except InvalidDomainName:
             domain = target.domain.strip().lower().removesuffix(".")  # probes report the error
         names = self._names()
-        order = {n: i for i, n in enumerate(names)}
         results = [r async for r in probe_selectors(ctx, domain, names)]
-        results.sort(key=lambda r: order[r.selector])  # stable output regardless of timing
-
-        findings: list[Finding] = []
-        for r in results:
-            findings.extend(_selector_findings(r))
-        failed = [r for r in results if r.state == "error"]
-        found = [r for r in results if r.state == "found"]
-        if failed:
-            findings.append(
-                finding(
-                    "DKIM_PROBE_ERRORS",
-                    "low",
-                    {"count": len(failed), "total": len(results)},
-                    [f"{r.selector}: {r.reason}" for r in failed],
-                )
-            )
-        elif results and not found:  # every selector is not_found
-            findings.append(finding("DKIM_NO_SELECTOR_FOUND", "info", {"count": len(results)}))
-
-        evaluated = bool(results) and (bool(found) or not failed)
-        return CheckResult.build(
-            check_id=self.id,
-            target=target.domain,
-            findings=findings,
-            evaluated=evaluated,
+        return summarize(
+            target.domain,
+            results,
+            names,
             started_at=started,
             duration_ms=int((time.monotonic() - t0) * 1000),
-            data={
-                "enumerable": False,
-                "probed": len(results),
-                "found": len(found),
-                "selectors": [_selector_data(r) for r in results],
-            },
         )
