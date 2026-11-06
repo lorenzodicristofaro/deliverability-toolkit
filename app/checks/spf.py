@@ -26,6 +26,7 @@ from typing import Any
 from app.checks.models import CheckContext, CheckResult, Finding, Target, finding
 from app.checks.spf_tree import (
     LOOKUP_LIMIT,
+    MX_ADDRESS_LIMIT,
     VOID_LOOKUP_LIMIT,
     SpfNode,
     SpfTree,
@@ -53,6 +54,7 @@ CODES: tuple[str, ...] = (
     "SPF_RESOLUTION_TRUNCATED",
     "SPF_FLATTENING_HINT",
     "SPF_DNS_ERROR",
+    "SPF_MX_TOO_MANY_HOSTS",
 )
 
 # Lookup count from which SPF_NEAR_LOOKUP_LIMIT / SPF_FLATTENING_HINT are emitted (9 and 10
@@ -138,6 +140,11 @@ def _node_findings(node: SpfNode) -> list[Finding]:
     syntax += [f"invalid_target: {lk.term.raw}" for lk in node.lookups if lk.invalid_target]
     if syntax:
         out.append(finding("SPF_SYNTAX_ERROR", "high", name, syntax))
+    for lk in node.lookups:
+        if lk.mx_limit_exceeded:
+            # RFC 7208 section 4.6.4: over 10 MX hosts, the mx mechanism MUST be permerror.
+            params = {**name, "term": lk.term.raw, "count": lk.mx_hosts, "limit": MX_ADDRESS_LIMIT}
+            out.append(finding("SPF_MX_TOO_MANY_HOSTS", "high", params))
     if node.record is not None and not node.syntax_error:
         ptr = [t.raw for t in node.record.mechanisms if t.name == "ptr" and t.valid]
         if ptr:

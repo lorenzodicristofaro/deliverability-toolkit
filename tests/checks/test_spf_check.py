@@ -17,7 +17,7 @@ from app.checks.spf import (
     TXT_STRING_MAX,
     SpfCheck,
 )
-from app.checks.spf_tree import LOOKUP_LIMIT
+from app.checks.spf_tree import LOOKUP_LIMIT, MX_ADDRESS_LIMIT
 from app.core import i18n
 from app.dns.types import DnsQuestion, DnsResult, ResultState
 from tests.dns.conftest import _no_network_in_dns_tests  # noqa: F401  (autouse socket guard)
@@ -92,6 +92,7 @@ ZONE_CASES: list[tuple[str, str, str, set[str]]] = [
     ),
     ("counts", "v6only.example.com", "ok", set()),
     ("counts", "mxten.example.com", "ok", set()),
+    ("counts", "mxmany.example.com", "fail", {"SPF_MX_TOO_MANY_HOSTS"}),
     ("counts", "inclplain.example.com", "fail", {"SPF_INCLUDE_NOT_FOUND"}),
     ("counts", "dup.example.com", "ok", set()),
     ("counts", "macro.example.com", "warn", {"SPF_PTR_DEPRECATED"}),
@@ -297,6 +298,33 @@ async def test_data_is_tree_summary() -> None:
     assert [n["domain"] for n in r.data["nodes"]] == ["simple.example.com", "_spf.example.net"]
     assert r.data["nodes"][1]["via"] == "include"
     json.loads(r.model_dump_json())  # serialisable
+
+
+@pytest.mark.parametrize(
+    ("domain", "hosts"), [("mxten.example.com", 10), ("mxmany.example.com", 11)]
+)
+async def test_mx_host_limit_boundary(domain: str, hosts: int) -> None:
+    r = await _check(_zone("counts"), domain)
+    found = [f for f in r.findings if f.code == "SPF_MX_TOO_MANY_HOSTS"]
+    if hosts <= MX_ADDRESS_LIMIT:
+        assert found == [] and r.status == "ok"
+        return
+    (f,) = found
+    assert f.severity == "high" and r.status == "fail"
+    assert dict(f.params) == {"name": domain, "term": "mx", "count": hosts, "limit": 10}
+
+
+async def test_mx_finding_per_offending_term() -> None:
+    hosts = [f"10 m{i}.test" for i in range(11)]
+    entries = [
+        _txt("x.test", "v=spf1 mx:big.test mx:big2.test mx:small.test -all"),
+        {"name": "big.test", "type": "MX", "ttl": 60, "rdata": hosts},
+        {"name": "big2.test", "type": "MX", "ttl": 60, "rdata": [*hosts, "10 m99.test"]},
+        {"name": "small.test", "type": "MX", "ttl": 60, "rdata": ["10 m1.test"]},
+    ]
+    r = await _check(_fake(entries), "x.test")
+    terms = [(f.params["term"], f.params["count"]) for f in r.findings]
+    assert terms == [("mx:big.test", 11), ("mx:big2.test", 12)]
 
 
 async def test_truncated_is_never_ok() -> None:
