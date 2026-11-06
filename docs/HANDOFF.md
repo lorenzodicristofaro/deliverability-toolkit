@@ -8,7 +8,7 @@ Resume with `/gm`.
 
 ## Open maintainer decisions
 - `qa` → `main` promotion of M1, M2 and M3: maintainer only.
-- Confirm the 9 DKIM seed selectors in seeds/dkim_selectors.yaml (all `unverified`, no provider) against official vendor docs.
+- DKIM selectors: provider entries verified in M3-20 (see ticket Research report). Open: official sources for Mailchimp campaigns, Postmark, HubSpot; generic default/dkim/mail/k1 stay unverified.
 - Confirm the Public Suffix List data licence (MPL-2.0 per PyPI only; seeds/public_suffix_source.yaml).
 - SecLists password list terms and HTMX under CSP: still unverified (from M1).
 - Cleanup: stale worktrees in .claude/worktrees/ and old local branches (agent worktrees start at origin/main).

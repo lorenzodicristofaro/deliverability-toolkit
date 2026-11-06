@@ -153,7 +153,9 @@ Carried over from M0-07 QA:
 - [ ] app/services/domains.py hardcodes MembershipRole.CLIENT_VIEWER in list and set_access; use is_domain_restricted
 - [ ] The matrix guard's create_app() uses env settings, not world.settings (QA nit)
 - [ ] app/checks/dkim_selectors.py imports private validation helpers from app/dns/knowledge.py and app/dns/types.py; expose a public seed-validation helper (M3-12 QA)
-- [ ] MAINTAINER TO CONFIRM: all 9 DKIM seed selectors (default, dkim, mail, google, s1, s2, k1, selector1, selector2) are unverified with no provider; confirm provenance against official vendor docs before promoting any (M3-12)
+- [x] (M3-20) DKIM seed selectors: provider selectors verified on raw official pages (Microsoft 365, Google Workspace, SendGrid, Mandrill, Klaviyo, MailUp, ActiveCampaign); per-customer (SES, Mailgun, SparkPost, Zoho, Brevo) not seeded; still unverified generic: default, dkim, mail, k1
+- [ ] DKIM seed: per-entry `verified_on` (file-level date only; M3-20b entries verified 2026-11-07 noted in a comment)
+- [ ] DKIM seed: Mailchimp campaigns, Postmark, HubSpot selectors not found in official docs; add if the maintainer supplies an official source
 - [ ] Optional: add an explicit `evaluated` field to CheckResult if the runner-only convention proves insufficient (M3-01 QA)
 - [ ] MAINTAINER TO CONFIRM: Public Suffix List data licence (MPL-2.0 per the PyPI publicsuffixlist page only); check github.com/publicsuffix/list LICENSE; recorded as unverified in seeds/public_suffix_source.yaml (M3-09)
 - [ ] SPF parser nits (M3-04 QA): at the 4096-char cut, drop the partial last term so it does not add a second misleading issue; add a comment on Unicode-whitespace term splitting
