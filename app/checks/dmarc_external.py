@@ -25,13 +25,17 @@ read 2026-11-06):
   Receiver." Authorization records normally carry only ``v=DMARC1``, so the parser's
   ``missing_policy`` issue is ignored. Interpretation (the RFC does not define "basic
   parsing" further): a record that is not a ``tag=value`` list (``invalid_tag``,
-  ``empty_tag``) is discarded; other parse errors are reported but do not void the record.
+  ``empty_tag``) is discarded and, when no other record authorizes, reported as
+  ``DMARC_EXTERNAL_AUTH_RECORD_UNPARSEABLE`` (found, but not a tag list) instead of
+  ``DMARC_EXTERNAL_UNAUTHORIZED`` (no valid record); other parse errors are reported
+  (``DMARC_EXTERNAL_AUTH_RECORD_INVALID``) but do not void the record.
 - Override: "8. [...] However, to prevent loops or indirect abuse, the overriding URI MUST use
   the same destination host from the first step." and "if the confirming record includes a
   URI whose host is again different than the domain publishing that override, the Mail
   Receiver generating the report MUST NOT generate a report to either the original or the
   override URI." An override (``rua``/``ruf`` in the authorization record, same tag) whose
-  host is not the destination host makes the destination ``unauthorized``.
+  host is not the destination host gives state ``override_mismatch`` and
+  ``DMARC_EXTERNAL_OVERRIDE_MISMATCH`` (a record exists, but no report is sent to either URI).
 - Unconfirmed: "Where the above algorithm fails to confirm that the external reporting was
   authorized by the Report Receiver, the URI MUST be ignored by the Mail Receiver generating
   the report."
@@ -76,6 +80,8 @@ CODES: tuple[str, ...] = (
     "DMARC_EXTERNAL_TOO_MANY_DESTINATIONS",
     "DMARC_EXTERNAL_NOT_CHECKABLE",
     "DMARC_EXTERNAL_AUTH_RECORD_INVALID",
+    "DMARC_EXTERNAL_AUTH_RECORD_UNPARSEABLE",
+    "DMARC_EXTERNAL_OVERRIDE_MISMATCH",
 )
 
 MAX_DESTINATION_LOOKUPS = 8
@@ -84,6 +90,7 @@ MAX_DESTINATION_LOOKUPS = 8
 SAME_ORG = "same_org"
 AUTHORIZED = "authorized"  # DMARC_EXTERNAL_AUTHORIZED: data only, never a finding
 UNAUTHORIZED = "unauthorized"
+OVERRIDE_MISMATCH = "override_mismatch"
 UNVERIFIED = "unverified"
 NOT_CHECKABLE = "not_checkable"
 NOT_CHECKED = "not_checked"
@@ -106,6 +113,7 @@ class _Lookup:
     state: str
     dns_state: str | None = None
     errors: list[str] = field(default_factory=list)
+    unparseable: bool = False  # a v=DMARC1 record was found but is not a tag=value list
     overrides: dict[str, list[DmarcUri]] = field(default_factory=lambda: {"rua": [], "ruf": []})
 
 
@@ -136,6 +144,7 @@ async def _lookup(resolver: Resolver, policy_domain: str, dest: str) -> _Lookup:
         ]
         out.errors.extend(errors)
         if any(i.code in _NOT_TAG_LIST for i in rec.issues):
+            out.unparseable = True
             continue  # not a tag=value list: fails basic parsing (step 6)
         out.state = AUTHORIZED
         out.overrides["rua"].extend(rec.rua)
@@ -196,7 +205,7 @@ async def check_external_destinations(
             e.update(state=NOT_CHECKED, reason="lookup_limit")
             continue
         e["query"] = lk.query
-        if lk.errors:
+        if lk.errors and lk.state == AUTHORIZED:
             findings[("DMARC_EXTERNAL_AUTH_RECORD_INVALID", dest)] = finding(
                 "DMARC_EXTERNAL_AUTH_RECORD_INVALID",
                 "low",
@@ -219,16 +228,27 @@ async def check_external_destinations(
             )
             continue
         state = lk.state
+        params = {"destination": dest, "query": lk.query}
         overrides = lk.overrides[tag]
         if overrides:
             e["override"] = [o.uri for o in overrides]
-            if state == AUTHORIZED and any(o.domain != dest for o in overrides):
-                state = UNAUTHORIZED  # step 8: override must use the same destination host
-                e["reason"] = "override_host_mismatch"
+            mismatched = [o.uri for o in overrides if o.domain != dest]
+            if state == AUTHORIZED and mismatched:
+                # Step 8: the override must use the same destination host; otherwise no
+                # report goes to either the original or the override URI.
+                state = OVERRIDE_MISMATCH
+                findings[("DMARC_EXTERNAL_OVERRIDE_MISMATCH", dest)] = finding(
+                    "DMARC_EXTERNAL_OVERRIDE_MISMATCH", "medium", params, mismatched
+                )
         e["state"] = state
-        if state == UNAUTHORIZED:
+        if state == UNAUTHORIZED and lk.unparseable:
+            e["reason"] = "auth_record_not_tag_list"
+            findings[("DMARC_EXTERNAL_AUTH_RECORD_UNPARSEABLE", dest)] = finding(
+                "DMARC_EXTERNAL_AUTH_RECORD_UNPARSEABLE", "medium", params, lk.errors
+            )
+        elif state == UNAUTHORIZED:
             findings[("DMARC_EXTERNAL_UNAUTHORIZED", dest)] = finding(
-                "DMARC_EXTERNAL_UNAUTHORIZED", "medium", {"destination": dest, "query": lk.query}
+                "DMARC_EXTERNAL_UNAUTHORIZED", "medium", params
             )
 
     return ExternalResult(tuple(findings.values()), evaluated, tuple(entries))

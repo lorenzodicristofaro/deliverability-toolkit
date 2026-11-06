@@ -155,8 +155,8 @@ CASES: list[tuple[str, str, list[str], list[tuple[str, str | None, str]], list[s
     (
         "override.example.com",
         "warn",
-        ["DMARC_EXTERNAL_UNAUTHORIZED"],
-        [("rua", "ov.example.net", "unauthorized")],
+        ["DMARC_EXTERNAL_OVERRIDE_MISMATCH"],
+        [("rua", "ov.example.net", "override_mismatch")],
         [_q("override.example.com", "ov.example.net")],
     ),
     (
@@ -176,7 +176,7 @@ CASES: list[tuple[str, str, list[str], list[tuple[str, str | None, str]], list[s
     (
         "authjunk.example.com",
         "warn",
-        ["DMARC_EXTERNAL_AUTH_RECORD_INVALID", "DMARC_EXTERNAL_UNAUTHORIZED"],
+        ["DMARC_EXTERNAL_AUTH_RECORD_UNPARSEABLE"],
         [("rua", "reports.example.net", "unauthorized")],
         [_q("authjunk.example.com", "reports.example.net")],
     ),
@@ -253,8 +253,11 @@ async def test_destination_data_shape() -> None:
     skipped = (await _run("dmarc_external_cases.yaml", "https.example.com"))[0]
     assert skipped.data["report_destinations"][0]["reason"] == "unsupported_scheme"
     ov = (await _run("dmarc_external_cases.yaml", "override.example.com"))[0]
-    assert ov.data["report_destinations"][0]["reason"] == "override_host_mismatch"
     assert ov.data["report_destinations"][0]["override"] == ["mailto:x@elsewhere.example.org"]
+    f = next(f for f in ov.findings if f.code == "DMARC_EXTERNAL_OVERRIDE_MISMATCH")
+    assert f.evidence == ("mailto:x@elsewhere.example.org",)
+    junk = (await _run("dmarc_external_cases.yaml", "authjunk.example.com"))[0]
+    assert junk.data["report_destinations"][0]["reason"] == "auth_record_not_tag_list"
 
 
 async def test_auth_record_errors_in_evidence_without_missing_policy() -> None:
@@ -427,3 +430,36 @@ def test_codes_have_complete_i18n_with_matching_placeholders() -> None:
             k = f"finding.{code}.{part}"
             assert en.get(k) and it.get(k), k
             assert i18n.placeholders(en[k]) == i18n.placeholders(it[k]), k
+
+
+@pytest.mark.parametrize("auth", ["v=DMARC1;;", "v=DMARC1; ;", "v=DMARC1; garbage", "v=DMARC1; =x"])
+async def test_record_not_a_tag_list_is_found_but_unparseable(auth: str) -> None:
+    res = _Map(txt={_AUTH: [auth]})
+    out = await check_external_destinations(res, "a.example.com", parse_dmarc(_POLICY))
+    assert [f.code for f in out.findings] == ["DMARC_EXTERNAL_AUTH_RECORD_UNPARSEABLE"]
+    assert out.findings[0].evidence  # the parse issues
+    assert [d["state"] for d in out.destinations] == ["unauthorized"]
+
+
+async def test_unparseable_record_next_to_a_good_one_authorizes() -> None:
+    res = _Map(txt={_AUTH: ["v=DMARC1;;", "v=DMARC1"]})
+    out = await check_external_destinations(res, "a.example.com", parse_dmarc(_POLICY))
+    assert [d["state"] for d in out.destinations] == ["authorized"]
+    # The broken extra record is still reported, as a low-severity record error.
+    assert [f.code for f in out.findings] == ["DMARC_EXTERNAL_AUTH_RECORD_INVALID"]
+
+
+# Private PSL section (github.io is a suffix): sibling tenants are different organizations.
+PSL_CASES = [
+    ("a.github.io", "b.github.io", ["a.github.io._report._dmarc.b.github.io"], "unauthorized"),
+    ("sub.a.github.io", "a.github.io", [], "same_org"),
+]
+
+
+@pytest.mark.parametrize(("target", "dest", "queries", "state"), PSL_CASES)
+async def test_private_psl_section(target: str, dest: str, queries: list[str], state: str) -> None:
+    res = _Map(txt={f"_dmarc.{target}": [f"v=DMARC1; p=reject; rua=mailto:r@{dest}"]})
+    r = await DmarcCheck().run(_ctx(res), Target(domain=target))
+    assert [q for q in res.queried if "._report._dmarc." in q] == queries
+    assert _states(r) == [("rua", dest, state)]
+    assert r.data["report_destinations"][0]["external"] is (state != "same_org")
