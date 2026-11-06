@@ -13,5 +13,6 @@ Acceptance criteria:
 - DNS failure at `_dmarc.` or at the fallback name -> status `error`, never DMARC_MISSING (table test over every ResultState for both lookups).
 - All codes have en + it title/detail/remediation; completeness test as in M3-08.
 - Table-driven tests: recorded zones for healthy, p=none, subdomain, missing, multiple, malformed, SERVFAIL.
+- DNS failure states (SERVFAIL, timeout, refused, blocked) on any lookup the check depends on yield status `error` via CheckResult.build(evaluated=False), never `ok` or a 'missing' finding; table test with recorded failing zones.
 New i18n keys: finding.DMARC_*.title/detail/remediation (en + it)
 Status: todo

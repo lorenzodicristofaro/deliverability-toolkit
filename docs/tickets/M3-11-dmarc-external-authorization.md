@@ -12,5 +12,6 @@ Acceptance criteria:
 - Same-org destinations (e.g. `dmarc@sub.example.com` for `example.com`) never trigger a query; mixed-case, IDN and trailing-dot destinations normalised; non-mailto schemes skipped with a note.
 - `DmarcCheck.data["report_destinations"]` lists destination, external flag, authorized state; status `error` if any external destination could not be evaluated and nothing worse was found.
 - Table-driven tests over recorded zones: authorized, missing authorization record, wrong version, wildcard auth, SERVFAIL, timeout, multiple destinations, hostile destination count.
+- DNS failure states (SERVFAIL, timeout, refused, blocked) on any lookup the check depends on yield status `error` via CheckResult.build(evaluated=False), never `ok` or a 'missing' finding; table test with recorded failing zones.
 New i18n keys: finding.DMARC_EXTERNAL_*.title/detail/remediation (en + it)
 Status: todo

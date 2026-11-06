@@ -12,5 +12,6 @@ Acceptance criteria:
 - DNS failure anywhere that affects the result -> status `error` plus SPF_DNS_ERROR finding naming the failed name and ResultState; never `ok`/SPF_MISSING (explicit test per ResultState).
 - Every finding has en + it title/detail/remediation; a test asserts all `CODES` have keys in both locales and that `it` keys are not copies of `en` for remediation.
 - Table-driven tests over the M3-07 zones plus a fully healthy domain (status ok).
+- DNS failure states (SERVFAIL, timeout, refused, blocked) on any lookup the check depends on yield status `error` via CheckResult.build(evaluated=False), never `ok` or a 'missing' finding; table test with recorded failing zones.
 New i18n keys: finding.SPF_*.title/detail/remediation (en + it), one set per code listed above
 Status: todo

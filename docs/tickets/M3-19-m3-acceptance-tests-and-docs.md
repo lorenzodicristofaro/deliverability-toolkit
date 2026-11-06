@@ -14,5 +14,6 @@ Acceptance criteria:
 - SSE streamed selector states equal the REST `data["selectors"]`.
 - Tenancy sweep: every M3 route appears in the route-coverage matrix.
 - `docs/CHECKS.md`: Check interface, finding code list with severities, how to add a check, CLI exit codes, the free-vs-tenant permission split, what is unverified.
+- For every registered check, a recorded zone that returns SERVFAIL and one that times out both yield `error` through the service, API and CLI.
 New i18n keys: none
 Status: todo
