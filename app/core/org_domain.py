@@ -9,10 +9,10 @@ Data source: the `publicsuffixlist` package (MPL-2.0), which ships the Mozilla P
 Manual update step: `uv lock --upgrade-package publicsuffixlist`, then run the tests and refresh
 verified_on here and in seeds/public_suffix_source.yaml.
 
-Private-section decision: ICANN section only (`only_icann=True`). Private suffixes such as
-`blogspot.com` are NOT suffixes here, so `foo.blogspot.com` has organizational domain
-`blogspot.com`. This matches DMARC's intent of one policy owner per registrable ICANN domain;
-tenants hosting on a shared platform domain therefore fall back to the platform's domain.
+Private-section decision: the FULL list (ICANN plus private sections) is used, so private registry
+boundaries are respected for DMARC. `blogspot.com` and `github.io` are suffixes here:
+`foo.blogspot.com` has organizational domain `foo.blogspot.com`, and `blogspot.com` itself has
+none (returns None). Tenants on shared platforms thus never inherit the platform's policy.
 Unknown TLDs follow the PSL default rule `*` (the last label is the suffix).
 """
 
@@ -27,7 +27,7 @@ from app.core.domain_names import InvalidDomainName, to_ascii_domain
 
 @lru_cache(maxsize=1)
 def _psl() -> PublicSuffixList:
-    return PublicSuffixList(only_icann=True, accept_unknown=True)
+    return PublicSuffixList(accept_unknown=True)
 
 
 def organizational_domain(name: object) -> str | None:

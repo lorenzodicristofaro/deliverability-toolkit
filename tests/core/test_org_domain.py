@@ -19,10 +19,22 @@ OK_CASES = [
     ("x.a.b.ck", "a.b.ck"),
     ("www.ck", "www.ck"),  # exception !www.ck: "ck" is the suffix
     ("x.www.ck", "www.ck"),
-    ("foo.blogspot.com", "blogspot.com"),  # private section ignored
+    ("foo.blogspot.com", "foo.blogspot.com"),  # private section respected
+    ("x.foo.blogspot.com", "foo.blogspot.com"),
+    ("a.github.io", "a.github.io"),
     ("example.unknowntld", "example.unknowntld"),  # PSL default rule "*"
 ]
-NONE_CASES = ["com", "co.uk", "b.ck", "uk", "COM.", "localhost", "xn--mnchen-3ya"]
+NONE_CASES = [
+    "blogspot.com",
+    "github.io",
+    "com",
+    "co.uk",
+    "b.ck",
+    "uk",
+    "COM.",
+    "localhost",
+    "xn--mnchen-3ya",
+]
 INVALID_CASES = [
     "",
     "   ",
