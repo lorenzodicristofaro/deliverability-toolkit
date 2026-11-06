@@ -15,4 +15,4 @@ Acceptance criteria:
 - Deny-by-default tests: anonymous, inactive user, wrong tenant, no active tenant, DomainResource passed instead of TenantResource, toggle false/None/"yes"/0 denies, unknown role, malformed principal.
 - Existing matrix/enumeration tests updated; role matrix comment in module docstring updated.
 New i18n keys: none
-Status: todo
+Status: done

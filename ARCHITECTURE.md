@@ -157,6 +157,9 @@ and DNS snapshots are kept longer.
   owner, admin, analyst on all domains; client viewer on assigned domains only; deniable
   per user by toggle. Tenant-less free checks (API/SSE) reuse `dns.tools`; the CLI `check`
   is tenant-less with no DB access (trust boundary: shell access). M3 stores no results.
+- Offline message/header analysis requires `message.analyze` (GM decision 2026-11-07, M4-06):
+  tenant-level, owner, admin, analyst; never client viewer; deniable per user by toggle and
+  independent of `dns.tools`/`check.run`. The analyzer does no DNS/network and M4 stores nothing.
 - DNSBL lookups must detect "refused/blocked" return codes (e.g. 127.255.255.x
   conventions) and report them as `error`, not `listed`.
 

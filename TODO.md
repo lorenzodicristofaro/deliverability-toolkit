@@ -87,7 +87,7 @@ Carried over from M0-07 QA:
   - [ ] M4-03 Received chain + hop delays (opus)
   - [ ] M4-04 Authentication-Results parser (opus)
   - [ ] M4-05 ARC chain parser (opus)
-  - [ ] M4-06 `message.analyze` permission (opus)
+  - [x] M4-06 `message.analyze` permission (opus)
   - [ ] M4-07 sample corpus + MANIFEST (provider samples unverified until maintainer supplies them)
   - [ ] M4-08 alignment analysis
   - [ ] M4-09 anomaly findings + MSG_* texts
