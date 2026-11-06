@@ -33,7 +33,9 @@ class CheckRegistry:
 def load_builtin_checks(registry: CheckRegistry | None = None) -> CheckRegistry:
     """Register every built-in check (explicit list; empty until concrete checks land)."""
     reg = registry if registry is not None else CheckRegistry()
-    builtin: tuple[Check, ...] = ()
+    from app.checks.dmarc import DmarcCheck
+
+    builtin: tuple[Check, ...] = (DmarcCheck(),)
     for check in builtin:
         reg.register(check)
     return reg
