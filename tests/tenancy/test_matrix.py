@@ -181,6 +181,14 @@ def _dns_propagation_form(_w: World, _role: str) -> dict[str, Any]:
     return {"name": "example.com", "type": "A", "resolver_ids": "google"}
 
 
+def _check_ids(_w: World, _role: str) -> dict[str, Any]:
+    return {"ids": ["spf"]}
+
+
+def _check_free(_w: World, _role: str) -> dict[str, Any]:
+    return {"name": "example.com", "ids": ["spf"]}
+
+
 _DNS_OWN = {**_by_role(200, 200), "viewer": 403}  # client viewers never get raw DNS tools
 
 MATRIX: dict[tuple[str, str], Entry] = {
@@ -219,6 +227,10 @@ MATRIX: dict[tuple[str, str], Entry] = {
     ("POST", "/api/v1/dns/reverse"): Entry(Kind.DNS, body=_dns_reverse, own=_DNS_OWN),
     ("POST", "/api/v1/dns/trace"): Entry(Kind.DNS, body=_dns_lookup, own=_DNS_OWN),
     ("POST", "/api/v1/dns/propagation"): Entry(Kind.DNS, body=_dns_propagation, own=_DNS_OWN),
+    # checks API (app.api.v1.checks): domain-bound (check.run) and free (dns.tools)
+    ("POST", "/api/v1/domains/{domain_id}/checks/{check_id}"): Entry(Kind.DOMAIN),
+    ("POST", "/api/v1/domains/{domain_id}/checks"): Entry(Kind.DOMAIN, body=_check_ids),
+    ("POST", "/api/v1/checks/free"): Entry(Kind.DNS, body=_check_free, own=_DNS_OWN),
 }
 
 # Public routes by (method, path): a new method on an exempt path is NOT exempt. Keep this
