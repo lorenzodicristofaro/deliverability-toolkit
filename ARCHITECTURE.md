@@ -153,6 +153,10 @@ and DNS snapshots are kept longer.
   which will absorb this policy into the guarded client.
 - Raw DNS tools require the `dns.tools` permission: owner, admin, analyst; never client
   viewer (not grantable by toggle); no anonymous access.
+- Running checks on a tenant domain requires `check.run` (GM decision 2026-11-06, M3-14):
+  owner, admin, analyst on all domains; client viewer on assigned domains only; deniable
+  per user by toggle. Tenant-less free checks (API/SSE) reuse `dns.tools`; the CLI `check`
+  is tenant-less with no DB access (trust boundary: shell access). M3 stores no results.
 - DNSBL lookups must detect "refused/blocked" return codes (e.g. 127.255.255.x
   conventions) and report them as `error`, not `listed`.
 

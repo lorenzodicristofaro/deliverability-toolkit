@@ -16,7 +16,12 @@ dependencies = [
     "sqlalchemy>=2.0",
     "pyyaml>=6.0.3",
     "uvicorn>=0.54.0",
+    "publicsuffixlist>=1.1.2.20261106",
+    "typer>=0.28.0",
 ]
+
+[project.scripts]
+dtk = "app.cli.main:main"
 
 [dependency-groups]
 dev = [

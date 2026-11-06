@@ -1,0 +1,60 @@
+# DKIM selector probe candidates (M3-12). Nothing here is verified against vendor documentation:
+# every entry is an unverified probe guess, "commonly seen" in the wild. No provider claims.
+# Promote an entry to `verified` only with an official vendor URL in its `sources`.
+verified_on: 2026-11-06
+sources: []
+selectors:
+  - name: default
+    provider: null
+    record_type: txt
+    notes: commonly seen generic selector name; provenance unverified
+    status: unverified
+    sources: []
+  - name: dkim
+    provider: null
+    record_type: txt
+    notes: commonly seen generic selector name; provenance unverified
+    status: unverified
+    sources: []
+  - name: mail
+    provider: null
+    record_type: txt
+    notes: commonly seen generic selector name; provenance unverified
+    status: unverified
+    sources: []
+  - name: s1
+    provider: null
+    record_type: either
+    notes: commonly seen generic selector name; provenance unverified
+    status: unverified
+    sources: []
+  - name: s2
+    provider: null
+    record_type: either
+    notes: commonly seen generic selector name; provenance unverified
+    status: unverified
+    sources: []
+  - name: k1
+    provider: null
+    record_type: either
+    notes: commonly seen generic selector name; provenance unverified
+    status: unverified
+    sources: []
+  - name: selector1
+    provider: null
+    record_type: either
+    notes: commonly seen generic selector name; provenance unverified
+    status: unverified
+    sources: []
+  - name: selector2
+    provider: null
+    record_type: either
+    notes: commonly seen generic selector name; provenance unverified
+    status: unverified
+    sources: []
+  - name: google
+    provider: null
+    record_type: txt
+    notes: commonly seen generic selector name; provenance unverified
+    status: unverified
+    sources: []

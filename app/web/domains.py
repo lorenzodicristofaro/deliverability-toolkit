@@ -106,6 +106,7 @@ class DomainRow:
     mixed_script: bool
     can_rename: bool
     can_delete: bool
+    can_check: bool = False
 
 
 def domain_row(view: DomainView, principal: Principal, tenant_id: int) -> DomainRow:
@@ -117,6 +118,7 @@ def domain_row(view: DomainView, principal: Principal, tenant_id: int) -> Domain
         mixed_script=mixed_script(view.display_name),
         can_rename=can(principal, Action.DOMAIN_UPDATE, resource),
         can_delete=can(principal, Action.DOMAIN_DELETE, resource),
+        can_check=can(principal, Action.CHECK_RUN, resource),
     )
 
 

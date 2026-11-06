@@ -1,0 +1,45 @@
+# Hand-written (keys are the test vectors of tests/parsers/test_dkim.py). Reserved names only.
+# One domain per scenario; the selector under test is `sel` unless the domain says otherwise.
+zones:
+  default:
+    - {name: sel._domainkey.d2048.example.com, type: TXT, ttl: 300, rdata: ["v=DKIM1; k=rsa; p=MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAuCqbZdMOdM+yp+Aa4toQdfNClJZaIdO401CyksvcKtJPUb2BP0TjjvTgRQ42wfj9BGEoxbCqJzCgmagvmHUI9wAp+5SPUc8a1jUVZ24X4v6Je+TJG1PFCDbhUzJseO45F1bX+qIejtygK0NMBuxhSuaN2uCbPYC9GgNtTrivV3eGkucKzorAfP+Bb/0lWepXJJiz4ZldE3Ho5YTRzn2QA0l28JQRMUbk8glggLHpFXgsBYPD6KkzJ3fA8MBttSHWeOJO7IPoDv5AQM20Eqjm2+w0bAVcv+84oXhHSNeLYTX2HkG+1hJk8XhV7bQwGKQpeGjCdtwpmU2RcS/AIv/ayQIDAQAB"]}
+    - {name: sel._domainkey.d1024.example.com, type: TXT, ttl: 300, rdata: ["v=DKIM1; k=rsa; p=MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQCnQuDGj8W5wGrQ3AnqSGkKEpAluYG4YICb2ypYdxNTN79cSITYQGeUMWAM5vYq5MlE3aMbNNEmLFy8u1gli8U5t6QcYREpvHR1XQcknNTCLDKfst3zumBFOqKzRcScWVnTkDmuR42DMZgsWQT9sEchBUkwp3BNwHBILvArihloJwIDAQAB"]}
+    - {name: sel._domainkey.d512.example.com, type: TXT, ttl: 300, rdata: ["v=DKIM1; k=rsa; p=MFwwDQYJKoZIhvcNAQEBBQADSwAwSAJBAMYBmgYsv3YNV4JPv08KevmOS0wGACl6RtZrjQ9hF+pEm45EFHDYdeasI/FoFoPOcMsyZCphKcbCxYKG354H46cCAwEAAQ=="]}
+    - {name: sel._domainkey.ded.example.com, type: TXT, ttl: 300, rdata: ["v=DKIM1; k=ed25519; p=11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo="]}
+    - {name: sel._domainkey.drev.example.com, type: TXT, ttl: 300, rdata: ["v=DKIM1; k=rsa; p="]}
+    - {name: sel._domainkey.dtest.example.com, type: TXT, ttl: 300, rdata: ["v=DKIM1; t=y; p=MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAuCqbZdMOdM+yp+Aa4toQdfNClJZaIdO401CyksvcKtJPUb2BP0TjjvTgRQ42wfj9BGEoxbCqJzCgmagvmHUI9wAp+5SPUc8a1jUVZ24X4v6Je+TJG1PFCDbhUzJseO45F1bX+qIejtygK0NMBuxhSuaN2uCbPYC9GgNtTrivV3eGkucKzorAfP+Bb/0lWepXJJiz4ZldE3Ho5YTRzn2QA0l28JQRMUbk8glggLHpFXgsBYPD6KkzJ3fA8MBttSHWeOJO7IPoDv5AQM20Eqjm2+w0bAVcv+84oXhHSNeLYTX2HkG+1hJk8XhV7bQwGKQpeGjCdtwpmU2RcS/AIv/ayQIDAQAB"]}
+    - {name: sel._domainkey.dsyntax.example.com, type: TXT, ttl: 300, rdata: ["v=DKIM1; k=rsa; p=!!!notbase64"]}
+    - {name: sel._domainkey.dmulti.example.com, type: TXT, ttl: 300, rdata: ["v=DKIM1; p=MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAuCqbZdMOdM+yp+Aa4toQdfNClJZaIdO401CyksvcKtJPUb2BP0TjjvTgRQ42wfj9BGEoxbCqJzCgmagvmHUI9wAp+5SPUc8a1jUVZ24X4v6Je+TJG1PFCDbhUzJseO45F1bX+qIejtygK0NMBuxhSuaN2uCbPYC9GgNtTrivV3eGkucKzorAfP+Bb/0lWepXJJiz4ZldE3Ho5YTRzn2QA0l28JQRMUbk8glggLHpFXgsBYPD6KkzJ3fA8MBttSHWeOJO7IPoDv5AQM20Eqjm2+w0bAVcv+84oXhHSNeLYTX2HkG+1hJk8XhV7bQwGKQpeGjCdtwpmU2RcS/AIv/ayQIDAQAB", "v=DKIM1; p=MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQCnQuDGj8W5wGrQ3AnqSGkKEpAluYG4YICb2ypYdxNTN79cSITYQGeUMWAM5vYq5MlE3aMbNNEmLFy8u1gli8U5t6QcYREpvHR1XQcknNTCLDKfst3zumBFOqKzRcScWVnTkDmuR42DMZgsWQT9sEchBUkwp3BNwHBILvArihloJwIDAQAB"]}
+    - {name: sel._domainkey.dchain.example.com, type: CNAME, ttl: 300, rdata: ["hop1.dkim.example.net."]}
+    - {name: hop1.dkim.example.net, type: CNAME, ttl: 300, rdata: ["hop2.dkim.example.org."]}
+    - {name: hop2.dkim.example.org, type: TXT, ttl: 300, rdata: ["v=DKIM1; p=MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAuCqbZdMOdM+yp+Aa4toQdfNClJZaIdO401CyksvcKtJPUb2BP0TjjvTgRQ42wfj9BGEoxbCqJzCgmagvmHUI9wAp+5SPUc8a1jUVZ24X4v6Je+TJG1PFCDbhUzJseO45F1bX+qIejtygK0NMBuxhSuaN2uCbPYC9GgNtTrivV3eGkucKzorAfP+Bb/0lWepXJJiz4ZldE3Ho5YTRzn2QA0l28JQRMUbk8glggLHpFXgsBYPD6KkzJ3fA8MBttSHWeOJO7IPoDv5AQM20Eqjm2+w0bAVcv+84oXhHSNeLYTX2HkG+1hJk8XhV7bQwGKQpeGjCdtwpmU2RcS/AIv/ayQIDAQAB"]}
+    - {name: sel._domainkey.ddangling.example.com, type: CNAME, ttl: 300, rdata: ["gone.dkim.example.net."]}
+    - {name: sel._domainkey.dloop.example.com, type: CNAME, ttl: 300, rdata: ["a.dkim.example.net."]}
+    - {name: a.dkim.example.net, type: CNAME, ttl: 300, rdata: ["b.dkim.example.net."]}
+    - {name: b.dkim.example.net, type: CNAME, ttl: 300, rdata: ["a.dkim.example.net."]}
+    - {name: sel._domainkey.dself.example.com, type: CNAME, ttl: 300, rdata: ["sel._domainkey.dself.example.com"]}
+    - {name: sel._domainkey.dlong.example.com, type: CNAME, ttl: 300, rdata: ["l1.dkim.example.net."]}
+    - {name: l1.dkim.example.net, type: CNAME, ttl: 300, rdata: ["l2.dkim.example.net."]}
+    - {name: l2.dkim.example.net, type: CNAME, ttl: 300, rdata: ["l3.dkim.example.net."]}
+    - {name: l3.dkim.example.net, type: CNAME, ttl: 300, rdata: ["l4.dkim.example.net."]}
+    - {name: l4.dkim.example.net, type: CNAME, ttl: 300, rdata: ["l5.dkim.example.net."]}
+    - {name: l5.dkim.example.net, type: CNAME, ttl: 300, rdata: ["l6.dkim.example.net."]}
+    - {name: l6.dkim.example.net, type: CNAME, ttl: 300, rdata: ["l7.dkim.example.net."]}
+    - {name: l7.dkim.example.net, type: CNAME, ttl: 300, rdata: ["l8.dkim.example.net."]}
+    - {name: l8.dkim.example.net, type: CNAME, ttl: 300, rdata: ["l9.dkim.example.net."]}
+    - {name: l9.dkim.example.net, type: CNAME, ttl: 300, rdata: ["l10.dkim.example.net."]}
+    - {name: l10.dkim.example.net, type: TXT, ttl: 300, rdata: ["v=DKIM1; p=MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAuCqbZdMOdM+yp+Aa4toQdfNClJZaIdO401CyksvcKtJPUb2BP0TjjvTgRQ42wfj9BGEoxbCqJzCgmagvmHUI9wAp+5SPUc8a1jUVZ24X4v6Je+TJG1PFCDbhUzJseO45F1bX+qIejtygK0NMBuxhSuaN2uCbPYC9GgNtTrivV3eGkucKzorAfP+Bb/0lWepXJJiz4ZldE3Ho5YTRzn2QA0l28JQRMUbk8glggLHpFXgsBYPD6KkzJ3fA8MBttSHWeOJO7IPoDv5AQM20Eqjm2+w0bAVcv+84oXhHSNeLYTX2HkG+1hJk8XhV7bQwGKQpeGjCdtwpmU2RcS/AIv/ayQIDAQAB"]}
+    - {name: sel._domainkey.d8hops.example.com, type: CNAME, ttl: 300, rdata: ["m1.dkim.example.net."]}
+    - {name: m1.dkim.example.net, type: CNAME, ttl: 300, rdata: ["m2.dkim.example.net."]}
+    - {name: m2.dkim.example.net, type: CNAME, ttl: 300, rdata: ["m3.dkim.example.net."]}
+    - {name: m3.dkim.example.net, type: CNAME, ttl: 300, rdata: ["m4.dkim.example.net."]}
+    - {name: m4.dkim.example.net, type: CNAME, ttl: 300, rdata: ["m5.dkim.example.net."]}
+    - {name: m5.dkim.example.net, type: CNAME, ttl: 300, rdata: ["m6.dkim.example.net."]}
+    - {name: m6.dkim.example.net, type: CNAME, ttl: 300, rdata: ["m7.dkim.example.net."]}
+    - {name: m7.dkim.example.net, type: CNAME, ttl: 300, rdata: ["m8.dkim.example.net."]}
+    - {name: m8.dkim.example.net, type: TXT, ttl: 300, rdata: ["v=DKIM1; p=MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAuCqbZdMOdM+yp+Aa4toQdfNClJZaIdO401CyksvcKtJPUb2BP0TjjvTgRQ42wfj9BGEoxbCqJzCgmagvmHUI9wAp+5SPUc8a1jUVZ24X4v6Je+TJG1PFCDbhUzJseO45F1bX+qIejtygK0NMBuxhSuaN2uCbPYC9GgNtTrivV3eGkucKzorAfP+Bb/0lWepXJJiz4ZldE3Ho5YTRzn2QA0l28JQRMUbk8glggLHpFXgsBYPD6KkzJ3fA8MBttSHWeOJO7IPoDv5AQM20Eqjm2+w0bAVcv+84oXhHSNeLYTX2HkG+1hJk8XhV7bQwGKQpeGjCdtwpmU2RcS/AIv/ayQIDAQAB"]}
+    - {name: nodata.example.com, type: A, ttl: 300, rdata: [192.0.2.10]}
+    - {name: sel._domainkey.mixfound.example.com, type: TXT, ttl: 300, rdata: ["v=DKIM1; p=MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAuCqbZdMOdM+yp+Aa4toQdfNClJZaIdO401CyksvcKtJPUb2BP0TjjvTgRQ42wfj9BGEoxbCqJzCgmagvmHUI9wAp+5SPUc8a1jUVZ24X4v6Je+TJG1PFCDbhUzJseO45F1bX+qIejtygK0NMBuxhSuaN2uCbPYC9GgNtTrivV3eGkucKzorAfP+Bb/0lWepXJJiz4ZldE3Ho5YTRzn2QA0l28JQRMUbk8glggLHpFXgsBYPD6KkzJ3fA8MBttSHWeOJO7IPoDv5AQM20Eqjm2+w0bAVcv+84oXhHSNeLYTX2HkG+1hJk8XhV7bQwGKQpeGjCdtwpmU2RcS/AIv/ayQIDAQAB"]}
+    - {name: bad._domainkey.mixfound.example.com, type: TXT, state: servfail}
+    - {name: bad._domainkey.mixnone.example.com, type: TXT, state: servfail}
+    - {name: mixallnx.example.com, type: A, ttl: 300, rdata: [192.0.2.11]}

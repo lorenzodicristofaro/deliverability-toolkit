@@ -48,12 +48,33 @@ Carried over from M0-07 QA:
   Status: **accepted 2026-11-06** — tests/dns/test_acceptance_m2.py; CI green at 8083cc5 incl. PostgreSQL (6577 passed). Report: docs/reports/M2.md
 
 ## M3 — SPF, DKIM, DMARC
-- [ ] Parsers + checks with Finding codes, remediation texts (en/it)
-- [ ] SPF recursive resolution, lookup/void counts, flattening hints
-- [ ] DKIM selector probe with seeded selector list, streaming results via SSE
-- [ ] DMARC incl. external report authorization
-- [ ] Domain page "Authentication" tab, CLI `check` command, REST endpoints
+- [x] Parsers + checks with Finding codes, remediation texts (en/it)
+- [x] SPF recursive resolution, lookup/void counts, flattening hints
+- [x] DKIM selector probe with seeded selector list, streaming results via SSE
+- [x] DMARC incl. external report authorization
+- [x] Domain page "Authentication" tab, CLI `check` command, REST endpoints
+- Tickets (docs/tickets/):
+  - [x] M3-01 Check interface + CheckResult/Finding models
+  - [x] M3-02 check registry + runner service
+  - [x] M3-03 TXT/CNAME fetch helper
+  - [x] M3-04 SPF parser (opus)
+  - [x] M3-05 DMARC parser (opus)
+  - [x] M3-06 DKIM key record parser (opus)
+  - [x] M3-07 SPF recursive resolution engine (opus)
+  - [x] M3-08 SPF check: findings, flattening hints (opus)
+  - [x] M3-09 organizational domain helper (public suffix source unverified)
+  - [x] M3-10 DMARC check + org-domain fallback
+  - [x] M3-11 DMARC external report authorization (opus)
+  - [x] M3-12 DKIM selector seed + loader (unverified entries flagged)
+  - [x] M3-13 DKIM probe engine + check
+  - [x] M3-14 `check.run` permission (opus)
+  - [x] M3-15 checks REST endpoints
+  - [x] M3-16 DKIM SSE stream
+  - [x] M3-17 Authentication tab UI
+  - [x] M3-18 CLI `check` command (tenant-less free check)
+  - [x] M3-19 acceptance tests + docs/CHECKS.md
 - Accept: results identical across UI, API and CLI; table-driven tests with malformed records.
+  Status: **accepted 2026-11-06** — tests/checks/test_acceptance_m3.py (service = API = CLI byte-equal, UI status/codes equal, DNS failure → error on all surfaces, zero DNS on denial); CI green at 0e3511a incl. PostgreSQL (9434 passed). Report: docs/reports/M3.md
 
 ## M4 — Original (headers) analyzer
 - [ ] Upload/paste `.eml` or headers; Received chain with delays; Authentication-Results; ARC
@@ -106,6 +127,11 @@ Carried over from M0-07 QA:
 - [ ] M7: DNS egress cannot detect an operator NAT64 prefix inside 2000::/3 embedding a private IPv4 (app/dns/egress.py); handle in the guarded client
 - [ ] Per-user rate limiting for free tools (DNS trace/propagation); M2 has per-request caps only
 - [ ] Seed staleness: a host clock behind a seed `verified_on` makes the knowledge loader raise at runtime; consider a tolerance (M2-07 QA nit)
+- [ ] Shared result-list serializer in app/services/checks.py, used by API and CLI (now duplicated one-liners) (M3-18).
+- [ ] CLI catches private typer._click UsageError (no public equivalent in typer 0.28); pin typer<0.29 or add a guard test (M3-18 QA).
+- [ ] Tenancy matrix filler sends a literal {check_id}; substitute `spf` (M3-15 QA nit).
+- [ ] DKIM_TEST_MODE text 'Some receivers treat such signatures differently' is unsourced; cite RFC 6376 3.6.1 t=y or soften (M3-13 QA nit).
+- [ ] DMARC external: an unparseable record next to a valid one also emits a low AUTH_RECORD_INVALID (M3-11 QA nit, acceptable).
 - [x] (M2-01) Domain names: trim surrounding whitespace in `to_ascii_domain` instead of rejecting it (maintainer decision 2026-11-05); update the M1-18 tests. Underscores stay rejected for tenant domains, but the M2 DNS tool must accept them in record names.
 - [ ] Public `security.mac(label, msg, key)` helper, to replace csrf.py's import of private helpers
 - [ ] CSRF exemption for future bearer-token API routes
@@ -125,4 +151,15 @@ Carried over from M0-07 QA:
 - [ ] Move `mixed_script` to app/core/domain_names.py
 - [ ] app/services/domains.py hardcodes MembershipRole.CLIENT_VIEWER in list and set_access; use is_domain_restricted
 - [ ] The matrix guard's create_app() uses env settings, not world.settings (QA nit)
+- [ ] app/checks/dkim_selectors.py imports private validation helpers from app/dns/knowledge.py and app/dns/types.py; expose a public seed-validation helper (M3-12 QA)
+- [ ] MAINTAINER TO CONFIRM: all 9 DKIM seed selectors (default, dkim, mail, google, s1, s2, k1, selector1, selector2) are unverified with no provider; confirm provenance against official vendor docs before promoting any (M3-12)
+- [ ] Optional: add an explicit `evaluated` field to CheckResult if the runner-only convention proves insufficient (M3-01 QA)
+- [ ] MAINTAINER TO CONFIRM: Public Suffix List data licence (MPL-2.0 per the PyPI publicsuffixlist page only); check github.com/publicsuffix/list LICENSE; recorded as unverified in seeds/public_suffix_source.yaml (M3-09)
+- [ ] SPF parser nits (M3-04 QA): at the 4096-char cut, drop the partial last term so it does not add a second misleading issue; add a comment on Unicode-whitespace term splitting
+- [ ] DMARC parser: reject a `!size` whose value after the unit (number*unit) exceeds 64 bits (M3-05 QA).
+- [ ] Move the no-network socket guard from tests/dns/conftest.py to tests/conftest.py so tests/checks need no cross-package import (M3-07 QA).
+- [ ] spf_tree.py:319 per-term `valid` filter is dead code; remove or assert (M3-07 QA nit).
+- [ ] DKIM parser: optionally reject base64 with non-zero padding bits (M3-06 QA nit).
 - [ ] HTMX under CSP `script-src 'self'` is unverified, maintainer to confirm against https://htmx.org/docs/ (set includeIndicatorStyles=false and allowEval=false when vendored)
+- [ ] Authentication tab: catch InvalidTarget from run_checks and render the error page instead of a 500 (M3-17 QA nit)
+- [ ] _result.html uses class dns-state-absent for warn/fail/info; use a neutral per-status class (M3-17 QA nit)

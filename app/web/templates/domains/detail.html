@@ -4,6 +4,11 @@
 <p>{{ t("domain.detail.title") }}</p>
 <h1 data-testid="domain-name">{{ row.display_name }}</h1>
 {% include "domains/name_notes.html" %}
+{% if row.can_check %}
+<nav class="tabs" aria-label="{{ t('checks.tab.label') }}">
+  <a href="/domains/{{ row.id }}/authentication" data-testid="tab-authentication">{{ t("checks.tab.authentication") }}</a>
+</nav>
+{% endif %}
 <h2>{{ t("domain.detail.status") }}</h2>
 <p class="empty-state">{{ t("landing.domain.never_checked") }}</p>
 {% if access_count is not none %}

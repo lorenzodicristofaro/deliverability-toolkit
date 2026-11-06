@@ -50,6 +50,7 @@ ROLE_EXPECTED: dict[str, dict[Action, set[str]]] = {
         ACT.DOMAIN_UPDATE: DOMAIN_ALL,
         ACT.DOMAIN_DELETE: DOMAIN_ALL,
         ACT.DNS_TOOLS: TENANT_LEVEL,
+        ACT.CHECK_RUN: DOMAIN_ALL,
     },
     "admin": {
         ACT.TENANT_READ: TENANT_LEVEL,
@@ -60,17 +61,20 @@ ROLE_EXPECTED: dict[str, dict[Action, set[str]]] = {
         ACT.DOMAIN_UPDATE: DOMAIN_ALL,
         ACT.DOMAIN_DELETE: DOMAIN_ALL,
         ACT.DNS_TOOLS: TENANT_LEVEL,
+        ACT.CHECK_RUN: DOMAIN_ALL,
     },
     "analyst": {
         ACT.TENANT_READ: TENANT_LEVEL,
         ACT.DOMAIN_LIST: TENANT_LEVEL,
         ACT.DOMAIN_READ: DOMAIN_ALL,
         ACT.DNS_TOOLS: TENANT_LEVEL,
+        ACT.CHECK_RUN: DOMAIN_ALL,
     },
     "client_viewer": {
         ACT.TENANT_READ: TENANT_LEVEL,
         ACT.DOMAIN_LIST: TENANT_LEVEL,
         ACT.DOMAIN_READ: {"own_assigned_domain"},
+        ACT.CHECK_RUN: {"own_assigned_domain"},
     },
     "none": {},
 }
@@ -119,8 +123,8 @@ MATRIX = [
 
 
 def test_matrix_size() -> None:
-    # 5 role kinds x admin flag x active flag x 10 actions x 6 situations.
-    assert len(MATRIX) == 5 * 2 * 2 * 10 * 6 == 1200
+    # 5 role kinds x admin flag x active flag x 11 actions x 6 situations.
+    assert len(MATRIX) == 5 * 2 * 2 * 11 * 6 == 1320
 
 
 @pytest.mark.parametrize(("role", "admin", "active", "action", "situation"), MATRIX)
@@ -138,7 +142,7 @@ def test_matrix(role: str, admin: bool, active: bool, action: Action, situation:
         assert exc.value.code == "permission_denied"
 
 
-def test_action_list_is_the_m1_set_plus_dns_tools() -> None:
+def test_action_list_is_the_m1_set_plus_dns_tools_and_check_run() -> None:
     assert {a.value for a in Action} == {
         "tenant.read",
         "tenant.manage",
@@ -150,6 +154,7 @@ def test_action_list_is_the_m1_set_plus_dns_tools() -> None:
         "domain.delete",
         "instance.manage",
         "dns.tools",  # M2-11
+        "check.run",  # M3-14
     }
 
 
@@ -484,3 +489,186 @@ def test_owner_role_in_other_tenant_does_not_leak_dns_tools() -> None:
     p = _p(memberships=(_grant("client_viewer"), _grant("owner", B)))
     assert can(p, Action.DNS_TOOLS, TenantResource(A)) is False
     assert can(p, Action.DNS_TOOLS, TenantResource(B)) is False  # B is not the active tenant
+
+
+# --- M3-14: check.run (GM decision, ticket M3-14) ---------------------------------------------
+# Domain-level. owner/admin/analyst on every domain of the active tenant; client viewer only on
+# assigned domains. Toggles deny only; the instance admin flag adds nothing.
+
+CHECK_ROLES = ("owner", "admin", "analyst", "client_viewer")
+CHECK_TOGGLES: dict[str, dict[str, Any]] = {
+    "none": {},
+    "check_true": {"check.run": True},
+    "check_false": {"check.run": False},
+    "check_none": {"check.run": None},
+    "check_str_true": {"check.run": "true"},
+    "check_one": {"check.run": 1},
+    "unrelated_false": {"domain.read": False, "dns.tools": False},
+}
+CHECK_STATES = (
+    "member",
+    "instance_admin_member",
+    "inactive_user",
+    "active_elsewhere",
+    "no_membership",
+    "instance_admin_no_membership",
+)
+CHECK_RESOURCES: dict[str, object] = {
+    "assigned": DomainResource(A, ASSIGNED),
+    "unassigned": DomainResource(A, UNASSIGNED),
+    "other_tenant_domain": DomainResource(B, ASSIGNED),
+    "own_tenant": TenantResource(A),
+    "instance": InstanceResource(),
+}
+
+
+def _check_principal(role: str, toggles: dict[str, Any], state: str) -> Principal:
+    no_membership = state in {"no_membership", "instance_admin_no_membership"}
+    return Principal(
+        user_id=1,
+        is_active=state != "inactive_user",
+        is_instance_admin=state in {"instance_admin_member", "instance_admin_no_membership"},
+        # "active_elsewhere": the membership exists but its tenant is not the active one.
+        active_tenant_id=B if state == "active_elsewhere" else A,
+        memberships=() if no_membership else (_grant(role, toggles=toggles),),
+    )
+
+
+def _check_expected(role: str, toggle: str, state: str, resource: str) -> bool:
+    if state not in {"member", "instance_admin_member"}:
+        return False
+    if toggle not in {"none", "check_true", "unrelated_false"}:
+        return False
+    if role == "client_viewer":
+        return resource == "assigned"
+    return resource in {"assigned", "unassigned"}
+
+
+@pytest.mark.parametrize(
+    ("role", "toggle", "state", "resource"),
+    [
+        pytest.param(r, t, st, res, id=f"{r}-{t}-{st}-{res}")
+        for r, t, st, res in itertools.product(
+            CHECK_ROLES, CHECK_TOGGLES, CHECK_STATES, CHECK_RESOURCES
+        )
+    ],
+)
+def test_check_run_roles_x_toggles_x_states(
+    role: str, toggle: str, state: str, resource: str
+) -> None:
+    p = _check_principal(role, CHECK_TOGGLES[toggle], state)
+    expected = _check_expected(role, toggle, state, resource)
+    res = CHECK_RESOURCES[resource]
+    assert can(p, Action.CHECK_RUN, res) is expected
+    assert can(p, "check.run", res) is expected
+    if not expected:
+        with pytest.raises(PermissionDenied):
+            require(p, Action.CHECK_RUN, res)
+
+
+@pytest.mark.parametrize(
+    ("label", "grant", "admin", "domain_id", "expected"),
+    [
+        ("plain, assigned", _grant("client_viewer"), False, ASSIGNED, True),
+        ("plain, unassigned", _grant("client_viewer"), False, UNASSIGNED, False),
+        (
+            "toggle true does not widen to unassigned",
+            _grant("client_viewer", toggles={"check.run": True}),
+            False,
+            UNASSIGNED,
+            False,
+        ),
+        (
+            "every toggle true does not widen to unassigned",
+            _grant("client_viewer", toggles=_ALL_TOGGLES_TRUE),
+            False,
+            UNASSIGNED,
+            False,
+        ),
+        (
+            "instance admin flag does not widen to unassigned",
+            _grant("client_viewer"),
+            True,
+            UNASSIGNED,
+            False,
+        ),
+        (
+            "no assignments",
+            MembershipGrant(A, MembershipRole.CLIENT_VIEWER),
+            False,
+            ASSIGNED,
+            False,
+        ),
+        (
+            "domain ids not a set",
+            MembershipGrant(A, MembershipRole.CLIENT_VIEWER, domain_ids=[ASSIGNED]),  # type: ignore[arg-type]
+            False,
+            ASSIGNED,
+            False,
+        ),
+        (
+            "bool domain id",
+            MembershipGrant(A, MembershipRole.CLIENT_VIEWER, domain_ids=frozenset({True})),
+            False,
+            1,
+            False,
+        ),
+        (
+            "toggles not a mapping",
+            MembershipGrant(
+                A,
+                MembershipRole.CLIENT_VIEWER,
+                domain_ids=frozenset({ASSIGNED}),
+                feature_toggles=None,  # type: ignore[arg-type]
+            ),
+            False,
+            ASSIGNED,
+            False,
+        ),
+        (
+            "role as string",
+            MembershipGrant(A, "client_viewer", frozenset({ASSIGNED})),
+            False,
+            ASSIGNED,
+            True,
+        ),  # type: ignore[arg-type]
+    ],
+)
+def test_check_run_client_viewer_assigned_domains_only(
+    label: str, grant: MembershipGrant, admin: bool, domain_id: int, expected: bool
+) -> None:
+    p = _p(is_instance_admin=admin, memberships=(grant,))
+    assert can(p, Action.CHECK_RUN, DomainResource(A, domain_id)) is expected, label
+
+
+@pytest.mark.parametrize(
+    ("label", "principal"),
+    [
+        ("anonymous", None),
+        ("no active tenant", _p(active_tenant_id=None)),
+        ("instance admin, inactive", _p(is_instance_admin=True, is_active=False)),
+        ("duplicate membership", _p(memberships=(_grant("owner"), _grant("analyst")))),
+        ("unknown role", _p(memberships=(MembershipGrant(A, "superuser"),))),  # type: ignore[arg-type]
+    ],
+)
+def test_check_run_denied_for_malformed_principal(label: str, principal: object) -> None:
+    for resource in CHECK_RESOURCES.values():
+        assert can(principal, Action.CHECK_RUN, resource) is False, label
+
+
+def test_check_run_role_in_other_tenant_does_not_leak() -> None:
+    # Owner in B must not widen A, where the user is only a client viewer on ASSIGNED.
+    p = _p(memberships=(_grant("client_viewer"), _grant("owner", B)))
+    assert can(p, Action.CHECK_RUN, DomainResource(A, ASSIGNED)) is True
+    assert can(p, Action.CHECK_RUN, DomainResource(A, UNASSIGNED)) is False
+    assert can(p, Action.CHECK_RUN, DomainResource(B, UNASSIGNED)) is False
+
+
+def test_check_run_toggle_is_independent_of_dns_tools() -> None:
+    # Denying check.run leaves dns.tools and domain.read untouched, and vice versa.
+    p = _p(memberships=(_grant("analyst", toggles={"check.run": False}),))
+    assert can(p, Action.CHECK_RUN, DomainResource(A, ASSIGNED)) is False
+    assert can(p, Action.DNS_TOOLS, TenantResource(A)) is True
+    assert can(p, Action.DOMAIN_READ, DomainResource(A, ASSIGNED)) is True
+    q = _p(memberships=(_grant("analyst", toggles={"dns.tools": False}),))
+    assert can(q, Action.CHECK_RUN, DomainResource(A, UNASSIGNED)) is True
