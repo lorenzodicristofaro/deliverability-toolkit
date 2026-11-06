@@ -16,6 +16,8 @@ from __future__ import annotations
 import time
 from typing import Any
 
+from app.checks.dmarc_external import CODES as EXTERNAL_CODES
+from app.checks.dmarc_external import check_external_destinations
 from app.checks.dnsutil import fetch_txt
 from app.checks.models import CheckContext, CheckResult, Finding, Target, finding
 from app.core.domain_names import InvalidDomainName, to_ascii_domain
@@ -37,6 +39,7 @@ CODES: tuple[str, ...] = (
     "DMARC_DNS_ERROR",
     "DMARC_P_ASSUMED_NONE",
     "DMARC_NO_USABLE_POLICY",
+    *EXTERNAL_CODES,
 )
 
 _RANK = {"none": 0, "quarantine": 1, "reject": 2}
@@ -109,7 +112,15 @@ class DmarcCheck:
                 data,
             )
         data["record"] = records[0]
-        return self._analyse(parse_dmarc(records[0]), inherited, found_at, data)
+        rec = parse_dmarc(records[0])
+        out, evaluated, data = self._analyse(rec, inherited, found_at, data)
+        # RFC 7489 section 7.1 (M3-11): external rua/ruf destinations need authorization.
+        ext = await check_external_destinations(ctx.resolver, found_at, rec)
+        data["report_destinations"] = list(ext.destinations)
+        out.extend(ext.findings)
+        if not ext.evaluated and not any(f.severity in ("critical", "high") for f in out):
+            evaluated = False  # a destination could not be evaluated and nothing worse found
+        return out, evaluated, data
 
     @staticmethod
     def _analyse(
