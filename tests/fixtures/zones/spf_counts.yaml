@@ -1,0 +1,49 @@
+# M3-07 SPF lookup / void / MX counting. Hand-written; reserved names and addresses only.
+zones:
+  default:
+    # simple: one include, 1 lookup
+    - {name: simple.example.com, type: TXT, ttl: 300, rdata: ["v=spf1 ip4:192.0.2.0/24 include:_spf.example.net -all"]}
+    - {name: _spf.example.net, type: TXT, ttl: 300, rdata: ["v=spf1 ip4:198.51.100.0/24 ip6:2001:db8::/32 -all"]}
+    # exactly 10 lookups: ten (a mx include) -> n1 (include exists a) -> n2 (ptr include) -> n3 (a mx; exp not counted)
+    - {name: ten.example.com, type: TXT, ttl: 300, rdata: ["v=spf1 a mx include:n1.example.net -all"]}
+    - {name: ten.example.com, type: A, ttl: 300, rdata: [192.0.2.10]}
+    - {name: ten.example.com, type: MX, ttl: 300, rdata: ["10 mx.example.net"]}
+    - {name: n1.example.net, type: TXT, ttl: 300, rdata: ["v=spf1 include:n2.example.net exists:e.example.net a:host.example.net -all"]}
+    - {name: n2.example.net, type: TXT, ttl: 300, rdata: ["v=spf1 ip4:192.0.2.1 ptr include:n3.example.net ~all"]}
+    - {name: n3.example.net, type: TXT, ttl: 300, rdata: ["v=spf1 a:host.example.net mx:mx.example.net -all exp=exp.example.net"]}
+    - {name: e.example.net, type: A, ttl: 300, rdata: [192.0.2.2]}
+    - {name: host.example.net, type: A, ttl: 300, rdata: [192.0.2.20]}
+    - {name: mx.example.net, type: MX, ttl: 300, rdata: ["10 host.example.net"]}
+    # 11 lookups: eleven (a mx exists include) + n1 subtree (7)
+    - {name: eleven.example.com, type: TXT, ttl: 300, rdata: ["v=spf1 a mx exists:e.example.net include:n1.example.net -all"]}
+    - {name: eleven.example.com, type: A, ttl: 300, rdata: [192.0.2.11]}
+    - {name: eleven.example.com, type: MX, ttl: 300, rdata: ["10 mx.example.net"]}
+    # void lookups: gone*.example.com do not exist, nomx.example.org has no MX (nodata)
+    - {name: voids2.example.com, type: TXT, ttl: 300, rdata: ["v=spf1 a:gone1.example.com mx:nomx.example.org ip4:192.0.2.1 -all"]}
+    - {name: voids3.example.com, type: TXT, ttl: 300, rdata: ["v=spf1 a:gone1.example.com include:gone2.example.com mx:nomx.example.org -all"]}
+    - {name: nomx.example.org, type: A, ttl: 300, rdata: [192.0.2.40]}
+    # a with AAAA only is not void
+    - {name: v6only.example.com, type: TXT, ttl: 300, rdata: ["v=spf1 a:six.example.org -all"]}
+    - {name: six.example.org, type: AAAA, ttl: 300, rdata: ["2001:db8::6"]}
+    # MX host counts: 10 (at the limit) and 11 (over)
+    - {name: mxten.example.com, type: TXT, ttl: 300, rdata: ["v=spf1 mx -all"]}
+    - name: mxten.example.com
+      type: MX
+      ttl: 300
+      rdata: ["10 mx1.example.com", "10 mx2.example.com", "10 mx3.example.com", "10 mx4.example.com", "10 mx5.example.com",
+              "10 mx6.example.com", "10 mx7.example.com", "10 mx8.example.com", "10 mx9.example.com", "10 mx10.example.com"]
+    - {name: mxmany.example.com, type: TXT, ttl: 300, rdata: ["v=spf1 mx -all"]}
+    - name: mxmany.example.com
+      type: MX
+      ttl: 300
+      rdata: ["10 mx1.example.com", "10 mx2.example.com", "10 mx3.example.com", "10 mx4.example.com", "10 mx5.example.com",
+              "10 mx6.example.com", "10 mx7.example.com", "10 mx8.example.com", "10 mx9.example.com", "10 mx10.example.com",
+              "20 mx11.example.com"]
+    # include target answers TXT but none is SPF: no_record (permerror), not void
+    - {name: inclplain.example.com, type: TXT, ttl: 300, rdata: ["v=spf1 include:plain.example.org -all"]}
+    - {name: plain.example.org, type: TXT, ttl: 300, rdata: ["site-verification=abc"]}
+    # same include twice: counted twice, fetched once
+    - {name: dup.example.com, type: TXT, ttl: 300, rdata: ["v=spf1 include:shared.example.net include:shared.example.net -all"]}
+    - {name: shared.example.net, type: TXT, ttl: 300, rdata: ["v=spf1 a:host.example.net -all"]}
+    # macros and ptr: counted, not resolved
+    - {name: macro.example.com, type: TXT, ttl: 300, rdata: ["v=spf1 exists:%{i}.bl.example.net include:%{d}.example.net ptr -all"]}
