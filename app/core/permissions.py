@@ -41,6 +41,10 @@ class Action(enum.StrEnum):
     # Raw DNS tools (lookup, reverse, trace, propagation). Tenant-level: needs an active
     # membership; never granted to client viewers (SPEC section 3; GM decision 2026-11-05).
     DNS_TOOLS = "dns.tools"
+    # Run the deliverability checks against one tenant domain (M3-14). Domain-level: client
+    # viewers only on assigned domains (`_domain_allowed`); deniable per user with the toggle
+    # `{"check.run": false}`. Free (tenant-less) checks use DNS_TOOLS instead.
+    CHECK_RUN = "check.run"
 
 
 # --- Resources -------------------------------------------------------------------------------
@@ -77,6 +81,7 @@ _RESOURCE_KIND: Mapping[Action, type[Resource]] = MappingProxyType(
         Action.DOMAIN_UPDATE: DomainResource,
         Action.DOMAIN_DELETE: DomainResource,
         Action.DNS_TOOLS: TenantResource,
+        Action.CHECK_RUN: DomainResource,
     }
 )
 
@@ -96,21 +101,36 @@ ROLE_ACTIONS: Mapping[MembershipRole, frozenset[Action]] = MappingProxyType(
     {
         # Everything inside the tenant, including billing-like owner settings.
         MembershipRole.OWNER: frozenset(
-            {Action.TENANT_READ, Action.TENANT_MANAGE, Action.USER_MANAGE, Action.DNS_TOOLS}
+            {
+                Action.TENANT_READ,
+                Action.TENANT_MANAGE,
+                Action.USER_MANAGE,
+                Action.DNS_TOOLS,
+                Action.CHECK_RUN,
+            }
         )
         | _DOMAIN_ALL,
         # Domains and inviting users; not owner settings.
-        MembershipRole.ADMIN: frozenset({Action.TENANT_READ, Action.USER_MANAGE, Action.DNS_TOOLS})
+        MembershipRole.ADMIN: frozenset(
+            {Action.TENANT_READ, Action.USER_MANAGE, Action.DNS_TOOLS, Action.CHECK_RUN}
+        )
         | _DOMAIN_ALL,
-        # Sees all domains and uses the raw DNS tools; no user/integration management, no domain
-        # changes.
+        # Sees all domains, runs checks and uses the raw DNS tools; no user/integration
+        # management, no domain changes.
         MembershipRole.ANALYST: frozenset(
-            {Action.TENANT_READ, Action.DOMAIN_LIST, Action.DOMAIN_READ, Action.DNS_TOOLS}
+            {
+                Action.TENANT_READ,
+                Action.DOMAIN_LIST,
+                Action.DOMAIN_READ,
+                Action.DNS_TOOLS,
+                Action.CHECK_RUN,
+            }
         ),
-        # Read-only, assigned domains only (enforced in `_domain_allowed`). No raw DNS tools: not
-        # in this set, so no toggle or DomainAccess grant can give it.
+        # Read-only, assigned domains only (enforced in `_domain_allowed`). Runs checks on those
+        # domains (M3 has no persistence: viewing the Authentication tab IS running the check).
+        # No raw DNS tools: not in this set, so no toggle or DomainAccess grant can give it.
         MembershipRole.CLIENT_VIEWER: frozenset(
-            {Action.TENANT_READ, Action.DOMAIN_LIST, Action.DOMAIN_READ}
+            {Action.TENANT_READ, Action.DOMAIN_LIST, Action.DOMAIN_READ, Action.CHECK_RUN}
         ),
     }
 )
