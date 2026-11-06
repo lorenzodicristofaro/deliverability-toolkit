@@ -4,7 +4,7 @@ Resume with `/gm`.
 
 ## State
 - M4 split into 14 tickets (docs/tickets/M4-*.md, commit 20417ad on dev).
-- M4-01 header parser: in-progress (coder, opus, branch feature/m4-01-header-parser).
+- M4-01 header parser: done (merged into dev, QA APPROVE).
 - All other M4 tickets: todo. Nothing stored in M4; analyzer is offline (no DNS/network).
 
 ## GM decisions (2026-11-07)
@@ -17,6 +17,6 @@ Resume with `/gm`.
 - From M3: `qa` → `main` for M1–M3; Mailchimp/Postmark/HubSpot DKIM sources; PSL licence; SecLists terms; HTMX under CSP.
 
 ## Next 3 steps
-1. QA M4-01 → merge into dev.
-2. M4-06 (permission) and M4-07 (corpus), one at a time.
+1. M4-06 permission (opus).
+2. M4-07 corpus + MANIFEST.
 3. M4-02/03/04 (at most 2 in parallel, disjoint files), then 05, 08, and 09–13 serially, then 14.

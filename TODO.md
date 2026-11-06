@@ -81,6 +81,21 @@ Carried over from M0-07 QA:
 - [ ] Upload/paste `.eml` or headers; Received chain with delays; Authentication-Results; ARC
 - [ ] Alignment analysis (From / Return-Path / DKIM d=), anomaly findings, MIME summary
 - Accept: sample corpus (Gmail, Outlook, SES, SendGrid, MailUp...) parsed correctly.
+- Tickets (docs/tickets/):
+  - [x] M4-01 raw message limits + header block parser (opus)
+  - [ ] M4-02 MIME structure + size (opus)
+  - [ ] M4-03 Received chain + hop delays (opus)
+  - [ ] M4-04 Authentication-Results parser (opus)
+  - [ ] M4-05 ARC chain parser (opus)
+  - [ ] M4-06 `message.analyze` permission (opus)
+  - [ ] M4-07 sample corpus + MANIFEST (provider samples unverified until maintainer supplies them)
+  - [ ] M4-08 alignment analysis
+  - [ ] M4-09 anomaly findings + MSG_* texts
+  - [ ] M4-10 analysis service
+  - [ ] M4-11 REST endpoint
+  - [ ] M4-12 web UI
+  - [ ] M4-13 CLI `analyze`
+  - [ ] M4-14 acceptance tests + docs/HEADERS.md
 
 ## M5 — Content analyzer + admin rules
 - [ ] Structural HTML/text checks, link analysis, size, List-Unsubscribe/One-Click
@@ -121,6 +136,7 @@ Carried over from M0-07 QA:
 - [ ] Security review checklist, dependency/license audit, v0.1.0 release
 
 ## Follow-ups (post-M1)
+- [ ] M4-01 QA nits: make `decode_rfc2047` private or give it a public signature; warn mixed endings on the header-terminating blank line; document that MAX_HEADER_BYTES excludes the blank line
 - [ ] Extend the tests/dns network guard (loopback-only) to the DNS tests in tests/api and tests/web (M2-15 QA)
 - [ ] Import guard: forbid network calls via dns.resolver in app/dns/factory.py (it may only read resolv.conf) (M2-15 QA nit)
 - [ ] Use a translated label for the FCrDNS no_ptr case instead of omitting the line (M2-13 QA nit)

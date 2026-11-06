@@ -15,4 +15,4 @@ Acceptance criteria:
 - Table-driven tests with the malformed cases above; no network (existing socket guard).
 - Helper `get_all(name)` is case-insensitive; the original order and duplicates of Received are preserved.
 New i18n keys: none (parser emits stable warning codes only; user text comes in M4-09)
-Status: todo
+Status: done
