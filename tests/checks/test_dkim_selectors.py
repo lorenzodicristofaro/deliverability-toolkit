@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 from datetime import date, timedelta
 from typing import Any
+from urllib.parse import urlparse
 
 import pytest
 
@@ -120,3 +121,23 @@ def test_shipped_file_loads_and_guards() -> None:
     for s in sels:
         assert s.status != "verified" or s.sources
         assert s.status != "unverified" or s.provider is None
+
+
+_VENDOR_HOSTS = {
+    "learn.microsoft.com": "microsoft365",
+    "knowledge.workspace.google.com": "google_workspace",
+    "www.twilio.com": "sendgrid",
+    "mailchimp.com": "mailchimp_transactional",
+    "help.klaviyo.com": "klaviyo",
+}
+
+
+def test_shipped_verified_entries_have_vendor_source_and_provider() -> None:
+    verified = [s for s in list_selectors() if s.status == "verified"]
+    assert verified
+    for s in verified:
+        assert s.provider, s.name
+        for url in s.sources:
+            host = urlparse(url).hostname or ""
+            assert url.startswith("https://"), (s.name, url)
+            assert _VENDOR_HOSTS.get(host) == s.provider, (s.name, url)
