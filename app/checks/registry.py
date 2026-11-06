@@ -35,8 +35,9 @@ def load_builtin_checks(registry: CheckRegistry | None = None) -> CheckRegistry:
     reg = registry if registry is not None else CheckRegistry()
     from app.checks.dkim import DkimCheck
     from app.checks.dmarc import DmarcCheck
+    from app.checks.spf import SpfCheck
 
-    builtin: tuple[Check, ...] = (DkimCheck(), DmarcCheck())
+    builtin: tuple[Check, ...] = (DkimCheck(), DmarcCheck(), SpfCheck())
     for check in builtin:
         reg.register(check)
     return reg
