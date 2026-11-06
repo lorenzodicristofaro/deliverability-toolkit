@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}{{ t("checks.tab.authentication") }} · {{ app_name }}{% endblock %}
+{% block content %}
+<p><a href="/domains/{{ domain_id }}">{{ t("domain.detail.title") }}</a></p>
+<h1 data-testid="auth-title">{{ t("checks.auth.title", domain=display_name|visible) }}</h1>
+<nav class="tabs" aria-label="{{ t('checks.tab.label') }}">
+  <a href="/domains/{{ domain_id }}/authentication" aria-current="page" data-testid="tab-authentication">{{ t("checks.tab.authentication") }}</a>
+  <a href="/domains/{{ domain_id }}/authentication" data-testid="run-again">{{ t("checks.run_again") }}</a>
+</nav>
+{% for result in results %}
+{% include "checks/_result.html" %}
+{% endfor %}
+<section class="check-result" data-testid="check-dkim">
+  <h2>{{ t("checks.dkim.title") }}</h2>
+  <div id="dkim-stream" data-src="/domains/{{ domain_id }}/authentication/dkim/stream"
+       data-error-text="{{ t('checks.dkim.stream_error') }}" aria-live="polite">
+    <p class="dkim-pending" data-testid="dkim-pending">{{ t("checks.dkim.pending") }}</p>
+  </div>
+  <noscript><p data-testid="dkim-noscript">{{ t("checks.dkim.noscript") }}</p></noscript>
+</section>
+<script src="/static/js/dkim_stream.js" defer></script>
+{% endblock %}
