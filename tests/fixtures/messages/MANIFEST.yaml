@@ -1,0 +1,186 @@
+# Sample message corpus manifest. See README.md. Every .eml in this folder must have one entry.
+# status: verified = header shape taken from the cited document; unverified = built only from
+# RFC-defined syntax, NOT confirmed against a real message of the labelled provider.
+# facts are what M4-14 may assert; they are not parser output.
+samples:
+  - file: plain-rfc8601-b3.eml
+    provider_label: plain-rfc
+    status: verified
+    sources:
+      - https://www.rfc-editor.org/rfc/rfc8601.txt (Appendix B.3)
+    verified_on: '2026-11-07'
+    notes: "Verbatim RFC 8601 B.3 example, already uses reserved names."
+    facts:
+      hop_count: 1
+      auth_methods: [spf]
+      arc_chain: {instances: 0, state: none}
+      alignment: {spf: aligned, dkim: not_applicable}
+  - file: plain-rfc8601-b4.eml
+    provider_label: plain-rfc
+    status: verified
+    sources:
+      - https://www.rfc-editor.org/rfc/rfc8601.txt (Appendix B.4)
+    verified_on: '2026-11-07'
+    notes: "Verbatim RFC 8601 B.4 example; two Authentication-Results headers, same authserv-id."
+    facts:
+      hop_count: 1
+      auth_methods: [auth, spf, iprev]
+      arc_chain: {instances: 0, state: none}
+      alignment: {spf: aligned, dkim: not_applicable}
+  - file: plain-rfc5321-d3.eml
+    provider_label: plain-rfc
+    status: verified
+    sources:
+      - https://www.rfc-editor.org/rfc/rfc5321.txt (Appendix D.3)
+    verified_on: '2026-11-07'
+    notes: "RFC 5321 D.3 DATA content; host names bar.com/foo.com/xyz.com replaced by example.org/.net/.com equivalents."
+    facts:
+      hop_count: 1
+      auth_methods: []
+      arc_chain: {instances: 0, state: none}
+      alignment: {spf: not_applicable, dkim: not_applicable}
+  - file: arc-rfc8617-appendix-b.eml
+    provider_label: arc-rfc8617
+    status: verified
+    sources:
+      - https://www.rfc-editor.org/rfc/rfc8617.txt (Appendix B)
+    verified_on: '2026-11-07'
+    notes: "RFC 8617 B example; .example hosts mapped to example.com/.net/.org and public IPs to 198.51.100.157 / 203.0.113.15 / 203.0.113.9. Signature values are the RFC placeholders and are not cryptographically verifiable. Alignment is identifier alignment only (header.i / smtp.from vs From domain), independent of the pass/fail results claimed."
+    facts:
+      hop_count: 4
+      auth_methods: [spf, dkim, dmarc, arc]
+      arc_chain: {instances: 3, cv: [none, pass, pass], state: claimed_pass}
+      alignment: {spf: aligned, dkim: aligned}
+  - file: gmail-unverified.eml
+    provider_label: gmail
+    status: unverified
+    sources: []
+    verified_on: null
+    notes: "shape not confirmed against a real message of this provider. Generic RFC 8601/5321 syntax only; maintainer must supply a sanitized real sample (see README.md)."
+    facts:
+      hop_count: 1
+      auth_methods: [spf, dkim, dmarc]
+      arc_chain: {instances: 0, state: none}
+      alignment: {spf: aligned, dkim: aligned}
+  - file: outlook-unverified.eml
+    provider_label: outlook
+    status: unverified
+    sources: []
+    verified_on: null
+    notes: "shape not confirmed against a real message of this provider. Generic RFC 8601/5321 syntax only; maintainer must supply a sanitized real sample (see README.md)."
+    facts:
+      hop_count: 1
+      auth_methods: [spf, dkim, dmarc]
+      arc_chain: {instances: 0, state: none}
+      alignment: {spf: aligned, dkim: aligned}
+  - file: ses-unverified.eml
+    provider_label: ses
+    status: unverified
+    sources: []
+    verified_on: null
+    notes: "shape not confirmed against a real message of this provider. Generic RFC 8601/5321 syntax only; maintainer must supply a sanitized real sample (see README.md)."
+    facts:
+      hop_count: 1
+      auth_methods: [spf, dkim, dmarc]
+      arc_chain: {instances: 0, state: none}
+      alignment: {spf: aligned, dkim: aligned}
+  - file: sendgrid-unverified.eml
+    provider_label: sendgrid
+    status: unverified
+    sources: []
+    verified_on: null
+    notes: "shape not confirmed against a real message of this provider. Generic RFC 8601/5321 syntax only; maintainer must supply a sanitized real sample (see README.md)."
+    facts:
+      hop_count: 1
+      auth_methods: [spf, dkim, dmarc]
+      arc_chain: {instances: 0, state: none}
+      alignment: {spf: aligned, dkim: aligned}
+  - file: mailup-unverified.eml
+    provider_label: mailup
+    status: unverified
+    sources: []
+    verified_on: null
+    notes: "shape not confirmed against a real message of this provider. Generic RFC 8601/5321 syntax only; maintainer must supply a sanitized real sample (see README.md)."
+    facts:
+      hop_count: 1
+      auth_methods: [spf, dkim, dmarc]
+      arc_chain: {instances: 0, state: none}
+      alignment: {spf: aligned, dkim: aligned}
+  - file: malformed-folding-bomb.eml
+    provider_label: malformed-folding-bomb
+    status: verified
+    sources:
+      - https://www.rfc-editor.org/rfc/rfc5322.txt (section 2.2.3)
+    verified_on: '2026-11-07'
+    notes: "Hand-written. 5000 continuation lines in one Subject (RFC 5322 2.2.3 folding). The source cites the rule being violated, not a provider claim."
+    facts:
+      must_not_crash: true
+      defects: [excessive_folding]
+      hop_count: 0
+  - file: malformed-nul.eml
+    provider_label: malformed-nul
+    status: verified
+    sources:
+      - https://www.rfc-editor.org/rfc/rfc5322.txt (section 3.5)
+    verified_on: '2026-11-07'
+    notes: "Hand-written. NUL bytes in a header value and in the body (RFC 5322 3.5 text excludes NUL). The source cites the rule being violated, not a provider claim."
+    contains_nul: true
+    facts:
+      must_not_crash: true
+      defects: [nul_byte]
+      hop_count: 0
+  - file: malformed-no-timezone-date.eml
+    provider_label: malformed-no-timezone-date
+    status: verified
+    sources:
+      - https://www.rfc-editor.org/rfc/rfc5322.txt (section 3.3)
+    verified_on: '2026-11-07'
+    notes: "Hand-written. Date and Received time stamps without a zone (RFC 5322 3.3 requires a zone). The source cites the rule being violated, not a provider claim."
+    facts:
+      must_not_crash: true
+      defects: [date_without_timezone]
+      hop_count: 1
+  - file: malformed-deep-mime.eml
+    provider_label: malformed-deep-mime
+    status: verified
+    sources:
+      - https://www.rfc-editor.org/rfc/rfc2046.txt (section 5.1.2)
+    verified_on: '2026-11-07'
+    notes: "Hand-written. 100 levels of nested multipart/mixed (RFC 2046 5.1.2). The source cites the rule being violated, not a provider claim."
+    facts:
+      must_not_crash: true
+      defects: [mime_depth]
+      hop_count: 0
+  - file: malformed-missing-boundary.eml
+    provider_label: malformed-missing-boundary
+    status: verified
+    sources:
+      - https://www.rfc-editor.org/rfc/rfc2046.txt (section 5.1.1)
+    verified_on: '2026-11-07'
+    notes: "Hand-written. multipart/mixed Content-Type without the required boundary parameter (RFC 2046 5.1.1). The source cites the rule being violated, not a provider claim."
+    facts:
+      must_not_crash: true
+      defects: [boundary_missing]
+      hop_count: 0
+  - file: malformed-rfc2047-junk.eml
+    provider_label: malformed-rfc2047-junk
+    status: verified
+    sources:
+      - https://www.rfc-editor.org/rfc/rfc2047.txt (section 6.3)
+    verified_on: '2026-11-07'
+    notes: "Hand-written. Invalid encoded-words: bad base64, unknown charset and encoding, unterminated (RFC 2047 6.3). The source cites the rule being violated, not a provider claim."
+    facts:
+      must_not_crash: true
+      defects: [bad_encoded_word]
+      hop_count: 0
+  - file: malformed-oversize-header-line.eml
+    provider_label: malformed-oversize-header-line
+    status: verified
+    sources:
+      - https://www.rfc-editor.org/rfc/rfc5322.txt (section 2.1.1)
+    verified_on: '2026-11-07'
+    notes: "Hand-written. One unfolded 20008-character header line (RFC 5322 2.1.1 limit is 998). The source cites the rule being violated, not a provider claim."
+    facts:
+      must_not_crash: true
+      defects: [line_too_long]
+      hop_count: 0

@@ -1,0 +1,7 @@
+From: =?UTF-8?Q?Sender_=ZZ?= <sender@example.net>
+To: receiver@example.com
+Subject: =?UTF-8?B?!!!not-base64!!!?= =?bogus-charset?Q?abc?= =?UTF-8?X?abc?=
+ =?UTF-8?Q?unterminated
+Date: Thu, 14 Jan 2015 15:00:01 -0800
+
+body
