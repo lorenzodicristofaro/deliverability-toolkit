@@ -15,4 +15,4 @@ Acceptance criteria:
 - All queries via the M2 Resolver protocol; same name fetched once per run (memo); zero real network (fake resolver + socket guard).
 - Tests: table over new recorded zones: simple, nested includes at exactly 10 and 11 lookups, 2 and 3 voids, include loop A->B->A, self-include, redirect chain, MX with >10 hosts, SERVFAIL inside include, deep chain over the cap, malformed record inside include.
 New i18n keys: none
-Status: todo
+Status: done

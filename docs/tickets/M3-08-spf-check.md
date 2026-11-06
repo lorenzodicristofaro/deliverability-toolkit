@@ -14,4 +14,10 @@ Acceptance criteria:
 - Table-driven tests over the M3-07 zones plus a fully healthy domain (status ok).
 - DNS failure states (SERVFAIL, timeout, refused, blocked) on any lookup the check depends on yield status `error` via CheckResult.build(evaluated=False), never `ok` or a 'missing' finding; table test with recorded failing zones.
 New i18n keys: finding.SPF_*.title/detail/remediation (en + it), one set per code listed above
+Facts from M3-07 (app/checks/spf_tree.py) the check must honour:
+- Nodes with syntax_error=True must produce an SPF permerror finding (SPF_SYNTAX_ERROR); their children are not evaluated.
+- Void lookups now include redirect targets.
+- `a` is void when A is absent; the AAAA state is in TermLookup.states.
+- `truncated` implies lookup_count > 10, which is a lower bound. Report it as too-many-lookups (SPF_TOO_MANY_LOOKUPS / SPF_RESOLUTION_TRUNCATED), never ok.
+- An include target with no SPF record is permerror (SPF_INCLUDE_NOT_FOUND), not void.
 Status: todo

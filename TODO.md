@@ -58,12 +58,12 @@ Carried over from M0-07 QA:
   - [x] M3-02 check registry + runner service
   - [x] M3-03 TXT/CNAME fetch helper
   - [x] M3-04 SPF parser (opus)
-  - [ ] M3-05 DMARC parser (opus)
-  - [ ] M3-06 DKIM key record parser (opus)
-  - [ ] M3-07 SPF recursive resolution engine (opus)
+  - [x] M3-05 DMARC parser (opus)
+  - [x] M3-06 DKIM key record parser (opus)
+  - [x] M3-07 SPF recursive resolution engine (opus)
   - [ ] M3-08 SPF check: findings, flattening hints (opus)
   - [x] M3-09 organizational domain helper (public suffix source unverified)
-  - [ ] M3-10 DMARC check + org-domain fallback
+  - [x] M3-10 DMARC check + org-domain fallback
   - [ ] M3-11 DMARC external report authorization (opus)
   - [x] M3-12 DKIM selector seed + loader (unverified entries flagged)
   - [ ] M3-13 DKIM probe engine + check
@@ -150,4 +150,8 @@ Carried over from M0-07 QA:
 - [ ] Optional: add an explicit `evaluated` field to CheckResult if the runner-only convention proves insufficient (M3-01 QA)
 - [ ] MAINTAINER TO CONFIRM: Public Suffix List data licence (MPL-2.0 per the PyPI publicsuffixlist page only); check github.com/publicsuffix/list LICENSE; recorded as unverified in seeds/public_suffix_source.yaml (M3-09)
 - [ ] SPF parser nits (M3-04 QA): at the 4096-char cut, drop the partial last term so it does not add a second misleading issue; add a comment on Unicode-whitespace term splitting
+- [ ] DMARC parser: reject a `!size` whose value after the unit (number*unit) exceeds 64 bits (M3-05 QA).
+- [ ] Move the no-network socket guard from tests/dns/conftest.py to tests/conftest.py so tests/checks need no cross-package import (M3-07 QA).
+- [ ] spf_tree.py:319 per-term `valid` filter is dead code; remove or assert (M3-07 QA nit).
+- [ ] DKIM parser: optionally reject base64 with non-zero padding bits (M3-06 QA nit).
 - [ ] HTMX under CSP `script-src 'self'` is unverified, maintainer to confirm against https://htmx.org/docs/ (set includeIndicatorStyles=false and allowEval=false when vendored)

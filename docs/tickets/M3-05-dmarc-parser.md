@@ -14,4 +14,4 @@ Acceptance criteria:
 - Bounded input (4096 chars, 50 tags, 20 URIs) with an issue when truncated; no backtracking regexes.
 - Table-driven tests: real-world records and at least 30 malformed ones.
 New i18n keys: none
-Status: todo
+Status: done

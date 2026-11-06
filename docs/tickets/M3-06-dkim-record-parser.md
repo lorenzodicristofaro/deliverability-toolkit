@@ -14,4 +14,4 @@ Acceptance criteria:
 - Input bounded (record up to 4096 chars, DER up to 2048 bytes).
 - Table-driven tests with real-shaped 1024/2048/4096-bit RSA keys generated in the test (no real customer keys), ed25519, revoked, test mode `t=y`, and at least 25 malformed inputs.
 New i18n keys: none
-Status: todo
+Status: done
