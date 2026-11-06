@@ -1,0 +1,26 @@
+# M3-07 SPF loops, redirect chains and depth cap. Hand-written; reserved names only.
+zones:
+  default:
+    - {name: loopa.example.com, type: TXT, ttl: 300, rdata: ["v=spf1 include:loopb.example.com -all"]}
+    - {name: loopb.example.com, type: TXT, ttl: 300, rdata: ["v=spf1 include:loopa.example.com -all"]}
+    - {name: self.example.com, type: TXT, ttl: 300, rdata: ["v=spf1 include:self.example.com -all"]}
+    - {name: selfredir.example.com, type: TXT, ttl: 300, rdata: ["v=spf1 redirect=selfredir.example.com"]}
+    - {name: r1.example.com, type: TXT, ttl: 300, rdata: ["v=spf1 ip4:192.0.2.1 redirect=r2.example.com"]}
+    - {name: r2.example.com, type: TXT, ttl: 300, rdata: ["v=spf1 redirect=r3.example.com"]}
+    - {name: r3.example.com, type: TXT, ttl: 300, rdata: ["v=spf1 ip4:192.0.2.3 -all"]}
+    - {name: rall.example.com, type: TXT, ttl: 300, rdata: ["v=spf1 -all redirect=r3.example.com"]}
+    - {name: d0.example.com, type: TXT, ttl: 300, rdata: ["v=spf1 include:d1.example.com -all"]}
+    - {name: d1.example.com, type: TXT, ttl: 300, rdata: ["v=spf1 include:d2.example.com -all"]}
+    - {name: d2.example.com, type: TXT, ttl: 300, rdata: ["v=spf1 include:d3.example.com -all"]}
+    - {name: d3.example.com, type: TXT, ttl: 300, rdata: ["v=spf1 include:d4.example.com -all"]}
+    - {name: d4.example.com, type: TXT, ttl: 300, rdata: ["v=spf1 include:d5.example.com -all"]}
+    - {name: d5.example.com, type: TXT, ttl: 300, rdata: ["v=spf1 include:d6.example.com -all"]}
+    - {name: d6.example.com, type: TXT, ttl: 300, rdata: ["v=spf1 include:d7.example.com -all"]}
+    - {name: d7.example.com, type: TXT, ttl: 300, rdata: ["v=spf1 include:d8.example.com -all"]}
+    - {name: d8.example.com, type: TXT, ttl: 300, rdata: ["v=spf1 include:d9.example.com -all"]}
+    - {name: d9.example.com, type: TXT, ttl: 300, rdata: ["v=spf1 include:d10.example.com -all"]}
+    - {name: d10.example.com, type: TXT, ttl: 300, rdata: ["v=spf1 include:d11.example.com -all"]}
+    - {name: d11.example.com, type: TXT, ttl: 300, rdata: ["v=spf1 include:d12.example.com -all"]}
+    - {name: d12.example.com, type: TXT, ttl: 300, rdata: ["v=spf1 include:d13.example.com -all"]}
+    - {name: d13.example.com, type: TXT, ttl: 300, rdata: ["v=spf1 include:d14.example.com -all"]}
+    - {name: d14.example.com, type: TXT, ttl: 300, rdata: ["v=spf1 -all"]}
