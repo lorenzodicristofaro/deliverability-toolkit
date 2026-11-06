@@ -1,0 +1,11 @@
+# Provenance of the Public Suffix List data used by app/core/org_domain.py.
+# The data is bundled in the Python package wheel; there is no runtime or import-time fetch.
+name: publicsuffixlist
+package_url: https://pypi.org/project/publicsuffixlist/
+version: "1.1.2.20261106"
+licence: MPL-2.0   # package and bundled list, per the PyPI page; compatible with AGPL-3.0
+list_url: https://publicsuffix.org/list/
+sections_used: ICANN only
+verified_on: 2026-11-06
+status: verified
+update_step: uv lock --upgrade-package publicsuffixlist && uv run pytest tests/core/test_org_domain.py
