@@ -24,7 +24,9 @@ from app.dns.types import DnsQuestion, DnsResult, Resolver, ResultState
 @dataclass(frozen=True, slots=True)
 class TxtFetch:
     """``records`` are in resolver order, one entry per TXT record (strings joined, never
-    merged across records). ``evaluated`` is False whenever the lookup did not complete."""
+    merged across records). ``evaluated`` is False whenever the lookup did not complete.
+    ``ttl`` is the result's ``ttl_min`` when set, otherwise the minimum TTL across the TXT
+    records; None when there are no records."""
 
     state: ResultState
     records: tuple[str, ...]
@@ -34,6 +36,10 @@ class TxtFetch:
 
 @dataclass(frozen=True, slots=True)
 class CnameFetch:
+    """``target`` is the single CNAME target. More than one distinct target (RFC 2181 10.1
+    allows one CNAME per name) is not evaluable: state ``error``, ``evaluated=False``.
+    ``ttl`` is chosen as for ``TxtFetch``."""
+
     state: ResultState
     target: str | None
     evaluated: bool
@@ -63,4 +69,9 @@ async def fetch_txt(resolver: Resolver, name: str) -> TxtFetch:
 async def fetch_cname(resolver: Resolver, name: str) -> CnameFetch:
     result = await resolver.resolve(DnsQuestion(to_dns_name(name), "CNAME"))
     state, evaluated, texts, ttl = _classify(result, "CNAME")
-    return CnameFetch(state=state, target=texts[0] if texts else None, evaluated=evaluated, ttl=ttl)
+    targets = list(dict.fromkeys(t.lower().removesuffix(".") for t in texts))
+    if len(targets) > 1:
+        return CnameFetch(state=ResultState.error, target=None, evaluated=False, ttl=None)
+    return CnameFetch(
+        state=state, target=targets[0] if targets else None, evaluated=evaluated, ttl=ttl
+    )

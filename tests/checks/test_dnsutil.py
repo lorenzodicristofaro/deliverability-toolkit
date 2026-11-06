@@ -109,3 +109,19 @@ async def test_invalid_name_raises(bad: str) -> None:
         await fetch_txt(_Fixed(ResultState.nxdomain), bad)
     with pytest.raises(InvalidDomainName):
         await fetch_cname(_Fixed(ResultState.nxdomain), bad)
+
+
+def _cnames(*targets: str) -> _Fixed:
+    return _Fixed(
+        ResultState.ok, tuple(DnsRecord("a.example.com", "CNAME", 60, t) for t in targets)
+    )
+
+
+async def test_cname_multiple_distinct_targets_not_evaluated() -> None:
+    out = await fetch_cname(_cnames("t1.example.net", "t2.example.net"), "a.example.com")
+    assert (out.state, out.evaluated, out.target, out.ttl) == (ResultState.error, False, None, None)
+
+
+async def test_cname_identical_duplicates_collapse() -> None:
+    out = await fetch_cname(_cnames("T.Example.net.", "t.example.net"), "a.example.com")
+    assert (out.state, out.evaluated, out.target) == (ResultState.ok, True, "t.example.net")
