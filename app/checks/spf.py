@@ -66,7 +66,6 @@ TXT_STRING_MAX = 255
 # RFC 7208 section 3.4: keep name + record text under 450 octets so the answer fits in a
 # 512-octet UDP DNS message.
 DNS_ANSWER_GUIDELINE = 450
-UDP_MESSAGE_LIMIT = 512
 
 
 class SpfCheck:
