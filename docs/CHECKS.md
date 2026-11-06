@@ -10,7 +10,8 @@ A check is a class with a string `id` and `async run(ctx: CheckContext, target: 
 
 - `CheckContext`: resolver, clock, optional `tenant_id` / `domain_id`. No database handle by design.
 - `CheckResult`: `check_id`, `target`, `status`, `findings`, `data`, `started_at`, `duration_ms`.
-  Its JSON (`model_dump_json`) is the single wire format for API, CLI and UI.
+  Its JSON (`model_dump_json`) is shared by the API and the CLI; the UI renders the same
+  `CheckResult` objects (status and finding codes/severities are asserted equal in the acceptance test).
 - `Finding`: stable `code`, `severity`, i18n keys `finding.<CODE>.title|detail|remediation`,
   `params`, `evidence`, optional `docs_url`. Findings are sorted by severity, then code.
 - The only entry point is `app/services/checks.py` (`run_check`, `run_checks`). It re-stamps the

@@ -55,6 +55,8 @@ CLOCK_NOW = datetime(2026, 1, 1, tzinfo=UTC)
 ZONES_DIR = Path(__file__).parent.parent / "fixtures" / "zones"
 runner = CliRunner()
 Zones = dict[str, list[dict[str, Any]]]
+HTML = {"Accept": "text/html"}
+STREAM = {"Accept": "text/event-stream"}
 
 
 def clock() -> datetime:
@@ -259,7 +261,8 @@ def all_surfaces(
     expected = via_service(make, ids, single=single)
     assert via_api(rig, "analyst", ids, mode=mode) == expected
     cli = via_cli(mp, make, ids, mode=mode)
-    assert cli.stdout.rstrip("\n") == expected, cli.output
+    assert cli.stdout.endswith("\n") and not cli.stdout.endswith("\n\n"), cli.output
+    assert cli.stdout[:-1] == expected, cli.output
     assert via_free(rig, ids) == (f"[{expected}]" if single else expected)
     return expected, int(cli.exit_code)
 
@@ -312,6 +315,26 @@ def test_service_api_cli_byte_equal(
         assert set(statuses.values()) == {"error"}
 
 
+SECTION = re.compile(
+    r'<section class="check-result" data-testid="check-(\w+)" data-status="(\w+)">(.*?)</section>',
+    re.S,
+)
+FINDING = re.compile(r'<li data-code="([A-Z0-9_]+)" data-severity="(\w+)">')
+
+
+def assert_ui_equals(rig: Rig, docs: dict[str, dict[str, Any]]) -> None:
+    """The Authentication tab shows the same status and (code, severity) list as the service."""
+    w = rig.world
+    r = call(w, "analyst", "GET", f"/domains/{w.domains['assigned']}/authentication", headers=HTML)
+    assert r.status_code == 200
+    sections = {m.group(1): m for m in SECTION.finditer(r.text)}
+    for check_id in ("spf", "dmarc"):
+        m = sections[check_id]
+        assert m.group(2) == docs[check_id]["status"], check_id
+        ui = FINDING.findall(m.group(3))
+        assert ui == [(f["code"], f["severity"]) for f in docs[check_id]["findings"]], check_id
+
+
 # --- errors are errors ---------------------------------------------------------------------------
 
 POINTS_ZONE: Zones = {
@@ -332,7 +355,6 @@ POINTS = [
     ("dkim", f"default._domainkey.{D}", "CNAME"),
 ]
 ABSENCE = {"nxdomain", "nodata"}
-FAILURES = [s.value for s in ResultState if s is not ResultState.ok and s.value not in ABSENCE]
 
 
 @pytest.mark.parametrize("state", [s.value for s in ResultState if s is not ResultState.ok])
@@ -399,9 +421,6 @@ def test_sse_selector_states_equal_rest(rig: Rig) -> None:
 
 
 # --- zero DNS queries for every denied request ---------------------------------------------------
-
-HTML = {"Accept": "text/html"}
-STREAM = {"Accept": "text/event-stream"}
 
 
 def _toggle(w: World, user: str, toggles: dict[str, bool]) -> None:
