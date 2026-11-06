@@ -51,6 +51,7 @@ ROLE_EXPECTED: dict[str, dict[Action, set[str]]] = {
         ACT.DOMAIN_DELETE: DOMAIN_ALL,
         ACT.DNS_TOOLS: TENANT_LEVEL,
         ACT.CHECK_RUN: DOMAIN_ALL,
+        ACT.MESSAGE_ANALYZE: TENANT_LEVEL,
     },
     "admin": {
         ACT.TENANT_READ: TENANT_LEVEL,
@@ -62,6 +63,7 @@ ROLE_EXPECTED: dict[str, dict[Action, set[str]]] = {
         ACT.DOMAIN_DELETE: DOMAIN_ALL,
         ACT.DNS_TOOLS: TENANT_LEVEL,
         ACT.CHECK_RUN: DOMAIN_ALL,
+        ACT.MESSAGE_ANALYZE: TENANT_LEVEL,
     },
     "analyst": {
         ACT.TENANT_READ: TENANT_LEVEL,
@@ -69,6 +71,7 @@ ROLE_EXPECTED: dict[str, dict[Action, set[str]]] = {
         ACT.DOMAIN_READ: DOMAIN_ALL,
         ACT.DNS_TOOLS: TENANT_LEVEL,
         ACT.CHECK_RUN: DOMAIN_ALL,
+        ACT.MESSAGE_ANALYZE: TENANT_LEVEL,
     },
     "client_viewer": {
         ACT.TENANT_READ: TENANT_LEVEL,
@@ -123,8 +126,8 @@ MATRIX = [
 
 
 def test_matrix_size() -> None:
-    # 5 role kinds x admin flag x active flag x 11 actions x 6 situations.
-    assert len(MATRIX) == 5 * 2 * 2 * 11 * 6 == 1320
+    # 5 role kinds x admin flag x active flag x 12 actions x 6 situations.
+    assert len(MATRIX) == 5 * 2 * 2 * 12 * 6 == 1440
 
 
 @pytest.mark.parametrize(("role", "admin", "active", "action", "situation"), MATRIX)
@@ -142,7 +145,7 @@ def test_matrix(role: str, admin: bool, active: bool, action: Action, situation:
         assert exc.value.code == "permission_denied"
 
 
-def test_action_list_is_the_m1_set_plus_dns_tools_and_check_run() -> None:
+def test_action_list_is_the_m1_set_plus_later_milestone_actions() -> None:
     assert {a.value for a in Action} == {
         "tenant.read",
         "tenant.manage",
@@ -155,6 +158,7 @@ def test_action_list_is_the_m1_set_plus_dns_tools_and_check_run() -> None:
         "instance.manage",
         "dns.tools",  # M2-11
         "check.run",  # M3-14
+        "message.analyze",  # M4-06
     }
 
 
@@ -672,3 +676,162 @@ def test_check_run_toggle_is_independent_of_dns_tools() -> None:
     assert can(p, Action.DOMAIN_READ, DomainResource(A, ASSIGNED)) is True
     q = _p(memberships=(_grant("analyst", toggles={"dns.tools": False}),))
     assert can(q, Action.CHECK_RUN, DomainResource(A, UNASSIGNED)) is True
+
+
+# --- M4-06: message.analyze (ticket M4-06) ----------------------------------------------------
+# Tenant-level, owner/admin/analyst only; client viewer denied by role and never grantable;
+# no active membership denied; the instance admin flag adds nothing; toggles only deny.
+
+MSG_ROLES_EXPECTED = {"owner": True, "admin": True, "analyst": True, "client_viewer": False}
+MSG_TOGGLES: dict[str, dict[str, Any]] = {
+    "none": {},
+    "msg_true": {"message.analyze": True},
+    "msg_false": {"message.analyze": False},
+    "msg_none": {"message.analyze": None},
+    "msg_str_yes": {"message.analyze": "yes"},
+    "msg_str_true": {"message.analyze": "true"},
+    "msg_zero": {"message.analyze": 0},
+    "msg_one": {"message.analyze": 1},
+    "unrelated_false": {"dns.tools": False, "check.run": False, "domain.read": False},
+}
+MSG_ALLOWING_TOGGLES = {"none", "msg_true", "unrelated_false"}
+
+
+@pytest.mark.parametrize(
+    ("role", "toggle", "state"),
+    [
+        pytest.param(r, t, st, id=f"{r}-{t}-{st}")
+        for r, t, st in itertools.product(MSG_ROLES_EXPECTED, MSG_TOGGLES, DNS_STATES)
+    ],
+)
+def test_message_analyze_roles_x_toggles_x_states(role: str, toggle: str, state: str) -> None:
+    p = _dns_principal(role, MSG_TOGGLES[toggle], state)
+    expected = (
+        MSG_ROLES_EXPECTED[role]
+        and state in {"member", "instance_admin_member"}
+        and toggle in MSG_ALLOWING_TOGGLES
+    )
+    assert can(p, Action.MESSAGE_ANALYZE, TenantResource(A)) is expected
+    assert can(p, "message.analyze", TenantResource(A)) is expected
+    if not expected:
+        with pytest.raises(PermissionDenied):
+            require(p, Action.MESSAGE_ANALYZE, TenantResource(A))
+    # Only the principal's own active tenant, and only the tenant-level resource kind: a
+    # DomainResource (even in the own tenant) or an InstanceResource is denied.
+    for resource in (
+        TenantResource(B),
+        InstanceResource(),
+        DomainResource(A, ASSIGNED),
+        DomainResource(A, UNASSIGNED),
+    ):
+        assert can(p, Action.MESSAGE_ANALYZE, resource) is False
+
+
+@pytest.mark.parametrize(
+    ("label", "principal"),
+    [
+        ("anonymous", None),
+        ("not a principal", object()),
+        ("dict principal", {"user_id": 1, "is_active": True, "active_tenant_id": A}),
+        ("inactive user", _p(is_active=False)),
+        ("is_active truthy non-bool", _p(is_active=1)),
+        ("no memberships", _p(memberships=())),
+        ("no active tenant", _p(active_tenant_id=None)),
+        ("active tenant not an id", _p(active_tenant_id="1")),
+        ("active tenant bool", _p(active_tenant_id=True)),
+        ("memberships not a tuple", _p(memberships=[_grant("owner")])),
+        ("membership not a grant", _p(memberships=({"tenant_id": A, "role": "owner"},))),
+        ("duplicate membership", _p(memberships=(_grant("owner"), _grant("analyst")))),
+        ("unknown role", _p(memberships=(MembershipGrant(A, "superuser"),))),  # type: ignore[arg-type]
+        ("role not a string", _p(memberships=(MembershipGrant(A, 1),))),  # type: ignore[arg-type]
+        (
+            "toggles not a mapping",
+            _p(memberships=(MembershipGrant(A, MembershipRole.OWNER, feature_toggles=None),)),  # type: ignore[arg-type]
+        ),
+        ("instance admin, no membership", _p(is_instance_admin=True, memberships=())),
+        ("instance admin, no active tenant", _p(is_instance_admin=True, active_tenant_id=None)),
+        ("instance admin, inactive", _p(is_instance_admin=True, is_active=False)),
+    ],
+)
+def test_message_analyze_denied_for_malformed_or_inactive_principal(
+    label: str, principal: object
+) -> None:
+    for resource in SITUATIONS.values():
+        assert can(principal, Action.MESSAGE_ANALYZE, resource) is False, label
+
+
+@pytest.mark.parametrize(
+    "resource",
+    [
+        TenantResource(B),
+        TenantResource(0),
+        TenantResource(-1),
+        TenantResource(True),  # True == 1 must not match tenant A
+        TenantResource("1"),  # type: ignore[arg-type]
+        DomainResource(A, ASSIGNED),
+        InstanceResource(),
+        None,
+        A,
+        {"tenant_id": A},
+    ],
+)
+def test_message_analyze_wrong_tenant_or_resource_denied(resource: object) -> None:
+    p = _p(is_instance_admin=True)  # owner in A; the instance flag must not help
+    assert can(p, Action.MESSAGE_ANALYZE, resource) is False
+    assert can(p, Action.MESSAGE_ANALYZE, TenantResource(A)) is True
+
+
+@pytest.mark.parametrize(
+    ("label", "grant", "admin"),
+    [
+        ("plain", _grant("client_viewer"), False),
+        (
+            "toggle message.analyze true",
+            _grant("client_viewer", toggles={"message.analyze": True}),
+            False,
+        ),
+        ("every toggle true", _grant("client_viewer", toggles=_ALL_TOGGLES_TRUE), False),
+        (
+            "every domain + every toggle",
+            MembershipGrant(
+                A,
+                MembershipRole.CLIENT_VIEWER,
+                domain_ids=frozenset(range(1, 50)),
+                feature_toggles=MappingProxyType(_ALL_TOGGLES_TRUE),
+            ),
+            False,
+        ),
+        (
+            "instance admin flag",
+            _grant("client_viewer", toggles={"message.analyze": True}),
+            True,
+        ),
+        ("role as string", MembershipGrant(A, "client_viewer"), False),  # type: ignore[arg-type]
+    ],
+)
+def test_client_viewer_never_gets_message_analyze(
+    label: str, grant: MembershipGrant, admin: bool
+) -> None:
+    p = _p(is_instance_admin=admin, memberships=(grant,))
+    for resource in SITUATIONS.values():
+        assert can(p, Action.MESSAGE_ANALYZE, resource) is False, label
+        with pytest.raises(PermissionDenied):
+            require(p, Action.MESSAGE_ANALYZE, resource)
+
+
+def test_message_analyze_role_in_other_tenant_does_not_leak() -> None:
+    # Owner in B must not leak message.analyze into A, where the user is only a client viewer.
+    p = _p(memberships=(_grant("client_viewer"), _grant("owner", B)))
+    assert can(p, Action.MESSAGE_ANALYZE, TenantResource(A)) is False
+    assert can(p, Action.MESSAGE_ANALYZE, TenantResource(B)) is False  # B is not active
+
+
+def test_message_analyze_toggle_is_independent_of_dns_tools_and_check_run() -> None:
+    # Denying dns.tools must not switch off the offline analyzer, and vice versa.
+    p = _p(memberships=(_grant("analyst", toggles={"dns.tools": False, "check.run": False}),))
+    assert can(p, Action.MESSAGE_ANALYZE, TenantResource(A)) is True
+    assert can(p, Action.DNS_TOOLS, TenantResource(A)) is False
+    q = _p(memberships=(_grant("analyst", toggles={"message.analyze": False}),))
+    assert can(q, Action.MESSAGE_ANALYZE, TenantResource(A)) is False
+    assert can(q, Action.DNS_TOOLS, TenantResource(A)) is True
+    assert can(q, Action.CHECK_RUN, DomainResource(A, ASSIGNED)) is True
