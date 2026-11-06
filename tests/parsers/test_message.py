@@ -13,6 +13,7 @@ from app.parsers.message import (
     MAX_HEADER_COUNT,
     MAX_HEADER_LINE,
     MAX_RAW_BYTES,
+    MAX_UNFOLDED_HEADER,
     RFC5322_LINE_LIMIT,
     HeaderBlock,
     InvalidMessage,
@@ -86,8 +87,24 @@ def _logical_line(length: int, folded: bool) -> bytes:
         (b"no colon\n" * (MAX_HEADER_COUNT + 1), TooManyHeaders, "too_many_headers"),
         (_logical_line(MAX_HEADER_LINE, folded=False), None, None),
         (_logical_line(MAX_HEADER_LINE + 1, folded=False), MessageTooLarge, "header_line_too_long"),
-        (_logical_line(MAX_HEADER_LINE, folded=True), None, None),
-        (_logical_line(MAX_HEADER_LINE + 1, folded=True), MessageTooLarge, "header_line_too_long"),
+        (_logical_line(MAX_UNFOLDED_HEADER, folded=True), None, None),
+        (
+            _logical_line(MAX_UNFOLDED_HEADER + 1, folded=True),
+            MessageTooLarge,
+            "unfolded_header_too_long",
+        ),
+        (b"X: a\r\n " + b"a" * (MAX_HEADER_LINE - 1) + b"\r\n\r\n", None, None),
+        (
+            b"X: a\r\n " + b"a" * MAX_HEADER_LINE + b"\r\n\r\n",
+            MessageTooLarge,
+            "header_line_too_long",
+        ),
+        (b"From " + b"a" * (MAX_HEADER_LINE - 5) + b"\nX: y\n\n", None, None),
+        (
+            b"From " + b"a" * (MAX_HEADER_LINE - 4) + b"\nX: y\n\n",
+            MessageTooLarge,
+            "header_line_too_long",
+        ),
         (b"a" * MAX_HEADER_LINE, None, None),
         (b"a" * (MAX_HEADER_LINE + 1), MessageTooLarge, "header_line_too_long"),
     ],
@@ -103,8 +120,12 @@ def _logical_line(length: int, folded: bool) -> bytes:
         "count-over-cap-malformed-lines",
         "line-at-cap",
         "line-over-cap",
-        "folded-line-at-cap",
-        "folded-line-over-cap",
+        "unfolded-at-cap",
+        "unfolded-over-cap",
+        "continuation-line-at-cap",
+        "continuation-line-over-cap",
+        "mbox-line-at-cap",
+        "mbox-line-over-cap",
         "no-colon-line-at-cap",
         "no-colon-line-over-cap",
     ],
@@ -125,6 +146,7 @@ def test_cap_constants() -> None:
     assert MAX_HEADER_BYTES == 128 * 1024
     assert MAX_HEADER_COUNT == 500
     assert MAX_HEADER_LINE == 8 * 1024
+    assert MAX_UNFOLDED_HEADER == 64 * 1024
     assert RFC5322_LINE_LIMIT == 998
 
 
@@ -139,12 +161,30 @@ def test_rfc5322_line_limit_is_warning(length: int, warned: bool) -> None:
     assert len(block.fields) == 1
 
 
-def test_fold_bomb_is_capped_quickly() -> None:
+def test_long_folded_references_accepted() -> None:
+    ids = [f"<{i:06d}.thread@mail.example.com>".encode() for i in range(300)]
+    raw = b"References: " + b"\r\n ".join(ids) + b"\r\nSubject: s\r\n\r\n"
+    block = parse_header_block(raw)
+    (refs,) = block.get_all("References")
+    assert len(refs.raw_value) > 9 * 1024
+    assert refs.raw_value.count("<") == 300
+    assert codes(block) == []
+
+
+def test_fold_bomb_is_bounded_and_fast() -> None:
     raw = b"Subject: x" + b"\r\n a" * 10_000 + b"\r\n\r\n"
+    start = time.monotonic()
+    (field,) = parse_header_block(raw).fields
+    assert len(field.raw_value) == 1 + 2 * 10_000
+    assert time.monotonic() - start < 1.0
+
+
+def test_fold_bomb_over_unfolded_cap() -> None:
+    raw = b"Subject: x" + b"\r\n aaaaaaaaaa" * 6_000 + b"\r\n\r\n"
     start = time.monotonic()
     with pytest.raises(MessageTooLarge) as info:
         parse_header_block(raw)
-    assert info.value.code == "header_line_too_long"
+    assert info.value.code == "unfolded_header_too_long"
     assert time.monotonic() - start < 1.0
 
 

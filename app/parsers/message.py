@@ -12,8 +12,9 @@ It raises only in these cases, each with a stable ``code`` and a message that ne
 the input:
 
 - :class:`MessageTooLarge`: input over :data:`MAX_RAW_BYTES` (``message_too_large``),
-  header block over :data:`MAX_HEADER_BYTES` (``header_block_too_large``) or a logical
-  (unfolded) header line over :data:`MAX_HEADER_LINE` (``header_line_too_long``). Nothing
+  header block over :data:`MAX_HEADER_BYTES` (``header_block_too_large``), a physical
+  header line over :data:`MAX_HEADER_LINE` (``header_line_too_long``) or an unfolded
+  header field over :data:`MAX_UNFOLDED_HEADER` (``unfolded_header_too_long``). Nothing
   is ever truncated silently.
 - :class:`TooManyHeaders`: more than :data:`MAX_HEADER_COUNT` fields (``too_many_headers``).
 - :class:`InvalidMessage`: a NUL byte in the header block (``nul_byte``).
@@ -33,10 +34,12 @@ Parsing rules:
   SP or HTAB; the whitespace itself is kept. ``raw_value`` is the unfolded text after the
   first colon with surrounding whitespace stripped. Lines that cannot be a field (no colon,
   continuation with nothing to continue) are kept as fields with ``name=""``.
-- :data:`MAX_HEADER_LINE` applies to each logical line after unfolding (name, colon and
-  value, without line endings), so a fold bomb of many short continuation lines is capped
-  by the same limit as one long physical line. The RFC 5322 section 2.1.1 limit of 998
-  characters per physical line is a warning only.
+- :data:`MAX_HEADER_LINE` applies to each physical line (without its line ending);
+  :data:`MAX_UNFOLDED_HEADER` applies to each field after unfolding (name, colon and
+  value, without line endings), so long legitimate fields such as References or
+  DKIM-Signature are accepted while a fold bomb of many short continuation lines is
+  bounded by that cap and by :data:`MAX_HEADER_BYTES`. The RFC 5322 section 2.1.1 limit
+  of 998 characters per physical line is a warning only.
 - 8-bit bytes are decoded as UTF-8 (RFC 6532); invalid UTF-8 is decoded with U+FFFD
   replacement characters and a warning. The exact bytes are at ``raw[position:]``.
 - ``decoded_value`` is ``raw_value`` with RFC 2047 encoded-words (``B`` and ``Q``) decoded.
@@ -63,6 +66,7 @@ MAX_RAW_BYTES = 2 * 1024 * 1024
 MAX_HEADER_BYTES = 128 * 1024
 MAX_HEADER_COUNT = 500
 MAX_HEADER_LINE = 8 * 1024
+MAX_UNFOLDED_HEADER = 64 * 1024
 RFC5322_LINE_LIMIT = 998
 MAX_CHARSET_LENGTH = 64
 MAX_WARNINGS = 200
@@ -71,6 +75,7 @@ MAX_WARNINGS = 200
 MESSAGE_TOO_LARGE = "message_too_large"
 HEADER_BLOCK_TOO_LARGE = "header_block_too_large"
 HEADER_LINE_TOO_LONG = "header_line_too_long"
+UNFOLDED_HEADER_TOO_LONG = "unfolded_header_too_long"
 TOO_MANY_HEADERS = "too_many_headers"
 NUL_BYTE = "nul_byte"
 
@@ -213,6 +218,8 @@ def _split_header_lines(raw: bytes) -> tuple[list[_Line], int]:
             return lines, next_pos
         if next_pos > MAX_HEADER_BYTES:
             raise MessageTooLarge(HEADER_BLOCK_TOO_LARGE)
+        if len(content) > MAX_HEADER_LINE:
+            raise MessageTooLarge(HEADER_LINE_TOO_LONG)
         lines.append(_Line(content, pos, ending))
         pos = next_pos
     return lines, size
@@ -377,8 +384,8 @@ def _build_field(parts: list[_Line], warnings: _Warnings, orphan: bool) -> Heade
     first = parts[0]
     position = first.position
     logical = b"".join(p.content for p in parts)
-    if len(logical) > MAX_HEADER_LINE:
-        raise MessageTooLarge(HEADER_LINE_TOO_LONG)
+    if len(logical) > MAX_UNFOLDED_HEADER:
+        raise MessageTooLarge(UNFOLDED_HEADER_TOO_LONG)
     text = _to_text(logical, position, warnings)
 
     if orphan:
