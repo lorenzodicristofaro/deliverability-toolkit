@@ -13,4 +13,4 @@ Acceptance criteria:
 - `list_selectors() -> tuple[Selector, ...]` cached, sorted, deterministic.
 - Tests: valid file, every malformed schema case, guard test that no entry is `verified` without a source, shipped file loads.
 New i18n keys: none
-Status: todo
+Status: done

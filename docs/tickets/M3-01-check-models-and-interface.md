@@ -14,4 +14,4 @@ Acceptance criteria:
 - A per-check `CODES` tuple convention is documented in the module docstring (used by the i18n completeness test in M3-19).
 - Table-driven tests: status derivation, invalid codes, ordering, JSON round trip.
 New i18n keys: none
-Status: todo
+Status: done

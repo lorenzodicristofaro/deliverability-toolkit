@@ -54,7 +54,7 @@ Carried over from M0-07 QA:
 - [ ] DMARC incl. external report authorization
 - [ ] Domain page "Authentication" tab, CLI `check` command, REST endpoints
 - Tickets (docs/tickets/):
-  - [ ] M3-01 Check interface + CheckResult/Finding models
+  - [x] M3-01 Check interface + CheckResult/Finding models
   - [ ] M3-02 check registry + runner service
   - [ ] M3-03 TXT/CNAME fetch helper
   - [ ] M3-04 SPF parser (opus)
@@ -65,9 +65,9 @@ Carried over from M0-07 QA:
   - [ ] M3-09 organizational domain helper (public suffix source unverified)
   - [ ] M3-10 DMARC check + org-domain fallback
   - [ ] M3-11 DMARC external report authorization (opus)
-  - [ ] M3-12 DKIM selector seed + loader (unverified entries flagged)
+  - [x] M3-12 DKIM selector seed + loader (unverified entries flagged)
   - [ ] M3-13 DKIM probe engine + check
-  - [ ] M3-14 `check.run` permission (opus)
+  - [x] M3-14 `check.run` permission (opus)
   - [ ] M3-15 checks REST endpoints
   - [ ] M3-16 DKIM SSE stream
   - [ ] M3-17 Authentication tab UI
@@ -145,4 +145,7 @@ Carried over from M0-07 QA:
 - [ ] Move `mixed_script` to app/core/domain_names.py
 - [ ] app/services/domains.py hardcodes MembershipRole.CLIENT_VIEWER in list and set_access; use is_domain_restricted
 - [ ] The matrix guard's create_app() uses env settings, not world.settings (QA nit)
+- [ ] app/checks/dkim_selectors.py imports private validation helpers from app/dns/knowledge.py and app/dns/types.py; expose a public seed-validation helper (M3-12 QA)
+- [ ] MAINTAINER TO CONFIRM: all 9 DKIM seed selectors (default, dkim, mail, google, s1, s2, k1, selector1, selector2) are unverified with no provider; confirm provenance against official vendor docs before promoting any (M3-12)
+- [ ] Optional: add an explicit `evaluated` field to CheckResult if the runner-only convention proves insufficient (M3-01 QA)
 - [ ] HTMX under CSP `script-src 'self'` is unverified, maintainer to confirm against https://htmx.org/docs/ (set includeIndicatorStyles=false and allowEval=false when vendored)

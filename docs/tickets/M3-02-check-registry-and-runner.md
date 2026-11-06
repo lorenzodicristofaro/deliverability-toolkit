@@ -12,6 +12,7 @@ Acceptance criteria:
 - A check that raises, or exceeds its deadline, yields `CheckResult(status="error")` with a generic `CHECK_INTERNAL_ERROR` / `CHECK_TIMEOUT` finding; exceptions never escape and are logged without echoing raw input.
 - Unknown check id -> typed error (mapped to 404/422 by callers); invalid domain name -> `InvalidTarget` using `app/core/domain_names` / the M2-01 record-name validator (underscore-safe).
 - Duration and started_at filled by the runner from the context clock; tests use a fake clock and the M2-04 fake resolver; no network.
+- CheckResult.build() is the documented sole factory; the runner is the only producer of CheckResult and wraps any check exception, timeout or DNS failure into status `error` (never `ok`). Tests: a check that raises, and one whose DNS lookup returns SERVFAIL/timeout, both yield `error`. (From M3-01 QA: CheckResult has no `evaluated` field, so a direct constructor can produce `ok`.)
 - Tests: ordering of results is by requested ids, timeout, exception, unknown id, bad name table.
 New i18n keys: finding.CHECK_INTERNAL_ERROR.*, finding.CHECK_TIMEOUT.* (en + it; locale files are touched here, so merge before other locale-touching M3 tickets)
 Status: todo

@@ -12,4 +12,4 @@ Acceptance criteria:
 - Table-driven test roles x toggles x (assigned / unassigned domain, other tenant's domain, no membership, inactive membership, instance admin handling mirrored from `can()`); client viewer on an unassigned domain denied; toggle false denies; toggle true never grants beyond role.
 - Existing tests that enumerate every Action are updated deliberately.
 New i18n keys: none
-Status: todo
+Status: done
