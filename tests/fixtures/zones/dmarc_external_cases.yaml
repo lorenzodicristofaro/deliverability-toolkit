@@ -1,0 +1,62 @@
+# M3-11 external report destination authorization (RFC 7489 section 7.1). Hand-written,
+# reserved names only. Policies live under example.com / example.org; destinations under
+# example.net, example.org and .test.
+zones:
+  default:
+    # Authorized: the receiver publishes a bare "v=DMARC1" (no p; missing_policy is ignored).
+    - {name: _dmarc.auth.example.com, type: TXT, ttl: 300, rdata: ["v=DMARC1; p=reject; rua=mailto:r@reports.example.net"]}
+    - {name: auth.example.com._report._dmarc.reports.example.net, type: TXT, ttl: 300, rdata: ["v=DMARC1"]}
+    # Missing authorization record (nxdomain).
+    - {name: _dmarc.noauth.example.com, type: TXT, ttl: 300, rdata: ["v=DMARC1; p=reject; rua=mailto:r@noauth.example.net"]}
+    # Wrong version: discarded by step 5.
+    - {name: _dmarc.wrongver.example.com, type: TXT, ttl: 300, rdata: ["v=DMARC1; p=reject; rua=mailto:r@wrongver.example.net"]}
+    - {name: wrongver.example.com._report._dmarc.wrongver.example.net, type: TXT, ttl: 300, rdata: ["v=DMARC2"]}
+    # Version not first: discarded by step 5.
+    - {name: _dmarc.notfirst.example.com, type: TXT, ttl: 300, rdata: ["v=DMARC1; p=reject; rua=mailto:r@notfirst.example.net"]}
+    - {name: notfirst.example.com._report._dmarc.notfirst.example.net, type: TXT, ttl: 300, rdata: ["rua=mailto:x@notfirst.example.net; v=DMARC1"]}
+    # Wildcard authorization: answered only when the resolver synthesises the wildcard.
+    - {name: _dmarc.wild.example.com, type: TXT, ttl: 300, rdata: ["v=DMARC1; p=reject; rua=mailto:r@wild.example.org"]}
+    - {name: "*._report._dmarc.wild.example.org", type: TXT, ttl: 300, rdata: ["v=DMARC1"]}
+    # Same organizational domain: no query at all.
+    - {name: _dmarc.sameorg.example.com, type: TXT, ttl: 300, rdata: ["v=DMARC1; p=reject; rua=mailto:dmarc@sub.example.com; ruf=mailto:f@sameorg.example.com."]}
+    # Several destinations: authorized + unauthorized + same org; the same host twice.
+    - {name: _dmarc.multi.example.com, type: TXT, ttl: 300, rdata: ["v=DMARC1; p=reject; rua=mailto:a@reports.example.net,mailto:b@noauth.example.net,mailto:c@example.com; ruf=mailto:d@reports.example.net"]}
+    - {name: multi.example.com._report._dmarc.reports.example.net, type: TXT, ttl: 300, rdata: ["some other text", "v=DMARC1;"]}
+    # Trailing dot in the destination host (mixed case: see the direct table test; the
+    # reserved-name guard compares lowercase names).
+    - {name: _dmarc.case.example.com, type: TXT, ttl: 300, rdata: ["v=DMARC1; p=reject; rua=mailto:r@reports.example.net."]}
+    - {name: case.example.com._report._dmarc.reports.example.net, type: TXT, ttl: 300, rdata: ["v=DMARC1"]}
+    # IDN destination (percent-encoded UTF-8 for buecher with u-umlaut).
+    - {name: _dmarc.idn.example.com, type: TXT, ttl: 300, rdata: ["v=DMARC1; p=reject; rua=mailto:r@b%C3%BCcher.test"]}
+    - {name: idn.example.com._report._dmarc.xn--bcher-kva.test, type: TXT, ttl: 300, rdata: ["v=DMARC1"]}
+    # Multi-address mailto: no single host, not checkable, never authorized.
+    - {name: _dmarc.multiaddr.example.com, type: TXT, ttl: 300, rdata: ["v=DMARC1; p=reject; rua=mailto:a@reports.example.net%2Cb@noauth.example.net"]}
+    # Non-mailto scheme: skipped with a note.
+    - {name: _dmarc.https.example.com, type: TXT, ttl: 300, rdata: ["v=DMARC1; p=reject; rua=https://reports.example.net/dmarc"]}
+    # Override with a different host (step 8): reports suppressed.
+    - {name: _dmarc.override.example.com, type: TXT, ttl: 300, rdata: ["v=DMARC1; p=reject; rua=mailto:r@ov.example.net"]}
+    - {name: override.example.com._report._dmarc.ov.example.net, type: TXT, ttl: 300, rdata: ["v=DMARC1; rua=mailto:x@elsewhere.example.org"]}
+    # Override with the same host: still authorized.
+    - {name: _dmarc.oversame.example.com, type: TXT, ttl: 300, rdata: ["v=DMARC1; p=reject; rua=mailto:r@ov.example.net"]}
+    - {name: oversame.example.com._report._dmarc.ov.example.net, type: TXT, ttl: 300, rdata: ["v=DMARC1; rua=mailto:y@ov.example.net"]}
+    # Authorization record with a value error: authorized, error reported.
+    - {name: _dmarc.authbad.example.com, type: TXT, ttl: 300, rdata: ["v=DMARC1; p=reject; rua=mailto:r@reports.example.net"]}
+    - {name: authbad.example.com._report._dmarc.reports.example.net, type: TXT, ttl: 300, rdata: ["v=DMARC1; pct=abc"]}
+    # Authorization record that is not a tag=value list: discarded, error reported.
+    - {name: _dmarc.authjunk.example.com, type: TXT, ttl: 300, rdata: ["v=DMARC1; p=reject; rua=mailto:r@reports.example.net"]}
+    - {name: authjunk.example.com._report._dmarc.reports.example.net, type: TXT, ttl: 300, rdata: ["v=DMARC1; garbage"]}
+    # Inherited policy: the query prefix is the domain where the policy was found.
+    - {name: _dmarc.example.org, type: TXT, ttl: 300, rdata: ["v=DMARC1; p=reject; rua=mailto:r@reports.example.net"]}
+    - {name: child.example.org, type: A, ttl: 300, rdata: [192.0.2.50]}
+    - {name: example.org._report._dmarc.reports.example.net, type: TXT, ttl: 300, rdata: ["v=DMARC1"]}
+    # Hostile destination count: 12 distinct external hosts, none authorized.
+    - name: _dmarc.many.example.com
+      type: TXT
+      ttl: 300
+      rdata: ["v=DMARC1; p=reject; rua=mailto:r@d1.example.net,mailto:r@d2.example.net,mailto:r@d3.example.net,mailto:r@d4.example.net,mailto:r@d5.example.net,mailto:r@d6.example.net,mailto:r@d7.example.net,mailto:r@d8.example.net,mailto:r@d9.example.net,mailto:r@d10.example.net,mailto:r@d11.example.net,mailto:r@d12.example.net"]
+    # Twenty URIs to one external host: a single lookup.
+    - name: _dmarc.samehost.example.com
+      type: TXT
+      ttl: 300
+      rdata: ["v=DMARC1; p=reject; rua=mailto:a@reports.example.net,mailto:b@reports.example.net,mailto:c@reports.example.net,mailto:d@reports.example.net,mailto:e@reports.example.net,mailto:f@reports.example.net,mailto:g@reports.example.net,mailto:h@reports.example.net,mailto:i@reports.example.net,mailto:j@reports.example.net; ruf=mailto:k@reports.example.net,mailto:l@reports.example.net,mailto:m@reports.example.net,mailto:n@reports.example.net,mailto:o@reports.example.net,mailto:p@reports.example.net,mailto:q@reports.example.net,mailto:r@reports.example.net,mailto:s@reports.example.net,mailto:t@reports.example.net"]
+    - {name: samehost.example.com._report._dmarc.reports.example.net, type: TXT, ttl: 300, rdata: ["v=DMARC1"]}
