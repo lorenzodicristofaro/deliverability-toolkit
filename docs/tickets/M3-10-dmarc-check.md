@@ -16,5 +16,6 @@ Acceptance criteria:
 - DNS failure states (SERVFAIL, timeout, refused, blocked) on any lookup the check depends on yield status `error` via CheckResult.build(evaluated=False), never `ok` or a 'missing' finding; table test with recorded failing zones.
 - organizational_domain() returns None for a public suffix or single label and raises InvalidDomainName for other malformed input; handle both (no org fallback when None; never crash); test it (M3-09).
 - Note: M3-10 must use the full PSL (ICANN plus private), already decided in M3-09.
+- Missing or invalid `p` (RFC 7489 section 6.6.3): if a valid `rua` is present, treat the policy as `none` and emit a finding saying receivers apply p=none; otherwise report that the domain has no usable DMARC policy. The parser (M3-05) reports missing_policy as an error, and this check decides its effect. Verify the wording against RFC 7489 section 6.6.3 before coding.
 New i18n keys: finding.DMARC_*.title/detail/remediation (en + it)
 Status: todo
