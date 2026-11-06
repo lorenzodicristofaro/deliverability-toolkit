@@ -16,4 +16,5 @@ Acceptance criteria:
 - i18n completeness: every code in app/services/message_findings.CODES has title/detail/remediation in en and it; every M4 key exists in both locales; scan shows no hardcoded strings in M4 templates/CLI.
 - `docs/HEADERS.md`: scope and the offline guarantee (no DNS: what is reported is what the receiving server STATED, signatures are not verified), input limits table, parser behaviour on malformed input, finding code list with severities, permission `message.analyze` and why, CLI usage and exit codes, how to add a corpus sample (sanitization checklist), list of unverified provider samples and what the maintainer must supply.
 New i18n keys: none
+Notes from M4-07 QA: MANIFEST `alignment` in the ARC entry means identifier alignment, not DMARC alignment (rename to `identifier_alignment` here); RFC 8601 B.3/B.4 Date and Received stamps use a non-RFC 5322 format copied from the RFC, so do not assert date parsing on them; MANIFEST facts are hand-written and must be checked against parser output.
 Status: todo

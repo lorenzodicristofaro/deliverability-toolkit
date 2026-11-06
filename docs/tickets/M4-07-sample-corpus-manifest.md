@@ -14,4 +14,4 @@ Acceptance criteria:
 - README.md lists exactly what the MAINTAINER must supply: sanitized real .eml (or header-only) samples from Gmail, Outlook/Microsoft 365, Amazon SES, SendGrid, MailUp, each with the sanitization checklist (replace domains, IPs, message-ids, strip signature b=/bh= values only after keeping their length) and who sanitized them.
 - Manifest test: every file in the folder is in the manifest and vice versa; unverified entries have no `sources` claims; verified entries have non-empty sources and a verified_on date.
 New i18n keys: none
-Status: todo
+Status: done
