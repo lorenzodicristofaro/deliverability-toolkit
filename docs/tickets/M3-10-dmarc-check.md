@@ -14,5 +14,7 @@ Acceptance criteria:
 - All codes have en + it title/detail/remediation; completeness test as in M3-08.
 - Table-driven tests: recorded zones for healthy, p=none, subdomain, missing, multiple, malformed, SERVFAIL.
 - DNS failure states (SERVFAIL, timeout, refused, blocked) on any lookup the check depends on yield status `error` via CheckResult.build(evaluated=False), never `ok` or a 'missing' finding; table test with recorded failing zones.
+- organizational_domain() returns None for a public suffix or single label and raises InvalidDomainName for other malformed input; handle both (no org fallback when None; never crash); test it (M3-09).
+- Note: M3-10 must use the full PSL (ICANN plus private), already decided in M3-09.
 New i18n keys: finding.DMARC_*.title/detail/remediation (en + it)
 Status: todo

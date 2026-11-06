@@ -13,4 +13,4 @@ Acceptance criteria:
 - Underscore names (`_dmarc.`, `_domainkey.`, `_report._dmarc.`) accepted via the M2-01 record-name validator.
 - Tests against M2-04 recorded zones (healthy, failures) as a table over every ResultState; multi-string TXT; non-ASCII bytes; no network.
 New i18n keys: none
-Status: todo
+Status: done

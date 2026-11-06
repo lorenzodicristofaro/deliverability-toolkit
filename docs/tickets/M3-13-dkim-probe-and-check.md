@@ -13,5 +13,6 @@ Acceptance criteria:
 - `data["selectors"]` lists every probed selector with state, key type, bits; the UI note "selectors cannot be enumerated" is a documented `data["enumerable"]=False` flag.
 - Tests: recorded zones for 2048/1024/ed25519/revoked/t=y/CNAME chain/loop/NXDOMAIN/SERVFAIL; ordering of yielded results; concurrency bound via the fake resolver; no network.
 - DNS failure states (SERVFAIL, timeout, refused, blocked) on any lookup the check depends on yield status `error` via CheckResult.build(evaluated=False), never `ok` or a 'missing' finding; table test with recorded failing zones. (DKIM probe, GM rule: failed selectors are always listed in DKIM_PROBE_ERRORS. If at least one selector is `found`, the overall status follows the findings. If none is found and any selector failed, status is `error` (the failed one may be the real selector, so never report DKIM_NO_SELECTOR_FOUND alone). Only when every selector is `not_found` is DKIM_NO_SELECTOR_FOUND emitted.)
+- fetch_cname may return state ok with an empty target ('' from a '.' CNAME); treat a falsy target as a malformed delegation (selector state `error`, never `found`/`not_found`); test it (M3-03 QA nit).
 New i18n keys: finding.DKIM_*.title/detail/remediation (en + it)
 Status: todo

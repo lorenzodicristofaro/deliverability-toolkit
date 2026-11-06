@@ -12,4 +12,4 @@ Acceptance criteria:
 - Handles IDN (A-label normalisation via the project domain helpers), trailing dot, uppercase, wildcard and exception rules (`*.ck`, `!www.ck`), private-section suffixes decision documented (default: ICANN section only; note effect on `blogspot.com`-style domains), names that are themselves a public suffix (returns none, no crash), single-label names, empty/oversized input.
 - Table-driven tests including malformed input.
 New i18n keys: none
-Status: todo
+Status: done

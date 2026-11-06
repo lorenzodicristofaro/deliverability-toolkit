@@ -16,4 +16,4 @@ Acceptance criteria:
 - SATISFIED BY DELEGATION (GM decision 2026-11-06): "a check whose DNS lookup returns SERVFAIL/timeout yields error" is covered by the per-check tickets (M3-08, M3-10, M3-11, M3-13) and M3-19; QA must not fail M3-02 on it.
 - Tests: ordering of results is by requested ids, timeout, exception, unknown id, bad name table.
 New i18n keys: finding.CHECK_INTERNAL_ERROR.*, finding.CHECK_TIMEOUT.* (en + it; locale files are touched here, so merge before other locale-touching M3 tickets)
-Status: todo
+Status: done

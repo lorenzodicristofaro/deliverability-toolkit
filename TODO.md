@@ -55,14 +55,14 @@ Carried over from M0-07 QA:
 - [ ] Domain page "Authentication" tab, CLI `check` command, REST endpoints
 - Tickets (docs/tickets/):
   - [x] M3-01 Check interface + CheckResult/Finding models
-  - [ ] M3-02 check registry + runner service
-  - [ ] M3-03 TXT/CNAME fetch helper
-  - [ ] M3-04 SPF parser (opus)
+  - [x] M3-02 check registry + runner service
+  - [x] M3-03 TXT/CNAME fetch helper
+  - [x] M3-04 SPF parser (opus)
   - [ ] M3-05 DMARC parser (opus)
   - [ ] M3-06 DKIM key record parser (opus)
   - [ ] M3-07 SPF recursive resolution engine (opus)
   - [ ] M3-08 SPF check: findings, flattening hints (opus)
-  - [ ] M3-09 organizational domain helper (public suffix source unverified)
+  - [x] M3-09 organizational domain helper (public suffix source unverified)
   - [ ] M3-10 DMARC check + org-domain fallback
   - [ ] M3-11 DMARC external report authorization (opus)
   - [x] M3-12 DKIM selector seed + loader (unverified entries flagged)
@@ -148,4 +148,6 @@ Carried over from M0-07 QA:
 - [ ] app/checks/dkim_selectors.py imports private validation helpers from app/dns/knowledge.py and app/dns/types.py; expose a public seed-validation helper (M3-12 QA)
 - [ ] MAINTAINER TO CONFIRM: all 9 DKIM seed selectors (default, dkim, mail, google, s1, s2, k1, selector1, selector2) are unverified with no provider; confirm provenance against official vendor docs before promoting any (M3-12)
 - [ ] Optional: add an explicit `evaluated` field to CheckResult if the runner-only convention proves insufficient (M3-01 QA)
+- [ ] MAINTAINER TO CONFIRM: Public Suffix List data licence (MPL-2.0 per the PyPI publicsuffixlist page only); check github.com/publicsuffix/list LICENSE; recorded as unverified in seeds/public_suffix_source.yaml (M3-09)
+- [ ] SPF parser nits (M3-04 QA): at the 4096-char cut, drop the partial last term so it does not add a second misleading issue; add a comment on Unicode-whitespace term splitting
 - [ ] HTMX under CSP `script-src 'self'` is unverified, maintainer to confirm against https://htmx.org/docs/ (set includeIndicatorStyles=false and allowEval=false when vendored)

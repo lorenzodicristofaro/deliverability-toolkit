@@ -13,4 +13,4 @@ Acceptance criteria:
 - Resource bounds: input over 4096 chars or more than 200 terms is truncated with an issue, no quadratic or backtracking regex (ReDoS: no nested quantifiers; tokenise by split).
 - Table-driven tests with real-world records (example.com placeholders) and at least 30 malformed inputs, plus a fuzz-ish test of random bytes/long input finishing under a time bound.
 New i18n keys: none
-Status: todo
+Status: done
