@@ -17,5 +17,6 @@ Acceptance criteria:
 - For every registered check, a recorded zone that returns SERVFAIL and one that times out both yield `error` through the service, API and CLI.
 - Note: API and CLI each serialize result lists as '[' + ','.join(model_dump_json()) + ']' (app/api/v1/checks.py _json and app/cli/check.py render_json): assert byte-equality service = API = CLI for single, ids-list (request order) and `all` (sorted by id).
 - Note: Check ids: dkim, dmarc, spf; DMARC result includes data.report_destinations (M3-11).
+- For every denied case (anonymous, foreign tenant, unassigned client viewer, check.run=false toggle) on the REST check routes, the DKIM SSE routes and the Authentication tab, assert the fake DNS backend received ZERO queries (M3-17 QA should-fix, extended to all surfaces).
 New i18n keys: none
 Status: todo
