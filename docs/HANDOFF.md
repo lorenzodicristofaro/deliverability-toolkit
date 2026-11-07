@@ -4,7 +4,7 @@ Resume with `/gm`.
 
 ## State
 - M4 is done: M4-01..M4-14 are merged into `dev` with QA APPROVE. The local full suite is green (8974 passed). Report: docs/reports/M4.md.
-- `dev` is promoted to `qa` once CI on the close-out commit is green; see the git log for the merge.
+- `dev` → `qa` done at c2c2733 (CI 42378609022 green incl. PostgreSQL, after a test socket-guard fix 3e6730e).
 - Acceptance condition: the parser is verified against the RFC corpus, and provider samples are still pending (TODO.md M4 block).
 
 ## GM decisions (2026-11-07)
