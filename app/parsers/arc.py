@@ -21,7 +21,9 @@ Header parsing:
   whitespace removed (so folding inside them is tolerated). For the same reason no raw
   header text is kept.
 - Required tags: AS ``i a b cv d s``; AMS ``i a b bh d h s`` (RFC 8617 4.1.2/4.1.3).
-  ``h=`` or ``bh=`` on an AS and ``cv=`` on an AMS are reported as ``unexpected_tag``.
+  ``h=`` on an AS is ``seal_h_tag`` (error) and makes the chain ``cv_fail`` (RFC 8617
+  4.1.3: "MUST result in a cv status of 'fail'"). ``bh=`` on an AS and ``cv=`` on an AMS
+  are ``unexpected_tag`` warnings.
 - ``a=`` and ``cv=`` are compared case-insensitively and reported in lowercase. An ``a=``
   outside :data:`KNOWN_ALGORITHMS` is kept and flagged (``unknown_algorithm``, warning).
 - ``t=`` must be 1-12 digits (RFC 6376 3.5); anything else, or a value datetime cannot
@@ -29,8 +31,9 @@ Header parsing:
 - The AAR is ``i=<n>; <authres-payload>`` (RFC 8617 4.1.1). The payload is parsed with
   :func:`app.parsers.authres.parse_authentication_results`; its issue positions are
   offsets inside the payload, which starts after the first ``;``.
-- ``i=`` must be decimal digits with value 1..:data:`MAX_INSTANCES`; ``0``, ``-1`` or
-  ``abc`` give ``invalid_instance`` and values above 50 ``instance_too_high``. Such a field
+- ``i=`` is ``1*2DIGIT`` with value 1..:data:`MAX_INSTANCES` (RFC 8617 3.9), so ``05`` is
+  accepted; ``0``, ``-1``, ``abc`` or ``001`` give ``invalid_instance`` and values above 50
+  ``instance_too_high``. Such a field
   is kept in :attr:`ArcChain.signatures` / :attr:`ArcChain.results` but is not grouped.
 - A field over :data:`MAX_ARC_HEADER_LENGTH` (``header_too_large``) or with a NUL
   (``nul_byte``) is not parsed at all. Retained scalar tag values over
@@ -42,8 +45,9 @@ contiguous (``instance_gap``), each instance has exactly one AS, AMS and AAR
 (``cv_not_none_at_first``) and ``cv=pass`` above it (``cv_none_after_first``). Status:
 
 - ``none``: no ARC field at all;
-- ``cv_fail``: any ARC-Seal says ``cv=fail`` (the chain was declared failed by a sealer);
-  this wins over ``invalid``;
+- ``cv_fail``: an ARC-Seal with a valid instance says ``cv=fail`` (the chain was declared
+  failed by a sealer) or carries ``h=``; this wins over ``invalid``. A seal whose ``i=`` is
+  invalid is not counted, so it cannot mask an ``invalid`` chain;
 - ``invalid``: any ``error`` issue on a field or on the chain;
 - ``structurally_valid``: otherwise. Still not verified (see above).
 
@@ -106,13 +110,15 @@ MISSING_MEMBER = "missing_member"
 INSTANCE_GAP = "instance_gap"
 UNGROUPED_FIELD = "ungrouped_field"
 CV_FAIL = "cv_fail"
+SEAL_H_TAG = "seal_h_tag"
 CV_NOT_NONE_AT_FIRST = "cv_not_none_at_first"
 CV_NONE_AFTER_FIRST = "cv_none_after_first"
 TOO_MANY_FIELDS = "too_many_fields"
 
 CV_VALUES: frozenset[str] = frozenset({"none", "pass", "fail"})  # RFC 8617 section 4.1.3
-# DKIM signing algorithms (RFC 8301 section 3.1, RFC 8463 section 3). An unlisted value is
-# kept and only flagged; whether a receiver accepts it is not decided here.
+# RFC 8617 takes a= from RFC 6376 section 3.5 (rsa-sha256); RFC 8463 (Standards Track)
+# adds ed25519-sha256 to DKIM. Sources: rfc-editor.org RFC 8617, 6376, 8463; verified
+# 2026-11-07. An unlisted value is kept and only flagged.
 KNOWN_ALGORITHMS: frozenset[str] = frozenset({"rsa-sha256", "ed25519-sha256"})
 
 ArcStatus = Literal["none", "structurally_valid", "invalid", "cv_fail"]
@@ -125,12 +131,16 @@ _NAME_CHARS = _ALPHA | _DIGITS | frozenset("_")
 # RFC 6376 tval: %x21-3A / %x3C-7E (VCHAR without ";").
 _TVAL = frozenset(chr(c) for c in range(0x21, 0x7F)) - {";"}
 
+# AS tags are only i, a, b, d, s, t, cv (RFC 8617 section 4.1.3: h= is NOT allowed and
+# MUST result in cv=fail; there is no bh). AMS is DKIM-Signature syntax with i= as the
+# instance (section 4.1.2); cv is defined only for the AS. Sources: rfc-editor.org
+# RFC 8617; verified 2026-11-07.
 _REQUIRED: dict[SignatureKind, tuple[str, ...]] = {
     "seal": ("i", "a", "b", "cv", "d", "s"),
     "message_signature": ("i", "a", "b", "bh", "d", "h", "s"),
 }
 _UNEXPECTED: dict[SignatureKind, frozenset[str]] = {
-    "seal": frozenset({"h", "bh"}),
+    "seal": frozenset({"bh"}),
     "message_signature": frozenset({"cv"}),
 }
 _PARSED_TAGS = frozenset({"i", "a", "b", "bh", "d", "s", "cv", "t", "h", "c"})
@@ -338,6 +348,9 @@ def _parse_instance(tag: _Tag | None, issues: _Issues) -> int | None:
     if len(significant) > 2 or int(significant) > MAX_INSTANCES:
         issues.add(INSTANCE_TOO_HIGH, tag.position)
         return None
+    if len(text) > 2:  # RFC 8617 section 3.9: position = 1*2DIGIT (e.g. "001")
+        issues.add(INVALID_INSTANCE, tag.position)
+        return None
     return int(significant)
 
 
@@ -407,6 +420,8 @@ def _parse_signature(kind: SignatureKind, value: str, position: int, index: int)
             issues.add(MISSING_CV if name == "cv" else MISSING_TAG, len(value), term=name)
     for name in sorted(_UNEXPECTED[kind] & tags.keys()):
         issues.add(UNEXPECTED_TAG, tags[name].position, "warning", term=name)
+    if kind == "seal" and "h" in tags:
+        issues.add(SEAL_H_TAG, tags["h"].position, term="h")
 
     algorithm: str | None = None
     unknown_algorithm = False
@@ -510,7 +525,10 @@ def _build_chain(fields: Iterable[tuple[str, str, int]]) -> ArcChain:
     cv_fail = False
     for sig in signatures:
         field_error = field_error or any(i.severity == "error" for i in sig.issues)
-        if sig.cv == "fail":
+        # Only seals with a valid instance count, so an ungroupable seal cannot turn an
+        # invalid chain into cv_fail.
+        declares_fail = sig.cv == "fail" or any(i.code == SEAL_H_TAG for i in sig.issues)
+        if sig.kind == "seal" and sig.instance is not None and declares_fail:
             cv_fail = True
         target = seals if sig.kind == "seal" else amss
         label = AS_NAME if sig.kind == "seal" else AMS_NAME

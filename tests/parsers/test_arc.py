@@ -205,6 +205,38 @@ STRUCTURE_CASES = [
         [arc.INSTANCE_GAP, arc.CV_FAIL],
         id="cv_fail_wins",
     ),
+    pytest.param(
+        [(AS_NAME, f"i=1; a=rsa-sha256; cv=none; d=x; s=s; h=from; b={B}"), ams("1"), aar("1")],
+        "cv_fail",
+        [arc.CV_FAIL],
+        id="h_on_seal_fails_chain",
+    ),
+    pytest.param(
+        arc_set(2)
+        + [(AS_NAME, f"i=2; a=rsa-sha256; cv=pass; d=x; s=s; h=from; b={B}")]
+        + arc_set(1),
+        "cv_fail",
+        [arc.DUPLICATE_INSTANCE, arc.CV_FAIL],
+        id="h_on_duplicate_seal",
+    ),
+    pytest.param(
+        chain_of(2) + [(AS_NAME, f"i=abc; a=rsa-sha256; cv=fail; d=x; s=s; b={B}")],
+        "invalid",
+        [arc.UNGROUPED_FIELD],
+        id="ungrouped_cv_fail_ignored",
+    ),
+    pytest.param(
+        arc_set(1) + [(AS_NAME, f"i=51; a=rsa-sha256; cv=pass; d=x; s=s; h=from; b={B}")],
+        "invalid",
+        [arc.UNGROUPED_FIELD],
+        id="ungrouped_h_ignored",
+    ),
+    pytest.param(
+        arc_set(1) + [seal("001", "fail")],
+        "invalid",
+        [arc.UNGROUPED_FIELD],
+        id="three_digit_instance_cv_fail_ignored",
+    ),
 ]
 
 
@@ -238,7 +270,11 @@ def test_duplicate_keeps_first() -> None:
 INSTANCE_CASES = [
     pytest.param("1", 1, [], id="one"),
     pytest.param("50", 50, [], id="fifty"),
-    pytest.param("007", 7, [], id="leading_zeros"),
+    pytest.param("07", 7, [], id="two_digit_leading_zero"),
+    pytest.param("01", 1, [], id="zero_one"),
+    pytest.param("007", None, [arc.INVALID_INSTANCE], id="leading_zeros"),
+    pytest.param("001", None, [arc.INVALID_INSTANCE], id="three_digit_one"),
+    pytest.param("050", None, [arc.INVALID_INSTANCE], id="three_digit_fifty"),
     pytest.param("0", None, [arc.INVALID_INSTANCE], id="zero"),
     pytest.param("00", None, [arc.INVALID_INSTANCE], id="zeros"),
     pytest.param("-1", None, [arc.INVALID_INSTANCE], id="negative"),
@@ -314,8 +350,13 @@ SEAL_TAG_CASES = [
     ),
     pytest.param(
         f"i=1; a=rsa-sha256; cv=none; d=x; s=s; h=from; b={B}",
-        [arc.UNEXPECTED_TAG],
+        [arc.SEAL_H_TAG],
         id="h_on_seal",
+    ),
+    pytest.param(
+        f"i=1; a=rsa-sha256; cv=none; d=x; s=s; bh={BH}; b={B}",
+        [arc.UNEXPECTED_TAG],
+        id="bh_on_seal",
     ),
     pytest.param(
         f"i=1; a=rsa-sha256; cv=none; d=x; d=y; s=s; b={B}", [arc.DUPLICATE_TAG], id="dup_d"
