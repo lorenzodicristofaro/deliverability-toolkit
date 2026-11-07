@@ -61,10 +61,12 @@ MAX_MIME_DEPTH = 10
 MAX_MIME_PARTS = 200
 MAX_BOUNDARY_LEN = 70
 MAX_PARAMETERS = 64
+MAX_SECTION_DIGITS = 3  # RFC 2231 continuation index digits accepted
 
 # Warning codes (stable, lowercase).
 MISSING_BOUNDARY = "missing_boundary"
 INVALID_BOUNDARY = "invalid_boundary"
+INVALID_PARAMETER = "invalid_parameter"
 BOUNDARY_TOO_LONG = "boundary_too_long"
 DUPLICATE_BOUNDARY = "duplicate_boundary"
 NESTED_BOUNDARY_REUSED = "nested_boundary_reused"
@@ -103,6 +105,8 @@ _IDENTITY_ENCODINGS: frozenset[str] = frozenset({"7bit", "8bit", "binary"})
 _SEVEN_BIT_ENCODINGS: frozenset[str] = frozenset({"7bit", "quoted-printable", "base64"})
 _MIME_HEADERS = ("content-type", "content-transfer-encoding", "content-disposition")
 _TOKEN_STOP = frozenset(' \t"(),/:;<=>?@[\\]')
+# RFC 2046 section 5.1.1: bchars := bcharsnospace / " ".
+_BCHARS = frozenset("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz'()+_,-./:=? ")
 _WS = b" \t\r\n"
 _EIGHT_BIT = re.compile(rb"[\x80-\xff]")
 
@@ -235,10 +239,22 @@ def _parse_params(text: str, position: int, warnings: _Warnings) -> _Params:
             continue
         base, star, rest = name.partition("*")
         if star:
-            index_text = rest.rstrip("*")
-            index = int(index_text) if index_text.isascii() and index_text.isdigit() else 0
-            # Extended value (charset'language'text): keep the text part.
+            # RFC 2231: name*, name*N or name*N*. The index is at most MAX_SECTION_DIGITS
+            # ASCII digits, so int() never sees unbounded input.
             extended = rest.endswith("*") or not rest
+            index_text = rest[:-1] if rest.endswith("*") else rest
+            if not rest:
+                index = 0
+            elif (
+                0 < len(index_text) <= MAX_SECTION_DIGITS
+                and index_text.isascii()
+                and index_text.isdigit()
+            ):
+                index = int(index_text)
+            else:
+                warnings.add(INVALID_PARAMETER, position, base)
+                continue
+            # Extended value (charset'language'text): keep the text part.
             if extended and index == 0 and value.count("'") >= 2:
                 value = value.split("'", 2)[2]
             continued.setdefault(base, []).append((index, value))
@@ -465,6 +481,9 @@ def parse_mime(raw: bytes) -> MimeSummary:
                 truncated = True
                 container = False
             else:
+                if not set(boundary_text) <= _BCHARS:
+                    # Printable ASCII outside RFC 2046 bchars: warn, still split (lenient).
+                    warnings.add(INVALID_BOUNDARY, pos)
                 child_boundary = boundary_text.encode("ascii")
                 if child_boundary in task.ancestors:
                     warnings.add(NESTED_BOUNDARY_REUSED, pos)

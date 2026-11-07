@@ -243,6 +243,8 @@ def test_large_base64_part_is_never_decoded(monkeypatch: pytest.MonkeyPatch) -> 
     assert summary.totals.attachment_bytes == len(payload)
 
 
+HUGE_INDEX = "9" * 5000  # past int()'s default 4300-digit limit
+
 # --- malformed input -----------------------------------------------------------------------
 
 
@@ -384,6 +386,46 @@ def test_large_base64_part_is_never_decoded(monkeypatch: pytest.MonkeyPatch) -> 
             ["invalid_boundary"],
             ["multipart/mixed"],
         ),
+        (
+            message("Content-Type: text/plain; name*" + HUGE_INDEX + "=x\r\n", b"x"),
+            ["invalid_parameter"],
+            ["text/plain"],
+        ),
+        (
+            multipart(
+                "mixed",
+                "b",
+                [
+                    b"Content-Disposition: attachment; filename*"
+                    + HUGE_INDEX.encode()
+                    + b"*=x\r\n\r\nx"
+                ],
+            ),
+            ["invalid_parameter"],
+            ["multipart/mixed", "text/plain"],
+        ),
+        (
+            message("Content-Type: text/plain; name*1000=x\r\n", b"x"),
+            ["invalid_parameter"],
+            ["text/plain"],
+        ),
+        (
+            message("Content-Type: text/plain; name*ab=x\r\n", b"x"),
+            ["invalid_parameter"],
+            ["text/plain"],
+        ),
+        (
+            message("Content-Type: text/plain; name**=x\r\n", b"x"),
+            ["invalid_parameter"],
+            ["text/plain"],
+        ),
+        (
+            message(
+                'Content-Type: multipart/mixed; boundary="a{b}"\r\n', b"--a{b}\r\n\r\nx\r\n--a{b}--"
+            ),
+            ["invalid_boundary"],
+            ["multipart/mixed", "text/plain"],
+        ),
     ],
     ids=[
         "missing_boundary_param",
@@ -411,6 +453,12 @@ def test_large_base64_part_is_never_decoded(monkeypatch: pytest.MonkeyPatch) -> 
         "part_headers_with_nul",
         "boundary_lookalikes",
         "non_ascii_boundary",
+        "rfc2231_huge_index_top_level",
+        "rfc2231_huge_index_nested",
+        "rfc2231_index_four_digits",
+        "rfc2231_index_not_numeric",
+        "rfc2231_index_double_star",
+        "boundary_outside_bchars",
     ],
 )
 def test_malformed(raw: bytes, expected_codes: list[str], expected_types: list[str]) -> None:
