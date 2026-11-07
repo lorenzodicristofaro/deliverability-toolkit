@@ -93,15 +93,13 @@ class ContentRule(Base):
             sqlite_where=text("scope = 'global' AND seed_key IS NOT NULL"),
             postgresql_where=text("scope = 'global' AND seed_key IS NOT NULL"),
         ),
-        Index(
-            "uq_content_rules_tenant_seed_key",
-            "tenant_id",
-            "seed_key",
-            unique=True,
-            sqlite_where=text("scope = 'tenant' AND seed_key IS NOT NULL"),
-            postgresql_where=text("scope = 'tenant' AND seed_key IS NOT NULL"),
-        ),
-        Index("ix_content_rules_tenant_id", "tenant_id"),
+        # Plain unique index (migration 0007): global rows have tenant_id NULL and rules without
+        # a seed_key have seed_key NULL; NULLs never collide (SQLite and PostgreSQL default). It
+        # also serves tenant_id lookups. Not partial on purpose: SQLite 3.46/3.53 raise "internal
+        # query planner error" for the tenant OR-filter plus seed_key with bound parameters when
+        # a partial (tenant_id, seed_key) WHERE scope = 'tenant' index sits next to a plain
+        # tenant_id index.
+        Index("uq_content_rules_tenant_seed_key", "tenant_id", "seed_key", unique=True),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
