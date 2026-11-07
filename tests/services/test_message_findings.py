@@ -9,15 +9,25 @@ import pytest
 
 from app.checks.models import CODE_RE
 from app.core import i18n
-from app.parsers.message import MAX_HEADER_COUNT, MAX_RAW_BYTES
+from app.parsers.arc import parse_arc_chain
+from app.parsers.message import (
+    MAX_HEADER_COUNT,
+    MAX_RAW_BYTES,
+    MessageParseError,
+    parse_header_block,
+)
+from app.parsers.mime import parse_mime
+from app.parsers.received import parse_received_chain
 from app.services import message_findings as mf
+from app.services.message_alignment import analyze_alignment
 from app.services.message_findings import (
     CODES,
     HOP_DELAY_HIGH_SECONDS,
     MAX_EXCERPT,
     MessageFindings,
-    analyze_message,
+    build_message_findings,
     excerpt,
+    rejected_input_findings,
 )
 
 LOCALES = Path(__file__).resolve().parents[2] / "locales"
@@ -46,6 +56,22 @@ BASE: dict[str, str] = {
     "MIME-Version": "1.0",
     "Content-Type": "text/plain",
 }
+
+
+def analyze_message(raw: bytes) -> MessageFindings:
+    """Test-only wiring of the parsers (M4-10 owns the real orchestration)."""
+    try:
+        block = parse_header_block(raw)
+        mime = parse_mime(raw)
+    except MessageParseError as exc:
+        return rejected_input_findings(exc.code)
+    return build_message_findings(
+        block,
+        received=parse_received_chain(block),
+        mime=mime,
+        arc=parse_arc_chain(block),
+        alignment=analyze_alignment(block),
+    )
 
 
 def msg(drop: tuple[str, ...] = (), add: tuple[str, ...] = (), body: str = "hello") -> bytes:
@@ -203,6 +229,8 @@ POSITIVE = [
     ),
     ("MSG_RETURN_PATH_MISSING", ("Return-Path",), (), "x"),
     ("MSG_REPLY_TO_DIFFERS", (), ("Reply-To: help@other.org",), "x"),
+    ("MSG_REPLY_TO_UNUSABLE", (), ("Reply-To: not an address",), "x"),
+    ("MSG_REPLY_TO_UNUSABLE", (), ("Reply-To: nobody@",), "x"),
     ("MSG_LIST_UNSUBSCRIBE_MISSING", ("List-Unsubscribe", "List-Unsubscribe-Post"), (), "x"),
     ("MSG_LIST_UNSUBSCRIBE_NO_ONECLICK", ("List-Unsubscribe-Post",), (), "x"),
     (
@@ -275,6 +303,7 @@ NEGATIVE = [
     ("MSG_ARC_CV_FAIL", (), ()),
     ("MSG_REPLY_TO_DIFFERS", (), ("Reply-To: help@mail.example.com",)),
     ("MSG_REPLY_TO_DIFFERS", (), ("Reply-To: help@EXAMPLE.com",)),
+    ("MSG_REPLY_TO_UNUSABLE", (), ("Reply-To: help@example.com",)),
     ("MSG_LIST_UNSUBSCRIBE_NO_ONECLICK", ("List-Unsubscribe", "List-Unsubscribe-Post"), ()),
     (
         "MSG_LIST_UNSUBSCRIBE_NO_ONECLICK",
@@ -322,7 +351,6 @@ MALFORMED = [
     (("Authentication-Results",), ("Authentication-Results: (unterminated",), "authres", None),
     (("From",), ("From: <<<>>>",), "alignment", None),
     (("From",), ("From: nobody",), "alignment", None),
-    ((), ("Reply-To: not an address",), "reply_to", None),
 ]
 
 
@@ -436,7 +464,7 @@ def test_spf_severity_and_result_param() -> None:
         ),
         "MSG_SPF_NOT_PASS",
     )
-    assert (none.severity, none.params["result"]) == ("low", "not_stated")
+    assert none.severity == "low" and none.detail_key.endswith("detail_not_stated")
 
 
 def test_authserv_mismatch_lists_ids_escaped() -> None:
@@ -450,7 +478,7 @@ def test_authserv_mismatch_lists_ids_escaped() -> None:
     )
     f = _find(r, "MSG_AUTHRES_AUTHSERV_MISMATCH")
     assert f.params["count"] == 2
-    assert "<" not in f.params["ids"] and "&lt;b&gt;" in f.params["ids"]
+    assert "<b>x</b>.example" in f.params["ids"]  # raw: the output layer escapes
 
 
 def test_untrusted_authres_does_not_make_message_pass() -> None:
@@ -517,7 +545,8 @@ def test_findings_build_through_finding_and_have_matching_keys() -> None:
     [
         ("plain", "plain"),
         ("a\x00b\x1b[31mc\r\nd\te", "ab[31mcde"),
-        ("<script>alert('x')</script>", "&lt;script&gt;alert(&#x27;x&#x27;)&lt;/script&gt;"),
+        ("a&b", "a&b"),
+        ("<script>alert('x')</script>", "<script>alert('x')</script>"),
         ("a‮b​c d", "abcd"),
         ("", ""),
         (None, "None"),
@@ -529,13 +558,12 @@ def test_excerpt_cases(text: object, expected: str) -> None:
 
 
 @pytest.mark.parametrize("filler", ["a", "<", "&", "\x00a", "é", "\"'"])
-def test_excerpt_is_bounded_and_never_cuts_an_escape(filler: str) -> None:
+def test_excerpt_is_bounded_and_unescaped(filler: str) -> None:
     out = excerpt(filler * 1000)
     assert len(out) <= MAX_EXCERPT
     assert not any(ord(c) < 32 for c in out)
     if filler == "<":
-        assert out == "&lt;" * (MAX_EXCERPT // 4)
-        assert out.count("&") == out.count(";")
+        assert out == "<" * MAX_EXCERPT
 
 
 def test_long_header_derived_params_are_bounded() -> None:
@@ -553,7 +581,7 @@ def test_long_header_derived_params_are_bounded() -> None:
 
 
 def test_codes_are_valid_unique_and_prefixed() -> None:
-    assert len(set(CODES)) == len(CODES) == 31
+    assert len(set(CODES)) == len(CODES) == 32
     assert all(CODE_RE.fullmatch(c) and c.startswith("MSG_") for c in CODES)
 
 
@@ -615,3 +643,31 @@ def test_placeholders_are_supplied_by_the_emitted_params(code: str) -> None:
             if f.code == code:
                 seen |= set(f.params)
     assert wanted <= seen, (code, wanted - seen)
+
+
+def test_unusable_reply_to_is_info_and_does_not_make_status_error() -> None:
+    r = run((), ("Reply-To: not an address",))
+    assert "reply_to" not in r.unevaluated and r.evaluated
+    f = _find(r, "MSG_REPLY_TO_UNUSABLE")
+    assert f.severity == "info" and r.status == "info"
+
+
+@pytest.mark.parametrize("variant", ["spf", "dkim", "dmarc"])
+def test_not_stated_uses_its_own_translated_detail(variant: str) -> None:
+    code = f"MSG_{variant.upper()}_NOT_PASS"
+    key = f"finding.{code}.detail_not_stated"
+    assert EN[key] and IT[key] and EN[key] != IT[key]
+    assert i18n.placeholders(EN[key]) == i18n.placeholders(IT[key]) == set()
+    r = run(("Authentication-Results",), ("Authentication-Results: mx.example.net; auth=pass",))
+    f = _find(r, code)
+    assert f.detail_key == key and "result" not in f.params
+
+
+@pytest.mark.parametrize("code", CODES)
+def test_no_english_tokens_are_substituted_into_text(code: str) -> None:
+    banned = {"limits", "computed", "issues"}
+    for part in ("title", "detail", "remediation"):
+        assert not (i18n.placeholders(EN[f"finding.{code}.{part}"]) & banned)
+    assert "not_stated" not in "".join(
+        f"{EN[k]}{IT[k]}" for k in EN if k.startswith(f"finding.{code}.")
+    )

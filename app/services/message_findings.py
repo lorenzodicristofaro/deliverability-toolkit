@@ -19,7 +19,8 @@ Principles:
 - The Received ``for`` address is never read or reported (the parser only exposes
   ``has_for``).
 - Header-derived text in params is limited to a bounded excerpt: control and format
-  characters removed, HTML-escaped, at most :data:`MAX_EXCERPT` characters
+  characters removed (NOT escaped: the template layer, e.g. Jinja autoescape, does that),
+  at most :data:`MAX_EXCERPT` characters
   (:func:`excerpt`). Raw header values are never embedded.
 
 Severity per code (``status`` follows ``derive_status``: high/critical fail, medium/low
@@ -55,6 +56,7 @@ MSG_ARC_INVALID                          low      ARC chain structurally invalid
 MSG_ARC_CV_FAIL                          medium   an ARC seal says cv=fail
 MSG_RETURN_PATH_MISSING                  info     no Return-Path
 MSG_REPLY_TO_DIFFERS                     info     Reply-To organizational domain differs
+MSG_REPLY_TO_UNUSABLE                    info     Reply-To has no usable address
 MSG_LIST_UNSUBSCRIBE_MISSING             info     no List-Unsubscribe
 MSG_LIST_UNSUBSCRIBE_NO_ONECLICK         info     List-Unsubscribe without RFC 8058 post
 MSG_ENCODED_HEADER_BROKEN                low      undecodable RFC 2047 encoded-word
@@ -69,13 +71,12 @@ From is reported as ``MSG_MULTIPLE_FROM`` only (one finding per problem).
 Error-class conditions (``unevaluated``): ``date`` (invalid, or without a zone), ``received``
 (any unparsed hop), ``authres`` (an Authentication-Results field that could not be parsed),
 ``alignment`` (alignment not computable although Authentication-Results exist),
-``reply_to`` (Reply-To present but with no usable address) and ``parser`` (input rejected
+and ``parser`` (input rejected
 or capped).
 """
 
 from __future__ import annotations
 
-import html
 import unicodedata
 from dataclasses import dataclass
 from datetime import timedelta
@@ -85,7 +86,7 @@ from app.checks.models import Finding, Status, derive_status, finding
 from app.core.domain_names import InvalidDomainName, to_ascii_domain
 from app.core.org_domain import organizational_domain
 from app.parsers import received as received_mod
-from app.parsers.arc import ArcChain, parse_arc_chain
+from app.parsers.arc import ArcChain
 from app.parsers.authres import (
     AuthResHeader,
     AuthResParseError,
@@ -97,12 +98,10 @@ from app.parsers.message import (
     ENCODED_WORD_UNKNOWN_CHARSET,
     TOO_MANY_WARNINGS,
     HeaderBlock,
-    MessageParseError,
-    parse_header_block,
 )
-from app.parsers.mime import MimeSummary, parse_mime
-from app.parsers.received import ReceivedChain, parse_received_chain, parse_received_values
-from app.services.message_alignment import AlignmentReport, analyze_alignment
+from app.parsers.mime import MimeSummary
+from app.parsers.received import ReceivedChain, parse_received_values
+from app.services.message_alignment import AlignmentReport
 
 MAX_EXCERPT = 200
 MAX_DATE_SKEW = timedelta(hours=24)
@@ -141,6 +140,7 @@ CODES: tuple[str, ...] = (
     "MSG_ARC_CV_FAIL",
     "MSG_RETURN_PATH_MISSING",
     "MSG_REPLY_TO_DIFFERS",
+    "MSG_REPLY_TO_UNUSABLE",
     "MSG_LIST_UNSUBSCRIBE_MISSING",
     "MSG_LIST_UNSUBSCRIBE_NO_ONECLICK",
     "MSG_ENCODED_HEADER_BROKEN",
@@ -154,8 +154,9 @@ def excerpt(text: object) -> str:
     """Bounded, display-safe excerpt of untrusted text.
 
     Control, format (bidi, zero width), surrogate, private-use and line/paragraph separator
-    characters are removed, the rest is HTML-escaped, and the result is at most
-    :data:`MAX_EXCERPT` characters (never cutting an escape sequence).
+    characters are removed and the result is cut at :data:`MAX_EXCERPT` characters. The text is
+    NOT escaped: output layers (Jinja autoescape, JSON) do that, and escaping here would
+    double-escape it.
     """
     out: list[str] = []
     size = 0
@@ -163,11 +164,10 @@ def excerpt(text: object) -> str:
         cat = unicodedata.category(ch)
         if cat[0] == "C" or cat in ("Zl", "Zp"):
             continue
-        piece = html.escape(ch, quote=True)
-        if size + len(piece) > MAX_EXCERPT:
+        if size >= MAX_EXCERPT:
             break
-        out.append(piece)
-        size += len(piece)
+        out.append(ch)
+        size += 1
     return "".join(out)
 
 
@@ -192,8 +192,17 @@ class _Acc:
         self.items: list[Finding] = []
         self.unevaluated: list[str] = []
 
-    def add(self, code: str, severity: str, params: dict[str, object] | None = None) -> None:
-        self.items.append(finding(code, severity, params))  # type: ignore[arg-type]
+    def add(
+        self,
+        code: str,
+        severity: str,
+        params: dict[str, object] | None = None,
+        detail_variant: str | None = None,
+    ) -> None:
+        f = finding(code, severity, params)  # type: ignore[arg-type]
+        if detail_variant:
+            f = f.model_copy(update={"detail_key": f"finding.{code}.detail_{detail_variant}"})
+        self.items.append(f)
 
     def skip(self, area: str) -> None:
         if area not in self.unevaluated:
@@ -348,21 +357,24 @@ def _auth_part(alignment: AlignmentReport, headers: tuple[AuthResHeader, ...], a
         acc.add(
             "MSG_SPF_NOT_PASS",
             _not_pass_severity(spf[:1]),
-            {"result": excerpt(spf[0]) if spf else "not_stated"},
+            {"result": excerpt(spf[0])} if spf else None,
+            None if spf else "not_stated",
         )
     dkim = _topmost_results(headers, "dkim")
     if "pass" not in dkim:
         acc.add(
             "MSG_DKIM_NOT_PASS",
             _not_pass_severity(dkim),
-            {"result": _joined(list(dict.fromkeys(dkim))) if dkim else "not_stated"},
+            {"result": _joined(list(dict.fromkeys(dkim)))} if dkim else None,
+            None if dkim else "not_stated",
         )
     if alignment.stated_dmarc != "pass":
         stated = alignment.stated_dmarc
         acc.add(
             "MSG_DMARC_NOT_PASS",
             _not_pass_severity([stated] if stated else []),
-            {"result": excerpt(stated) if stated else "not_stated"},
+            {"result": excerpt(stated)} if stated else None,
+            None if stated else "not_stated",
         )
 
 
@@ -442,7 +454,7 @@ def _other_part(block: HeaderBlock, alignment: AlignmentReport, acc: _Acc) -> No
             except InvalidDomainName:
                 continue
         if theirs is None:
-            acc.skip("reply_to")
+            acc.add("MSG_REPLY_TO_UNUSABLE", "info")
         elif mine and not theirs <= mine:
             other = sorted(theirs - mine)
             acc.add(
@@ -521,24 +533,9 @@ def build_message_findings(
     return acc.result()
 
 
-def analyze_message(raw: bytes) -> MessageFindings:
-    """Parse ``raw`` with the public parsers and return its findings.
-
-    Input the parsers reject (too large, too many headers, NUL byte) yields a single
-    ``MSG_PARSER_LIMIT`` finding and ``unevaluated=("parser",)``, so ``status`` is ``error``.
-    """
-    try:
-        block = parse_header_block(raw)
-        mime = parse_mime(raw)
-    except MessageParseError as exc:
-        acc = _Acc()
-        acc.add("MSG_PARSER_LIMIT", "medium", {"limits": exc.code})
-        acc.skip("parser")
-        return acc.result()
-    return build_message_findings(
-        block,
-        received=parse_received_chain(block),
-        mime=mime,
-        arc=parse_arc_chain(block),
-        alignment=analyze_alignment(block),
-    )
+def rejected_input_findings(code: str) -> MessageFindings:
+    """Result for input a parser rejected (``MessageParseError.code``); status is error."""
+    acc = _Acc()
+    acc.add("MSG_PARSER_LIMIT", "medium", {"limits": code})
+    acc.skip("parser")
+    return acc.result()
