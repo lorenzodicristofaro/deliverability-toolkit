@@ -22,7 +22,8 @@ a public suffix (no organizational domain) only an exact match counts.
 
 `computed_dmarc` is `pass` when any pair is `aligned`, `fail` when no pair is aligned, none
 is `unknown` and some pair has a stated result, else `not_evaluated`. `dmarc_mismatch` is set
-when the stated dmarc result (pass or fail) disagrees with the computed one; M4-09 turns it into a finding.
+when the stated dmarc result (pass or fail) disagrees with the computed one; M4-09 turns it
+into a finding.
 """
 
 from __future__ import annotations
