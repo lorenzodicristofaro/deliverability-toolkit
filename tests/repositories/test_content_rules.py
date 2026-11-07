@@ -49,6 +49,7 @@ def _rule(**overrides: Any) -> dict[str, Any]:
         "weight": 5,
         "category": "punctuation",
         "severity": "low",
+        "title": "Shouting punctuation",
     }
     values.update(overrides)
     return values
@@ -140,7 +141,7 @@ def test_flags_mask_matches_safe_regex_and_migration() -> None:
 # --- constraints (raw SQL: the database enforces them, not only the repository) -----------------
 
 COLS = "(scope, tenant_id, name, kind, pattern, flags, weight, category, language, severity, "
-COLS += "status, seed_key) VALUES "
+COLS += "status, seed_key, title, advice) VALUES "
 INS = "INSERT INTO content_rules " + COLS
 
 
@@ -157,9 +158,11 @@ def _row(
     severity: str = "'low'",
     status: str = "NULL",
     seed_key: str = "NULL",
+    title: str = "'t'",
+    advice: str = "NULL",
 ) -> str:
     vals = [scope, tenant, name, kind, pattern, flags, weight, category, language, severity]
-    return INS + "(" + ", ".join([*vals, status, seed_key]) + ")"
+    return INS + "(" + ", ".join([*vals, status, seed_key, title, advice]) + ")"
 
 
 VIOLATIONS = [
@@ -183,6 +186,11 @@ VIOLATIONS = [
     ("pattern too long", _row(pattern=f"'{'x' * 1025}'")),
     ("pattern too long multibyte", _row(pattern=f"'{'é' * 1025}'")),
     ("null pattern", _row(pattern="NULL")),
+    ("no seed_key and no title", _row(title="NULL")),
+    ("empty title", _row(title="''")),
+    ("title too long", _row(title=f"'{'t' * 201}'")),
+    ("empty advice", _row(advice="''")),
+    ("advice too long", _row(advice=f"'{'a' * 2001}'")),
     ("empty category", _row(category="''")),
     ("category too long", _row(category=f"'{'c' * 65}'")),
     ("language not lowercase", _row(language="'EN'")),
@@ -200,6 +208,11 @@ ALLOWED = [
     ("pattern at max length multibyte", _row(pattern=f"'{'é' * 1024}'")),
     ("all allowed flags", _row(flags=str(ALLOWED_FLAGS))),
     ("weight bounds", _row(weight="100")),
+    (
+        "seeded row without title",
+        _row(scope="'global'", tenant="NULL", seed_key="'s'", title="NULL"),
+    ),
+    ("advice at max length", _row(advice=f"'{'a' * 2000}'")),
     ("verified seed row", _row(scope="'global'", tenant="NULL", status="'verified'")),
 ]
 
@@ -332,7 +345,7 @@ def test_scope_and_tenant_cannot_be_supplied(world: World, values: dict[str, Any
 
 
 @pytest.mark.parametrize(
-    "field", ["status", "verified_on", "source_ref", "locally_modified", "id", "created_by"]
+    "field", ["status", "verified_on", "sources", "locally_modified", "id", "created_by"]
 )
 def test_tenant_path_cannot_set_seed_or_owned_fields(world: World, field: str) -> None:
     with pytest.raises(ContentRuleInvalid) as err:
@@ -359,12 +372,18 @@ def test_global_create_and_update_seed_fields(world: World) -> None:
             seed_key="g.two",
             status="unverified",
             verified_on=dt.date(2026, 11, 7),
-            source_ref="https://example.org/doc",
+            sources=["https://example.org/doc", "http://example.net/a?b=1"],
+            title=None,
             enabled=False,
         ),
         actor=world.user,
     )
     assert (rec.scope, rec.tenant_id, rec.created_by) == ("global", None, world.user)
+    assert rec.sources == ("https://example.org/doc", "http://example.net/a?b=1")
+    assert rec.title is None
+    world.session.commit()
+    again = g.get(rec.id)
+    assert again is not None and again.sources == rec.sources
     updated = g.update(rec.id, {"enabled": True, "locally_modified": True})
     assert updated is not None and updated.enabled and updated.locally_modified
     assert g.delete(rec.id) is True and g.get(rec.id) is None
@@ -467,6 +486,18 @@ INVALID = [
     ("seed_key", "Bad Key", "invalid_format"),
     ("seed_key", "s" * 129, "too_long"),
     ("seed_key", "k\x00", "nul"),
+    ("title", "", "empty"),
+    ("title", "t" * 201, "too_long"),
+    ("title", "t\x00", "nul"),
+    ("title", "t\udc00", "surrogate"),
+    ("title", "two\nlines", "control_char"),
+    ("title", 5, "not_a_string"),
+    ("advice", "", "empty"),
+    ("advice", "  \n ", "whitespace"),
+    ("advice", "a" * 2001, "too_long"),
+    ("advice", "a\x00", "nul"),
+    ("advice", "a\ud800", "surrogate"),
+    ("advice", "bell\x07", "control_char"),
 ]
 
 
@@ -491,9 +522,23 @@ GLOBAL_INVALID = [
     ("status", "maybe", "invalid_choice"),
     ("verified_on", "2026-11-07", "not_a_date"),
     ("verified_on", dt.datetime(2026, 11, 7, tzinfo=dt.UTC), "not_a_date"),
-    ("source_ref", "x" * 2049, "too_long"),
-    ("source_ref", "https://a\x00", "nul"),
-    ("source_ref", "line\nbreak", "control_char"),
+    ("sources", "https://example.org", "not_a_list"),
+    ("sources", {"u": "https://example.org"}, "not_a_list"),
+    ("sources", [], "empty"),
+    ("sources", [f"https://example.org/{i}" for i in range(11)], "too_many"),
+    ("sources", ["https://example.org/" + "x" * 2030], "too_long"),
+    ("sources", ["https://a\x00"], "nul"),
+    ("sources", ["https://a\ud800"], "surrogate"),
+    ("sources", ["https://a/\nb"], "control_char"),
+    ("sources", ["https://a/ b"], "invalid_url"),
+    ("sources", ["ftp://example.org"], "invalid_url"),
+    ("sources", ["javascript:alert(1)"], "invalid_url"),
+    ("sources", ["example.org/doc"], "invalid_url"),
+    ("sources", ["https://"], "invalid_url"),
+    ("sources", ["http://[::1"], "invalid_url"),
+    ("sources", [1], "not_a_string"),
+    ("sources", [""], "empty"),
+    ("sources", ["https://a.example", "https://a.example"], "duplicate"),
     ("locally_modified", "yes", "not_a_bool"),
 ]
 
@@ -526,6 +571,8 @@ VALID = [
     ("pattern", "é" * 1024, "é" * 1024),
     ("name", "Règle «ok»", "Règle «ok»"),
     ("category", "links.mismatch_1", "links.mismatch_1"),
+    ("advice", "Line one.\n\tLine two.", "Line one.\n\tLine two."),
+    ("title", "Règle «ok»", "Règle «ok»"),
 ]
 
 
@@ -556,3 +603,23 @@ def test_update_revalidates_pattern_with_new_flags(world: World) -> None:
 def test_non_mapping_values_rejected(world: World) -> None:
     with pytest.raises(TypeError):
         world.repo("a").create([("name", "x")])  # type: ignore[arg-type]
+
+
+def test_title_required_without_seed_key(world: World) -> None:
+    repo = world.repo("a")
+    with pytest.raises(ContentRuleInvalid) as err:
+        repo.create(_rule(title=None))
+    assert (err.value.field, err.value.reason) == ("title", "required")
+    rec = repo.create(_rule(title=None, seed_key="g.two"))  # tenant override of a seeded rule
+    assert rec.title is None
+    with pytest.raises(ContentRuleInvalid) as err:
+        repo.update(rec.id, {"seed_key": None})  # would leave a rule with no text
+    assert err.value.reason == "required"
+    with pytest.raises(ContentRuleInvalid):
+        repo.update(world.rules["a1"], {"seed_key": None, "title": None})
+    assert repo.update(rec.id, {"seed_key": None, "title": "Own text"}) is not None
+
+
+def test_global_seeded_row_needs_no_title(world: World) -> None:
+    rec = world.global_repo().create(_rule(title=None, seed_key="g.three"), actor=None)
+    assert rec.title is None and rec.advice is None and rec.sources is None

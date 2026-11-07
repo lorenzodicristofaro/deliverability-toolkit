@@ -3,7 +3,9 @@
 CHECK constraints enforce the scope/tenant pairing, enumerations, weight and flag bounds and
 every string length (`length()` counts characters on SQLite and PostgreSQL alike). seed_key is
 unique among global rows and per tenant among tenant rows (partial unique indexes on both
-backends). The flags mask 346 is `app.core.safe_regex.ALLOWED_FLAGS` (pinned by a test).
+backends). A rule without seed_key needs a title (seeded rules take their text from i18n keys
+derived from seed_key). `sources` is a JSON list of URLs, validated by the repository. The flags
+mask 346 is `app.core.safe_regex.ALLOWED_FLAGS` (pinned by a test).
 
 Revision ID: 0005
 Revises: 0004
@@ -39,7 +41,9 @@ def upgrade() -> None:
         sa.Column("language", sa.String(length=16), nullable=True),
         sa.Column("enabled", sa.Boolean(), server_default=sa.text("true"), nullable=False),
         sa.Column("severity", sa.String(length=16), nullable=False),
-        sa.Column("source_ref", sa.String(length=2048), nullable=True),
+        sa.Column("title", sa.String(length=200), nullable=True),
+        sa.Column("advice", sa.String(length=2000), nullable=True),
+        sa.Column("sources", sa.JSON(), nullable=True),
         sa.Column("verified_on", sa.Date(), nullable=True),
         sa.Column("status", sa.String(length=16), nullable=True),
         sa.Column("seed_key", sa.String(length=128), nullable=True),
@@ -102,8 +106,16 @@ def upgrade() -> None:
             name=op.f("ck_content_rules_seed_key_length"),
         ),
         sa.CheckConstraint(
-            "source_ref IS NULL OR (length(source_ref) BETWEEN 1 AND 2048)",
-            name=op.f("ck_content_rules_source_ref_length"),
+            "title IS NULL OR (length(title) BETWEEN 1 AND 200)",
+            name=op.f("ck_content_rules_title_length"),
+        ),
+        sa.CheckConstraint(
+            "advice IS NULL OR (length(advice) BETWEEN 1 AND 2000)",
+            name=op.f("ck_content_rules_advice_length"),
+        ),
+        sa.CheckConstraint(
+            "seed_key IS NOT NULL OR title IS NOT NULL",
+            name=op.f("ck_content_rules_title_required"),
         ),
         sa.ForeignKeyConstraint(
             ["tenant_id"],

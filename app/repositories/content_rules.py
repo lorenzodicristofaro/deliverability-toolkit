@@ -30,6 +30,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any, Final
+from urllib.parse import urlsplit
 
 from sqlalchemy import ColumnElement, Select, and_, event, func, or_, select
 from sqlalchemy import inspect as sa_inspect
@@ -41,11 +42,14 @@ from app.core.safe_regex import ALLOWED_FLAGS, MAX_PATTERN_LENGTH, RegexRuleErro
 from app.core.tenancy import TenantContext
 from app.models.content_rule import (
     KINDS,
+    MAX_ADVICE_LENGTH,
     MAX_CATEGORY_LENGTH,
     MAX_LANGUAGE_LENGTH,
     MAX_NAME_LENGTH,
     MAX_SEED_KEY_LENGTH,
-    MAX_SOURCE_REF_LENGTH,
+    MAX_SOURCE_URL_LENGTH,
+    MAX_SOURCES,
+    MAX_TITLE_LENGTH,
     MAX_WEIGHT,
     MIN_WEIGHT,
     SEVERITIES,
@@ -66,9 +70,21 @@ _LANGUAGE = re.compile(r"[a-z]{2,3}(?:-[a-z0-9]{2,8})*")
 
 # Fields a caller may set. scope, tenant_id, id, created_*, updated_at are repository-owned.
 _COMMON_FIELDS: Final = frozenset(
-    {"name", "kind", "pattern", "flags", "weight", "category", "language", "enabled", "severity"}
+    {
+        "name",
+        "kind",
+        "pattern",
+        "flags",
+        "weight",
+        "category",
+        "language",
+        "enabled",
+        "severity",
+        "title",
+        "advice",
+    }
 )
-_SEED_FIELDS: Final = frozenset({"source_ref", "verified_on", "status", "seed_key"})
+_SEED_FIELDS: Final = frozenset({"sources", "verified_on", "status", "seed_key"})
 TENANT_FIELDS: Final = _COMMON_FIELDS | {"seed_key"}
 GLOBAL_FIELDS: Final = _COMMON_FIELDS | _SEED_FIELDS | {"locally_modified"}
 _REQUIRED: Final = frozenset({"name", "kind", "pattern", "weight", "category", "severity"})
@@ -102,7 +118,9 @@ class ContentRuleRecord:
     language: str | None
     enabled: bool
     severity: str
-    source_ref: str | None
+    title: str | None
+    advice: str | None
+    sources: tuple[str, ...] | None
     verified_on: date | None
     status: str | None
     seed_key: str | None
@@ -126,7 +144,9 @@ class ContentRuleRecord:
             language=row.language,
             enabled=row.enabled,
             severity=row.severity,
-            source_ref=row.source_ref,
+            title=row.title,
+            advice=row.advice,
+            sources=None if row.sources is None else tuple(row.sources),
             verified_on=row.verified_on,
             status=row.status,
             seed_key=row.seed_key,
@@ -161,6 +181,44 @@ def _label(field: str, value: object, maximum: int) -> str:
         raise ContentRuleInvalid(field, "control_char")
     if result.strip() != result or not result.strip():
         raise ContentRuleInvalid(field, "whitespace")
+    return result
+
+
+def _paragraphs(field: str, value: object, maximum: int) -> str:
+    """Multi-line display text: newlines and tabs allowed, other control characters not."""
+    result = _text(field, value, maximum)
+    if any(unicodedata.category(c) == "Cc" and c not in "\n\t" for c in result):
+        raise ContentRuleInvalid(field, "control_char")
+    if not result.strip():
+        raise ContentRuleInvalid(field, "whitespace")
+    return result
+
+
+def _sources(value: object) -> list[str] | None:
+    """None, or 1..MAX_SOURCES distinct absolute http(s) URLs without whitespace."""
+    if value is None:
+        return None
+    if not isinstance(value, list | tuple):
+        raise ContentRuleInvalid("sources", "not_a_list")
+    if not value:
+        raise ContentRuleInvalid("sources", "empty")
+    if len(value) > MAX_SOURCES:
+        raise ContentRuleInvalid("sources", "too_many")
+    result: list[str] = []
+    for item in value:
+        url = _label("sources", item, MAX_SOURCE_URL_LENGTH)
+        if any(c.isspace() for c in url):
+            raise ContentRuleInvalid("sources", "invalid_url")
+        try:
+            parts = urlsplit(url)
+            host = parts.hostname
+        except ValueError:
+            raise ContentRuleInvalid("sources", "invalid_url") from None
+        if parts.scheme not in ("http", "https") or not host:
+            raise ContentRuleInvalid("sources", "invalid_url")
+        if url in result:
+            raise ContentRuleInvalid("sources", "duplicate")
+        result.append(url)
     return result
 
 
@@ -233,8 +291,12 @@ def _clean(field: str, value: object) -> object:
             return _choice(field, value, SEVERITIES)
         case "seed_key":
             return None if value is None else _slug(field, value, MAX_SEED_KEY_LENGTH)
-        case "source_ref":
-            return None if value is None else _label(field, value, MAX_SOURCE_REF_LENGTH)
+        case "title":
+            return None if value is None else _label(field, value, MAX_TITLE_LENGTH)
+        case "advice":
+            return None if value is None else _paragraphs(field, value, MAX_ADVICE_LENGTH)
+        case "sources":
+            return _sources(value)
         case "status":
             return None if value is None else _choice(field, value, STATUSES)
         case "verified_on":
@@ -266,6 +328,12 @@ def _check_pattern(kind: str, pattern: str, flags: int) -> None:
         compile_checked(pattern, flags)
     except RegexRuleError as exc:
         raise ContentRuleInvalid("pattern", exc.reason.value) from None
+
+
+def _check_title(seed_key: str | None, title: str | None) -> None:
+    """Rules without seed_key carry user-entered text: a title is required (DB CHECK too)."""
+    if seed_key is None and title is None:
+        raise ContentRuleInvalid("title", "required")
 
 
 def _check_page(limit: object, offset: object) -> None:
@@ -381,6 +449,7 @@ class _ContentRuleStore:
         if missing:
             raise ContentRuleInvalid(sorted(missing)[0], "required")
         _check_pattern(cleaned["kind"], cleaned["pattern"], cleaned.get("flags", 0))
+        _check_title(cleaned.get("seed_key"), cleaned.get("title"))
         if self._seed_key_taken(cleaned.get("seed_key")):
             raise SeedKeyTaken
         row = ContentRule(**cleaned, **fixed)
@@ -399,6 +468,7 @@ class _ContentRuleStore:
             cleaned.get("pattern", row.pattern),
             cleaned.get("flags", row.flags),
         )
+        _check_title(cleaned.get("seed_key", row.seed_key), cleaned.get("title", row.title))
         if "seed_key" in cleaned and self._seed_key_taken(cleaned["seed_key"], row.id):
             raise SeedKeyTaken
         for key, value in cleaned.items():

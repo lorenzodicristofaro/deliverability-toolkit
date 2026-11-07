@@ -10,6 +10,7 @@ surrogate code points before the database (PostgreSQL refuses NUL in text, SQLit
 from datetime import date, datetime
 
 from sqlalchemy import (
+    JSON,
     Boolean,
     CheckConstraint,
     Date,
@@ -35,7 +36,10 @@ MAX_NAME_LENGTH = 200
 MAX_CATEGORY_LENGTH = 64
 MAX_LANGUAGE_LENGTH = 16
 MAX_SEED_KEY_LENGTH = 128
-MAX_SOURCE_REF_LENGTH = 2048
+MAX_TITLE_LENGTH = 200
+MAX_ADVICE_LENGTH = 2000
+MAX_SOURCES = 10
+MAX_SOURCE_URL_LENGTH = 2048
 MIN_WEIGHT = 0
 MAX_WEIGHT = 100
 
@@ -76,9 +80,11 @@ class ContentRule(Base):
         CheckConstraint(
             _len("seed_key", MAX_SEED_KEY_LENGTH, nullable=True), name="seed_key_length"
         ),
-        CheckConstraint(
-            _len("source_ref", MAX_SOURCE_REF_LENGTH, nullable=True), name="source_ref_length"
-        ),
+        CheckConstraint(_len("title", MAX_TITLE_LENGTH, nullable=True), name="title_length"),
+        CheckConstraint(_len("advice", MAX_ADVICE_LENGTH, nullable=True), name="advice_length"),
+        # Seeded rules take their text from i18n keys derived from seed_key; any other rule
+        # carries user-entered text and needs a title.
+        CheckConstraint("seed_key IS NOT NULL OR title IS NOT NULL", name="title_required"),
         # seed_key is unique per scope: once among global rows, once per tenant among its rows.
         Index(
             "uq_content_rules_global_seed_key",
@@ -112,7 +118,12 @@ class ContentRule(Base):
     language: Mapped[str | None] = mapped_column(String(MAX_LANGUAGE_LENGTH), nullable=True)
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
     severity: Mapped[str] = mapped_column(String(16), nullable=False)
-    source_ref: Mapped[str | None] = mapped_column(String(MAX_SOURCE_REF_LENGTH), nullable=True)
+    # User-entered text of admin-authored rules, written in the rule's `language`.
+    title: Mapped[str | None] = mapped_column(String(MAX_TITLE_LENGTH), nullable=True)
+    advice: Mapped[str | None] = mapped_column(String(MAX_ADVICE_LENGTH), nullable=True)
+    # JSON list of http(s) URLs (at most MAX_SOURCES); validated by the repository, the database
+    # only stores it (no portable JSON CHECK on SQLite and PostgreSQL).
+    sources: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
     verified_on: Mapped[date | None] = mapped_column(Date, nullable=True)
     status: Mapped[str | None] = mapped_column(String(16), nullable=True)
     seed_key: Mapped[str | None] = mapped_column(String(MAX_SEED_KEY_LENGTH), nullable=True)
