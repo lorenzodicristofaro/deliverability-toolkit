@@ -112,7 +112,7 @@ Carried over from M0-07 QA:
   - [x] M5-05 content_rules model + migration + repository (opus)
   - [ ] M5-06 dkim_selectors model + migration + repository + seed sync (opus)
   - [ ] M5-07 custom_checks model + migration + repository (opus)
-  - [ ] M5-08 HTML/text structural parser
+  - [x] M5-08 HTML/text structural parser
   - [ ] M5-09 static link analysis + url_shorteners seed (no network)
   - [ ] M5-10 List-Unsubscribe / One-Click analysis (RFC 2369, RFC 8058)
   - [ ] M5-11 subject analysis

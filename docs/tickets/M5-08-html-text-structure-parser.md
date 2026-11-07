@@ -13,4 +13,4 @@ Acceptance criteria:
 - Never resolves URLs, never loads images, never executes scripts; `<script>`/`<style>` content excluded from visible text.
 - Table-driven tests including malformed input: truncated tags, unterminated comments/attributes, deeply nested divs, huge attribute values, invalid entities, NUL, mixed encodings, empty input, html-only, text-only.
 New i18n keys: none
-Status: todo
+Status: done
