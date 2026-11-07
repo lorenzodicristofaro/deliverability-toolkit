@@ -215,9 +215,25 @@ def test_capped_input_never_reports_zero_bytes() -> None:
     r = parse_content("x" * 100, "y" * 5, limits=ContentLimits(max_input_bytes=10))
     assert r.capped
     assert r.html_bytes is None
-    assert r.text_bytes is None
+    assert r.text_bytes == 5
     assert r.html_bytes_at_least == 100
-    assert r.text_bytes_at_least == 5
+    assert r.text_bytes_at_least is None
     ok = parse_content("<p>x</p>", None)
     assert ok.html_bytes == 8
     assert ok.html_bytes_at_least is None
+
+
+def test_gmail_flag_with_capped_inputs() -> None:
+    lim = ContentLimits(max_input_bytes=3_000_000)
+    huge = parse_content("x" * 3_000_001, None, limits=lim)
+    assert huge.capped
+    assert huge.exceeds_gmail_clip_threshold
+    mid = parse_content("<p>" + "x" * 200_000 + "</p>", "y" * 3_000_001, limits=lim)
+    assert mid.capped
+    assert mid.html_bytes == 200_007
+    assert mid.text_bytes is None
+    assert mid.exceeds_gmail_clip_threshold
+    small = parse_content("<p>x</p>", "y" * 3_000_001, limits=lim)
+    assert small.capped
+    assert small.html_bytes == 8
+    assert not small.exceeds_gmail_clip_threshold

@@ -98,7 +98,7 @@ class HiddenCandidate:
 @dataclass(frozen=True)
 class ContentStructure:
     capped: bool = False
-    # input_size, element_count, nesting_depth, attribute_count
+    # input_size, element_count, nesting_depth, attribute_count, parser_error
     cap_reason: str | None = None
     # None when not measured (input_size cap); then *_at_least holds len(str), a lower bound.
     html_bytes: int | None = 0
@@ -258,26 +258,29 @@ def parse_content(
 ) -> ContentStructure:
     lim = limits or ContentLimits()
     # len(str) <= UTF-8 bytes, so a longer string is certainly over the cap: skip encoding.
-    too_long = len(html or "") > lim.max_input_bytes or len(text or "") > lim.max_input_bytes
-    html_bytes: int | None = 0
-    text_bytes: int | None = 0
-    if too_long:
-        html_bytes = text_bytes = None
-    else:
+    html_long = len(html or "") > lim.max_input_bytes
+    text_long = len(text or "") > lim.max_input_bytes
+    html_bytes: int | None = None
+    text_bytes: int | None = None
+    if not html_long:
         html_bytes = len(html.encode("utf-8", "replace")) if html else 0
+    if not text_long:
         text_bytes = len(text.encode("utf-8", "replace")) if text else 0
+    html_at_least = len(html or "") if html_long else None
+    html_size = html_bytes if html_bytes is not None else html_at_least
     base: dict[str, object] = {
         "html_bytes": html_bytes,
         "text_bytes": text_bytes,
-        "html_bytes_at_least": len(html or "") if too_long else None,
-        "text_bytes_at_least": len(text or "") if too_long else None,
+        "html_bytes_at_least": html_at_least,
+        "text_bytes_at_least": len(text or "") if text_long else None,
         "text_length": len(text) if text else 0,
         "has_plain_text_part": bool(text and text.strip()),
         "has_html_part": bool(html and html.strip()),
-        "exceeds_gmail_clip_threshold": (html_bytes or 0) > GMAIL_CLIP_THRESHOLD_BYTES,
+        "exceeds_gmail_clip_threshold": (html_size or 0) > GMAIL_CLIP_THRESHOLD_BYTES,
     }
     if (
-        too_long
+        html_long
+        or text_long
         or (html_bytes or 0) > lim.max_input_bytes
         or (text_bytes or 0) > lim.max_input_bytes
     ):
