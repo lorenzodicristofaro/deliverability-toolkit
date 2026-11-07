@@ -285,3 +285,19 @@ def test_content_is_not_echoed_logged_or_stored(
     assert secret not in r.text.split("</textarea>", 1)[0]  # the form is not pre-filled
     assert secret not in str(r.url)
     assert secret not in "".join(r.headers.get_list("set-cookie"))
+
+
+@pytest.mark.parametrize(
+    ("who", "visible_link"),
+    [("owner", True), ("admin", True), ("analyst", True), ("viewer", False), ("anon", False)],
+)
+def test_nav_link_visibility(world: World, who: str, visible_link: bool) -> None:
+    paths = ["/", f"/domains/{world.domains['assigned']}"]
+    if who != "viewer":
+        paths.append(PATH)
+    for path in paths:
+        r = get(world, who, path)
+        if who == "anon" and path != PATH:
+            continue  # redirect to login
+        assert r.status_code in (200, 303)
+        assert ('href="/tools/message"' in r.text) is visible_link, (who, path)

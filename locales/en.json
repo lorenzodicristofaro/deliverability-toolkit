@@ -438,6 +438,7 @@
   "nav.tools.dns": "DNS tools",
   "nav.tools.dns.propagation": "Propagation",
   "nav.tools.dns.trace": "DNS trace",
+  "nav.tools.message": "Message analysis",
   "setup.email": "Administrator email",
   "setup.error.email_invalid": "Enter a valid email address.",
   "setup.error.password_common": "This password is too common or contains your email address or the application name. Choose another one.",
