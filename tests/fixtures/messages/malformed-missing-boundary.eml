@@ -1,0 +1,11 @@
+From: sender@example.net
+To: receiver@example.com
+Subject: boundary missing
+MIME-Version: 1.0
+Content-Type: multipart/mixed
+
+--unknown
+Content-Type: text/plain
+
+part without a declared boundary parameter
+--unknown--

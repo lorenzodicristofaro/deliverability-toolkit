@@ -73,13 +73,29 @@ Carried over from M0-07 QA:
   - [x] M3-17 Authentication tab UI
   - [x] M3-18 CLI `check` command (tenant-less free check)
   - [x] M3-19 acceptance tests + docs/CHECKS.md
+  - [x] M3-20 DKIM seed: provider selectors and selector→provider mapping (post-acceptance follow-up, requested by maintainer 2026-11-06)
 - Accept: results identical across UI, API and CLI; table-driven tests with malformed records.
   Status: **accepted 2026-11-06** — tests/checks/test_acceptance_m3.py (service = API = CLI byte-equal, UI status/codes equal, DNS failure → error on all surfaces, zero DNS on denial); CI green at 0e3511a incl. PostgreSQL (9434 passed). Report: docs/reports/M3.md
 
 ## M4 — Original (headers) analyzer
-- [ ] Upload/paste `.eml` or headers; Received chain with delays; Authentication-Results; ARC
-- [ ] Alignment analysis (From / Return-Path / DKIM d=), anomaly findings, MIME summary
-- Accept: sample corpus (Gmail, Outlook, SES, SendGrid, MailUp...) parsed correctly.
+- [x] Upload/paste `.eml` or headers; Received chain with delays; Authentication-Results; ARC
+- [x] Alignment analysis (From / Return-Path / DKIM d=), anomaly findings, MIME summary
+- Accept: sample corpus (Gmail, Outlook, SES, SendGrid, MailUp...) parsed correctly. **Status 2026-11-07: parser verified against RFC corpus; provider samples pending** (maintainer to supply sanitized real .eml, see tests/fixtures/messages/README.md).
+- Tickets (docs/tickets/):
+  - [x] M4-01 raw message limits + header block parser (opus)
+  - [x] M4-02 MIME structure + size (opus)
+  - [x] M4-03 Received chain + hop delays (opus)
+  - [x] M4-04 Authentication-Results parser (opus)
+  - [x] M4-05 ARC chain parser (opus)
+  - [x] M4-06 `message.analyze` permission (opus)
+  - [x] M4-07 sample corpus + MANIFEST (provider samples unverified until maintainer supplies them)
+  - [x] M4-08 alignment analysis
+  - [x] M4-09 anomaly findings + MSG_* texts
+  - [x] M4-10 analysis service
+  - [x] M4-11 REST endpoint
+  - [x] M4-12 web UI
+  - [x] M4-13 CLI `analyze`
+  - [x] M4-14 acceptance tests + docs/HEADERS.md
 
 ## M5 — Content analyzer + admin rules
 - [ ] Structural HTML/text checks, link analysis, size, List-Unsubscribe/One-Click
@@ -120,6 +136,19 @@ Carried over from M0-07 QA:
 - [ ] Security review checklist, dependency/license audit, v0.1.0 release
 
 ## Follow-ups (post-M1)
+- [ ] tests/support/test_socket_guard.py: add a string-port case `getaddrinfo("db.test", "5432")` (psycopg passes the port as str) (QA nit).
+- [ ] MIME cap consistency (M4-14 QA): exceeding the part cap gives MSG_PARSER_LIMIT + status error, but exceeding the depth cap only gives MSG_MIME_TRUNCATED (low, warn); message_findings.py:71 says any capped input is error-class. Decide one rule, align code + HEADERS.md.
+- [ ] M4 i18n scanner nits (M4-14 QA): 1-2 letter text ("OK", "No") passes the 3+ letter rule; `data-*` and `label` attributes not scanned; any dotted string ending in "." passes as a key prefix. Fold-bomb corpus sample trips no cap (stress sample only).
+- [ ] CLI analyze (M4-13 QA): text output omits finding evidence (check and web UI show it; add the cli.check.evidence line); status label borrows message.arc.status (add cli.analyze.status); imports private `_fail` from app.cli.check (make a shared public helper); optional rename of key not_found to cannot_read.
+- [ ] Message UI nits (M4-12 QA): MIME table first column uses `message.col.hop`; needs a part/index key. JS `data-max-bytes` is 2 MiB but no-JS/JS form posts over 1 MiB hit the CSRF 403; cap the JS at 1 MiB or fix with the CSRF follow-up.
+- [ ] Message UI (M4-12): CSRFMiddleware rejects form bodies > 1 MiB with token-in-body as 403, so no-JS pastes above ~1 MiB encoded get 403 instead of the localized 413; fix in core/csrf (raise its form cap or return 413).
+- [ ] tests/tenancy World.send: add a raw-body option so the matrix can show 200 for permitted roles on raw-body routes (M4-11 QA nit).
+- [ ] Received redaction (done in M4-10: all `@` tokens masked). Remaining: `<local>` with no domain and fullwidth ＠ stay visible; Message-ID-style hop ids become None. Also a dedicated MSG_SECTION_FAILED code (en+it) instead of reusing MSG_PARSER_LIMIT, whose "exceeded limits" text misleads for internal failures.
+- [ ] Public RFC 5322 Date parser; message_findings parses Date via parse_received_values, so a valid Date with a comment containing ";" is reported MSG_DATE_INVALID (M4-09 QA). Also rename test_authserv_mismatch_lists_ids_escaped (no longer escaped).
+- [ ] Received: a 4-word date is reported as `date_no_timezone` without a shape check (received.py:256, M4-03 QA nit)
+- [ ] M4-01 QA nits: make `decode_rfc2047` private or give it a public signature, and make `_lookup_charset` and `_Warnings` public (imported privately by app/parsers/mime.py, M4-02 QA); warn mixed endings on the header-terminating blank line; document that MAX_HEADER_BYTES excludes the blank line
+- [ ] authres `_Issues` and the DKIM tag-list parser are private; arc.py has local copies — consider a shared public helper (M4-05)
+- [ ] ARC (M4-05 QA nits): store a has_h_tag flag on the seal, not a lookup in the capped issue list (arc.py:530); an empty `h=` on a seal should also count as cv fail (GM reading of RFC 8617 4.1.3: an h tag is found).
 - [ ] Extend the tests/dns network guard (loopback-only) to the DNS tests in tests/api and tests/web (M2-15 QA)
 - [ ] Import guard: forbid network calls via dns.resolver in app/dns/factory.py (it may only read resolv.conf) (M2-15 QA nit)
 - [ ] Use a translated label for the FCrDNS no_ptr case instead of omitting the line (M2-13 QA nit)
@@ -152,7 +181,9 @@ Carried over from M0-07 QA:
 - [ ] app/services/domains.py hardcodes MembershipRole.CLIENT_VIEWER in list and set_access; use is_domain_restricted
 - [ ] The matrix guard's create_app() uses env settings, not world.settings (QA nit)
 - [ ] app/checks/dkim_selectors.py imports private validation helpers from app/dns/knowledge.py and app/dns/types.py; expose a public seed-validation helper (M3-12 QA)
-- [ ] MAINTAINER TO CONFIRM: all 9 DKIM seed selectors (default, dkim, mail, google, s1, s2, k1, selector1, selector2) are unverified with no provider; confirm provenance against official vendor docs before promoting any (M3-12)
+- [x] (M3-20) DKIM seed selectors: provider selectors verified on raw official pages (Microsoft 365, Google Workspace, SendGrid, Mandrill, Klaviyo, MailUp, ActiveCampaign); per-customer (SES, Mailgun, SparkPost, Zoho, Brevo) not seeded; still unverified generic: default, dkim, mail, k1
+- [ ] DKIM seed: per-entry `verified_on` (file-level date only; M3-20b entries verified 2026-11-07 noted in a comment)
+- [ ] DKIM seed: Mailchimp campaigns, Postmark, HubSpot selectors not found in official docs; add if the maintainer supplies an official source
 - [ ] Optional: add an explicit `evaluated` field to CheckResult if the runner-only convention proves insufficient (M3-01 QA)
 - [ ] MAINTAINER TO CONFIRM: Public Suffix List data licence (MPL-2.0 per the PyPI publicsuffixlist page only); check github.com/publicsuffix/list LICENSE; recorded as unverified in seeds/public_suffix_source.yaml (M3-09)
 - [ ] SPF parser nits (M3-04 QA): at the 4096-char cut, drop the partial last term so it does not add a second misleading issue; add a comment on Unicode-whitespace term splitting

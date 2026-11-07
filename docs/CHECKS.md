@@ -160,6 +160,22 @@ All three call `app/services/checks.py` and print the same `CheckResult` JSON.
 | 2 | any `error` (could not evaluate), or a configuration error |
 | 64 | usage error (unknown or duplicate check, bad domain, format or language) |
 
+## CLI `analyze` (M4)
+
+`dtk analyze <file|-> [--format text|json] [--lang en|it]` (also `python -m app.cli analyze`)
+analyzes one raw message from a file, or from stdin with `-`. It is offline, uses no tenant data
+and no database, and reads at most 2 MiB. See `docs/HEADERS.md` for what is analyzed.
+
+`--format json` prints `MessageAnalysis.model_dump_json()` followed by exactly one trailing
+newline (added by `typer.echo`); the REST body is the same bytes without the newline.
+
+| Code | Meaning |
+|---|---|
+| 0 | no finding above info |
+| 1 | any `warn` or `fail` |
+| 2 | status `error`, or unreadable, oversize, empty or NUL input |
+| 64 | usage error (unknown format or language) |
+
 ## Permissions
 
 - `check.run`: run checks on one tenant domain (REST domain routes, the DKIM stream, the

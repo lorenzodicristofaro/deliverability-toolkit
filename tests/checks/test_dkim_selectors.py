@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 from datetime import date, timedelta
 from typing import Any
+from urllib.parse import urlparse
 
 import pytest
 
@@ -120,3 +121,51 @@ def test_shipped_file_loads_and_guards() -> None:
     for s in sels:
         assert s.status != "verified" or s.sources
         assert s.status != "unverified" or s.provider is None
+
+
+_VENDOR_HOSTS = {
+    "learn.microsoft.com": "microsoft365",
+    "knowledge.workspace.google.com": "google_workspace",
+    "www.twilio.com": "sendgrid",
+    "mailchimp.com": "mailchimp_transactional",
+    "help.klaviyo.com": "klaviyo",
+    "help.activecampaign.com": "activecampaign",
+}
+# MailUp's official help centre is hosted on Atlassian Cloud. An atlassian.net subdomain is
+# tenant-specific, so it is allowed only as this exact host for this exact provider.
+_PROVIDER_HOST_EXCEPTIONS = {
+    "helpmailup.atlassian.net": "mailup",
+}
+
+
+def _source_allowed(url: str, provider: str | None) -> bool:
+    host = urlparse(url).hostname or ""
+    if not url.startswith("https://"):
+        return False
+    allowed = {**_VENDOR_HOSTS, **_PROVIDER_HOST_EXCEPTIONS}
+    return allowed.get(host) == provider
+
+
+@pytest.mark.parametrize(
+    ("url", "provider", "ok"),
+    [
+        ("https://helpmailup.atlassian.net/wiki/x", "mailup", True),
+        ("https://otherco.atlassian.net/wiki/x", "mailup", False),
+        ("https://otherco.atlassian.net/wiki/x", "klaviyo", False),
+        ("https://helpmailup.atlassian.net/wiki/x", "klaviyo", False),
+        ("https://atlassian.net/wiki/x", "mailup", False),
+        ("http://helpmailup.atlassian.net/wiki/x", "mailup", False),
+        ("https://evil.helpmailup.atlassian.net/x", "mailup", False),
+    ],
+)
+def test_source_host_rules(url: str, provider: str, ok: bool) -> None:
+    assert _source_allowed(url, provider) is ok
+
+
+def test_shipped_verified_entries_have_vendor_source_and_provider() -> None:
+    verified = [s for s in list_selectors() if s.status == "verified"]
+    assert verified
+    for s in verified:
+        assert s.provider, s.name
+        for url in s.sources:
+            assert _source_allowed(url, s.provider), (s.name, url)

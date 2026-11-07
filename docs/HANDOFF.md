@@ -1,19 +1,24 @@
-# HANDOFF — 2026-11-06 (end of M3)
+# HANDOFF — 2026-11-07 (M4 accepted, conditionally)
 
 Resume with `/gm`.
 
 ## State
-- M3 accepted 2026-11-06: M3-01..M3-19 done, CI green on PG at 0e3511a, `dev` merged into `qa`. Report: docs/reports/M3.md.
-- Next milestone: M4 — Original (headers) analyzer (not yet split into tickets).
+- M4 is done: M4-01..M4-14 are merged into `dev` with QA APPROVE. The local full suite is green (8974 passed). Report: docs/reports/M4.md.
+- `dev` is promoted to `qa` once CI on the close-out commit is green; see the git log for the merge.
+- Acceptance condition: the parser is verified against the RFC corpus, and provider samples are still pending (TODO.md M4 block).
+
+## GM decisions (2026-11-07)
+- Received redaction masks every `@` token in hop text and drops hop fields that contain `@` or `<`.
+- An unusable Reply-To gives an info finding (MSG_REPLY_TO_UNUSABLE) and does not set error status.
+- The 1 h hop-delay threshold is a documented heuristic.
+- M4-14's third QA round was docs-only, approved by the maintainer.
 
 ## Open maintainer decisions
-- `qa` → `main` promotion of M1, M2 and M3: maintainer only.
-- Confirm the 9 DKIM seed selectors in seeds/dkim_selectors.yaml (all `unverified`, no provider) against official vendor docs.
-- Confirm the Public Suffix List data licence (MPL-2.0 per PyPI only; seeds/public_suffix_source.yaml).
-- SecLists password list terms and HTMX under CSP: still unverified (from M1).
-- Cleanup: stale worktrees in .claude/worktrees/ and old local branches (agent worktrees start at origin/main).
+- Provider samples: sanitized real Gmail, Outlook/M365, SES, SendGrid and MailUp .eml files, each with an official source and check date. Checklist: tests/fixtures/messages/README.md.
+- `qa` → `main` for M1–M4.
+- From M3: Mailchimp/Postmark/HubSpot DKIM sources; PSL licence; SecLists terms; HTMX under CSP.
 
 ## Next 3 steps
-1. `/gm` → have pm split M4 into tickets (raw message and header parsing is opus-tier per WORKFLOW; reuse M3 SPF/DKIM/DMARC parsers for Authentication-Results alignment).
-2. Before any shared deployment: per-user rate limit + global concurrency cap for DNS tools and checks (the Authentication tab runs live DNS on GET).
-3. Small cleanup ticket for the M3 follow-ups (shared result serializer, typer private import pin, socket guard to tests/conftest.py).
+1. Start M5 (content analyzer + admin rules): have `pm` split it into tickets in docs/tickets/.
+2. Choose which M4 follow-ups to do before M5. Recommended: MIME cap consistency, and the CSRF 1 MiB vs UI 413 mismatch.
+3. When the provider samples arrive, add them to MANIFEST as verified and rerun test_acceptance_m4.py.

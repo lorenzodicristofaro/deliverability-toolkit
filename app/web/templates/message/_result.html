@@ -1,0 +1,242 @@
+{#- One MessageAnalysis. Everything is autoescaped (never |safe) and message-derived text also goes
+    through `visible`. Hops and warnings are the service's redacted output. -#}
+{% macro yn(v) %}{% if v is none %}-{% else %}{{ t("message.bool.yes") if v else t("message.bool.no") }}{% endif %}{% endmacro %}
+{% macro val(v) %}{% if v is none %}-{% else %}{{ v|visible }}{% endif %}{% endmacro %}
+{% macro unavailable() %}<p class="empty-state">{{ t("message.section.unavailable") }}</p>{% endmacro %}
+{% macro results_table(results) %}
+<table>
+  <thead><tr>
+    <th scope="col">{{ t("message.col.method") }}</th>
+    <th scope="col">{{ t("message.col.result") }}</th>
+    <th scope="col">{{ t("message.col.reason") }}</th>
+    <th scope="col">{{ t("message.col.properties") }}</th>
+  </tr></thead>
+  <tbody>
+  {% for r in results %}
+    <tr>
+      <td class="dns-wrap">{{ r.method|visible }}</td>
+      <td class="dns-wrap">{{ r.result|visible }}</td>
+      <td class="dns-wrap">{{ val(r.reason) }}</td>
+      <td class="dns-wrap">{% for p in r.properties %}<code>{{ p.ptype|visible }}.{{ p.property|visible }}={{ p.value|visible }}</code> {% endfor %}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endmacro %}
+{% set status_text = {"ok": t("checks.status.ok"), "warn": t("checks.status.warn"), "fail": t("checks.status.fail"), "info": t("checks.status.info"), "error": t("checks.status.error")} %}
+{% set severity_text = {"critical": t("checks.severity.critical"), "high": t("checks.severity.high"), "medium": t("checks.severity.medium"), "low": t("checks.severity.low"), "info": t("checks.severity.info")} %}
+<div class="check-result" data-testid="message-result" data-status="{{ analysis.status }}">
+  <p class="dns-state dns-state-{{ "failure" if analysis.status == "error" else ("ok" if analysis.status == "ok" else "absent") }}"{% if analysis.status == "error" %} role="alert"{% endif %} data-testid="message-status">
+    <strong>{{ status_text[analysis.status] }}</strong>
+    {% if analysis.status == "error" %}<br>{{ t("checks.status.error_note") }}{% endif %}
+  </p>
+
+  <section data-testid="message-summary">
+    <h2>{{ t("message.section.summary") }}</h2>
+    {% if analysis.summary is none %}{{ unavailable() }}{% else %}
+    {% set s = analysis.summary %}
+    <dl>
+      <dt>{{ t("message.summary.subject") }}</dt><dd class="dns-wrap" data-testid="summary-subject">{{ val(s.subject) }}</dd>
+      <dt>{{ t("message.summary.from") }}</dt><dd class="dns-wrap">{{ val(s.from_header) }}</dd>
+      <dt>{{ t("message.summary.to_count") }}</dt><dd>{{ s.to_count }}</dd>
+      <dt>{{ t("message.summary.cc_count") }}</dt><dd>{{ s.cc_count }}</dd>
+      <dt>{{ t("message.summary.date") }}</dt><dd class="dns-wrap">{{ val(s.date_header) }}</dd>
+      <dt>{{ t("message.summary.headers") }}</dt><dd>{{ s.header_count }}</dd>
+      <dt>{{ t("message.summary.size") }}</dt><dd>{{ s.size_bytes }}</dd>
+    </dl>
+    {% endif %}
+  </section>
+
+  <section data-testid="message-received">
+    <h2>{{ t("message.section.received") }}</h2>
+    {% if analysis.received is none %}{{ unavailable() }}
+    {% elif not analysis.received.hops %}<p class="empty-state">{{ t("message.section.empty") }}</p>
+    {% else %}
+    <table>
+      <thead><tr>
+        <th scope="col">{{ t("message.col.hop") }}</th>
+        <th scope="col">{{ t("message.col.from") }}</th>
+        <th scope="col">{{ t("message.col.by") }}</th>
+        <th scope="col">{{ t("message.col.protocol") }}</th>
+        <th scope="col">{{ t("message.col.time") }}</th>
+        <th scope="col">{{ t("message.col.delay") }}</th>
+        <th scope="col">{{ t("message.col.warnings") }}</th>
+      </tr></thead>
+      <tbody>
+      {% for h in analysis.received.hops %}
+        <tr data-hop="{{ h.index }}">
+          <td>{{ h.index }}</td>
+          {% if h.parsed %}
+          <td class="dns-wrap">{{ val(h.from_host) }}{% if h.from_ip is not none %} [{{ h.from_ip|visible }}]{% endif %}</td>
+          <td class="dns-wrap">{{ val(h.by_host) }}</td>
+          <td class="dns-wrap">{{ val(h.with_protocol) }}</td>
+          {% else %}
+          <td class="dns-wrap" colspan="3"><code>{{ h.raw|visible }}</code></td>
+          {% endif %}
+          <td class="dns-wrap">{{ val(h.timestamp) }}</td>
+          {% if h.delay_seconds is none %}<td>-</td>
+          {% elif h.delay_seconds < 0 %}<td class="delay-negative" data-negative="1"><strong>{{ h.delay_seconds }}</strong> ({{ t("message.delay.negative") }})</td>
+          {% else %}<td>{{ h.delay_seconds }}</td>{% endif %}
+          <td class="dns-wrap">{% for w in h.warnings %}<code>{{ w|visible }}</code> {% endfor %}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% if analysis.received.total_transit_seconds is not none %}<p>{{ t("message.hops.total") }}: {{ analysis.received.total_transit_seconds }}</p>{% endif %}
+    {% endif %}
+  </section>
+
+  <section data-testid="message-authres">
+    <h2>{{ t("message.section.authres") }}</h2>
+    {% if analysis.authentication is none %}{{ unavailable() }}
+    {% elif not analysis.authentication %}<p class="empty-state">{{ t("message.section.empty") }}</p>
+    {% else %}
+    {% for a in analysis.authentication %}
+    <h3>{{ t("message.authres.server") }}: <span class="dns-wrap">{{ val(a.authserv_id) }}</span></h3>
+    {% if a.results %}{{ results_table(a.results) }}{% else %}<p class="empty-state">{{ t("message.section.empty") }}</p>{% endif %}
+    {% if a.issues %}<p>{% for i in a.issues %}<code>{{ i|visible }}</code> {% endfor %}</p>{% endif %}
+    {% endfor %}
+    {% endif %}
+  </section>
+
+  <section data-testid="message-arc">
+    <h2>{{ t("message.section.arc") }}</h2>
+    {% if analysis.arc is none %}{{ unavailable() }}{% else %}
+    {% set arc = analysis.arc %}
+    <dl>
+      <dt>{{ t("message.arc.status") }}</dt><dd><code>{{ arc.status|visible }}</code></dd>
+      <dt>{{ t("message.arc.instances") }}</dt><dd>{{ arc.instance_count }}</dd>
+      <dt>{{ t("message.arc.verified") }}</dt><dd>{{ yn(arc.verified) }}</dd>
+      <dt>{{ t("message.arc.crypto_checked") }}</dt><dd>{{ yn(arc.crypto_checked) }}</dd>
+    </dl>
+    {% if arc.sets %}
+    <table>
+      <thead><tr>
+        <th scope="col">{{ t("message.col.instance") }}</th>
+        <th scope="col">{{ t("message.col.domain") }}</th>
+        <th scope="col">{{ t("message.col.selector") }}</th>
+        <th scope="col">{{ t("message.col.cv") }}</th>
+        <th scope="col">{{ t("message.col.time") }}</th>
+      </tr></thead>
+      <tbody>
+      {% for st in arc.sets %}
+        <tr>
+          <td>{{ st.instance }}</td>
+          <td class="dns-wrap">{{ val(st.domain) }}</td>
+          <td class="dns-wrap">{{ val(st.selector) }}</td>
+          <td class="dns-wrap">{{ val(st.cv) }}</td>
+          <td class="dns-wrap">{{ val(st.timestamp) }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+    {% if arc.issues %}<p>{% for i in arc.issues %}<code>{{ i|visible }}</code> {% endfor %}</p>{% endif %}
+    {% endif %}
+  </section>
+
+  <section data-testid="message-alignment">
+    <h2>{{ t("message.section.alignment") }}</h2>
+    {% if analysis.alignment is none %}{{ unavailable() }}{% else %}
+    {% set al = analysis.alignment %}
+    <p>{{ t("message.alignment.computed") }}: <code>{{ al.computed_dmarc|visible }}</code>
+      {% if al.stated_dmarc is not none %} · {{ t("message.alignment.stated") }}: <code>{{ al.stated_dmarc|visible }}</code>{% endif %}
+      {% if al.dmarc_mismatch %} · <strong>{{ t("message.alignment.mismatch") }}</strong>{% endif %}</p>
+    {% if al.pairs %}
+    <table>
+      <thead><tr>
+        <th scope="col">{{ t("message.col.type") }}</th>
+        <th scope="col">{{ t("message.col.state") }}</th>
+        <th scope="col">{{ t("message.col.from_domain") }}</th>
+        <th scope="col">{{ t("message.col.domain") }}</th>
+        <th scope="col">{{ t("message.col.aligned") }}</th>
+        <th scope="col">{{ t("message.col.reason") }}</th>
+      </tr></thead>
+      <tbody>
+      {% for p in al.pairs %}
+        <tr>
+          <td class="dns-wrap">{{ p.kind|visible }}</td>
+          <td class="dns-wrap">{{ p.state|visible }}</td>
+          <td class="dns-wrap">{{ val(p.from_domain) }}</td>
+          <td class="dns-wrap">{{ val(p.identifier_domain) }}</td>
+          <td>{{ yn(p.relaxed_aligned) }} / {{ yn(p.strict_aligned) }}</td>
+          <td class="dns-wrap">{{ val(p.reason) }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% else %}<p class="empty-state">{{ t("message.section.empty") }}</p>{% endif %}
+    {% endif %}
+  </section>
+
+  <section data-testid="message-mime">
+    <h2>{{ t("message.section.mime") }}</h2>
+    {% if analysis.mime is none %}{{ unavailable() }}{% else %}
+    {% set m = analysis.mime %}
+    <table>
+      <thead><tr>
+        <th scope="col">{{ t("message.col.hop") }}</th>
+        <th scope="col">{{ t("message.col.type") }}</th>
+        <th scope="col">{{ t("message.col.category") }}</th>
+        <th scope="col">{{ t("message.col.charset") }}</th>
+        <th scope="col">{{ t("message.col.disposition") }}</th>
+        <th scope="col">{{ t("message.col.encoding") }}</th>
+        <th scope="col">{{ t("message.col.bytes") }}</th>
+      </tr></thead>
+      <tbody>
+      {% for p in m.parts %}
+        <tr>
+          <td>{{ p.index }}</td>
+          <td class="dns-wrap">{{ "· " * p.depth }}{{ p.content_type|visible }}</td>
+          <td class="dns-wrap">{{ p.category|visible }}</td>
+          <td class="dns-wrap">{{ val(p.charset) }}</td>
+          <td class="dns-wrap">{{ val(p.disposition) }}</td>
+          <td class="dns-wrap">{{ p.transfer_encoding|visible }}</td>
+          <td>{{ p.encoded_size }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% if m.warnings %}<p>{% for w in m.warnings %}<code>{{ w|visible }}</code> {% endfor %}</p>{% endif %}
+
+    <h2>{{ t("message.section.size") }}</h2>
+    {% set z = m.sizes %}
+    <table data-testid="message-sizes">
+      <thead><tr>
+        <th scope="col">{{ t("message.col.type") }}</th>
+        <th scope="col">{{ t("message.col.bytes") }}</th>
+      </tr></thead>
+      <tbody>
+        <tr><td>{{ t("message.size.total") }}</td><td>{{ z.total_bytes }}</td></tr>
+        <tr><td>{{ t("message.size.headers") }}</td><td>{{ z.header_bytes }}</td></tr>
+        <tr><td>{{ t("message.size.body") }}</td><td>{{ z.body_bytes }}</td></tr>
+        <tr><td>{{ t("message.size.text") }}</td><td>{{ z.text_bytes }}</td></tr>
+        <tr><td>{{ t("message.size.html") }}</td><td>{{ z.html_bytes }}</td></tr>
+        <tr><td>{{ t("message.size.attachments") }}</td><td>{{ z.attachment_bytes }}</td></tr>
+        <tr><td>{{ t("message.size.inline_images") }}</td><td>{{ z.inline_image_bytes }}</td></tr>
+        <tr><td>{{ t("message.size.other") }}</td><td>{{ z.other_bytes }}</td></tr>
+        <tr><td>{{ t("message.size.nul") }}</td><td>{{ z.nul_bytes }}</td></tr>
+      </tbody>
+    </table>
+    {% endif %}
+  </section>
+
+  <section data-testid="message-findings">
+    <h2>{{ t("message.section.findings") }}</h2>
+    {% if not analysis.findings %}
+    <p class="empty-state">{{ t("checks.no_findings") }}</p>
+    {% else %}
+    <ul class="check-findings">
+    {% for f in analysis.findings %}
+      <li data-code="{{ f.code }}" data-severity="{{ f.severity }}">
+        <strong>[{{ severity_text[f.severity] }}] {{ t(f.title_key, **(f.params|finding_params)) }}</strong>
+        <p>{{ t(f.detail_key, **(f.params|finding_params)) }}</p>
+        {% if f.remediation_key %}<p>{{ t(f.remediation_key, **(f.params|finding_params)) }}</p>{% endif %}
+        {% for e in f.evidence %}<p class="dns-wrap"><code>{{ e|visible }}</code></p>{% endfor %}
+        {% if f.docs_url is https_url %}<p><a href="{{ f.docs_url }}" rel="noopener noreferrer">{{ t("checks.docs_link") }}</a></p>{% endif %}
+      </li>
+    {% endfor %}
+    </ul>
+    {% endif %}
+  </section>
+</div>
