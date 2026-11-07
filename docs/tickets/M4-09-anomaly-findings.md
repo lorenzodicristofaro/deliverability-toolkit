@@ -20,4 +20,4 @@ Open points:
 GM decisions (2026-11-07):
 - Findings never include the Received `for` address. M4-10 redacts the `for` clause from any raw hop excerpt it returns.
 - The 4-word date nit (received.py) is out of scope here; tracked in TODO.md Follow-ups.
-Status: todo
+Status: done

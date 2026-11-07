@@ -14,4 +14,8 @@ Acceptance criteria:
 - Whole-run time/memory guard test: a 2 MiB hostile input (fold bomb, deep MIME, 500 headers) completes under a generous bounded time in test.
 - Same bytes -> byte-identical JSON (determinism test).
 New i18n keys: none
+GM notes (2026-11-07, from M4-09):
+- Use `build_message_findings(...)` and `rejected_input_findings(code)` from app/services/message_findings.py; pass `evaluated=result.evaluated` to CheckResult.build.
+- Redact the Received `for` clause from any raw hop excerpt returned.
+- Excerpts are raw text (not HTML-escaped); escaping is done at render time.
 Status: todo
