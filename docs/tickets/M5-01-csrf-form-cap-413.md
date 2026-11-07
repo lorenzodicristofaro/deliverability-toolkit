@@ -14,4 +14,4 @@ Acceptance criteria:
 - Tests: body at cap-1, cap, cap+1 for both the default and the opted-in route; no-JS and JS-style posts; streaming (chunked) body with no Content-Length is cut at the cap.
 - Existing 403-on-missing-token behaviour unchanged for every other route (regression test).
 New i18n keys: none
-Status: todo
+Status: done
