@@ -34,20 +34,27 @@ it or use the API or CLI to send the exact bytes.
 
 ## Input limits
 
-| Limit | Value | Result |
-|---|---|---|
-| Raw message | 2 MiB | REST 413, UI 413, CLI exit 2 (not analyzed) |
-| Empty input | - | REST 422, UI 422, CLI exit 2 (not analyzed) |
-| NUL byte | - | REST 422, UI 422, CLI exit 2 (not analyzed) |
-| Header block | 128 KiB | status `error`, finding `MSG_PARSER_LIMIT` |
-| Physical header line | 8 KiB | status `error`, `MSG_PARSER_LIMIT` |
-| Unfolded header field | 64 KiB | status `error`, `MSG_PARSER_LIMIT` |
-| Header count | 500 | status `error`, `MSG_PARSER_LIMIT` |
-| `Received` hops | 100 (newest kept, `truncated`); 8 KiB per hop, counted in UTF-8 bytes | more than 100 hops: status `error`, `MSG_PARSER_LIMIT` (medium); the newest 100 are kept and analyzed |
-| MIME depth / parts | 10 / 200 | partial result, `MSG_MIME_TRUNCATED` |
-| ARC instances | 50 | structural issue |
+| Limit | Value | Analysis status | Main finding (severity) | REST / UI HTTP | CLI exit |
+|---|---|---|---|---|---|
+| Raw message | 2 MiB | not analyzed | - | 413 / 413 | 2 |
+| Empty input | - | not analyzed | - | 422 / 422 | 2 |
+| NUL byte | - | not analyzed | - | 422 / 422 | 2 |
+| Header block | 128 KiB | `error` | `MSG_PARSER_LIMIT` (medium) | 200 / 200 | 2 |
+| Physical header line | 8 KiB | `error` | `MSG_PARSER_LIMIT` (medium) | 200 / 200 | 2 |
+| Unfolded header field | 64 KiB | `error` | `MSG_PARSER_LIMIT` (medium) | 200 / 200 | 2 |
+| Header count | 500 | `error` | `MSG_PARSER_LIMIT` (medium) | 200 / 200 | 2 |
+| `Received` hops | 100 (newest kept, `truncated`) | `error` | `MSG_PARSER_LIMIT` (medium) | 200 / 200 | 2 |
+| One `Received` hop | 8 KiB, counted in UTF-8 bytes | `error` | `MSG_RECEIVED_UNPARSED` (low), hop warning `hop_too_long` | 200 / 200 | 2 |
+| MIME depth | 10 | `warn` | `MSG_MIME_TRUNCATED` (low) | 200 / 200 | 1 |
+| MIME parts | 200 | `error` | `MSG_PARSER_LIMIT` (medium), also `MSG_MIME_TRUNCATED` (low) | 200 / 200 | 2 |
+| ARC instances | 50 (a 51-set chain is read as 50 sets plus ungrouped fields) | `warn` | `MSG_ARC_INVALID` (low) | 200 / 200 | 1 |
 
-Only the first three rows (size, empty, NUL) are refused before analysis. Every other limit is data: HTTP 200 on REST and UI, exit 2 on the CLI, status `error` with a `MSG_PARSER_LIMIT` finding, never a crash. The REST
+Other ARC structural problems behave the same way: a gap in the instance numbers gives `warn`
+with `MSG_ARC_INVALID` (low, CLI exit 1), and a seal with `cv=fail` gives `warn` with
+`MSG_ARC_CV_FAIL` (medium, CLI exit 1). Observed with the service and the CLI; the UI status
+equals the service status. Only the first three rows are refused before analysis; every other
+row is data, never a crash. The CLI exit follows the status (`error` gives 2, `warn` or `fail`
+gives 1). The REST
 size check happens while streaming, so an oversized body is never buffered.
 
 ## Parser behaviour on malformed input
