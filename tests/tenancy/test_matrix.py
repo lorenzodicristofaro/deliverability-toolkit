@@ -191,6 +191,8 @@ def _check_free(_w: World, _role: str) -> dict[str, Any]:
 
 _DNS_OWN = {**_by_role(200, 200), "viewer": 403}  # client viewers never get raw DNS tools
 
+_MSG_OWN = {**_by_role(415, 415), "viewer": 403}  # client viewers never analyse messages
+
 MATRIX: dict[tuple[str, str], Entry] = {
     # session / tenant switch (app.web.auth)
     ("POST", "/logout"): Entry(Kind.SESSION),
@@ -231,6 +233,10 @@ MATRIX: dict[tuple[str, str], Entry] = {
     ("POST", "/api/v1/domains/{domain_id}/checks/{check_id}"): Entry(Kind.DOMAIN),
     ("POST", "/api/v1/domains/{domain_id}/checks"): Entry(Kind.DOMAIN, body=_check_ids),
     ("POST", "/api/v1/checks/free"): Entry(Kind.DNS, body=_check_free, own=_DNS_OWN),
+    # message analysis API (app.api.v1.message): tenant-level `message.analyze`. The matrix sends
+    # JSON, so permitted roles stop at 415 (the content type is checked after the permission);
+    # the 200 path is covered by tests/api/test_message_analyze.py.
+    ("POST", "/api/v1/message/analyze"): Entry(Kind.DNS, body=_dns_lookup, own=_MSG_OWN),
     # DKIM SSE streams (app.web.checks_stream): check.run on the domain / dns.tools (free).
     # The free route needs `?name=`; without it permitted roles get 422 (decided before streaming).
     ("GET", "/domains/{domain_id}/authentication"): Entry(Kind.DOMAIN),
