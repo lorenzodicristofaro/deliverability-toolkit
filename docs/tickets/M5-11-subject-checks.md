@@ -11,4 +11,4 @@ Acceptance criteria:
 - Thresholds (e.g. long-subject length) are constants in one place and documented as heuristics, NOT vendor guidance (`unverified`; no source claims). Findings (M5-14) must phrase them as advisory.
 - Table-driven tests: empty, None, emoji, CJK/Arabic/Hebrew (no case), mixed scripts, 10k-char input (capped), control chars, bidi override characters (flagged).
 New i18n keys: none
-Status: todo
+Status: done
