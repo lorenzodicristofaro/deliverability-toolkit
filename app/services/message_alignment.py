@@ -20,9 +20,9 @@ unusable, see `reason`) and `not_evaluated` (no identifier at all). Never aligne
 data. Relaxed match = same organizational domain (`app.core.org_domain`); when either name is
 a public suffix (no organizational domain) only an exact match counts.
 
-`computed_dmarc` is `pass` when any pair is `aligned`, `fail` when no pair is aligned and none
-is `unknown`, else `not_evaluated`. `dmarc_mismatch` is set when the stated dmarc result
-(pass or fail) disagrees with the computed one; M4-09 turns it into a finding.
+`computed_dmarc` is `pass` when any pair is `aligned`, `fail` when no pair is aligned, none
+is `unknown` and some pair has a stated result, else `not_evaluated`. `dmarc_mismatch` is set
+when the stated dmarc result (pass or fail) disagrees with the computed one; M4-09 turns it into a finding.
 """
 
 from __future__ import annotations
@@ -62,6 +62,9 @@ class AlignmentPair:
     strict_aligned: bool
     stated_result: str | None  # as written by the receiver (lowercase), None when absent
     unverified_signature: bool
+    # Source of the stated result (None when none was used): lets M4-09 flag mixed sources.
+    authserv_id: str | None = None
+    authres_index: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,6 +72,8 @@ class AlignmentReport:
     pairs: tuple[AlignmentPair, ...]
     from_domains: tuple[str, ...]
     stated_dmarc: str | None
+    stated_dmarc_authserv_id: str | None
+    stated_dmarc_index: int | None
     computed_dmarc: DmarcComputed  # computed here from relaxed alignment
     dmarc_mismatch: bool
     truncated: bool
@@ -150,12 +155,14 @@ def _dkim_signature_d(raw_value: str) -> _Ident:
     return _Ident(None, "missing_d")
 
 
-def _topmost(headers: tuple[AuthResHeader, ...], method: str) -> tuple[ResInfo, ...]:
+def _topmost(
+    headers: tuple[AuthResHeader, ...], method: str
+) -> tuple[AuthResHeader | None, tuple[ResInfo, ...]]:
     for header in headers:
         found = header.by_method().get(method)
         if found:
-            return tuple(found)
-    return ()
+            return header, tuple(found)
+    return None, ()
 
 
 def _pair(
@@ -165,6 +172,7 @@ def _pair(
     ident: _Ident,
     stated: str | None,
     unverified: bool = False,
+    src: AuthResHeader | None = None,
 ) -> AlignmentPair:
     def make(
         state: AlignmentState,
@@ -187,6 +195,8 @@ def _pair(
             strict_aligned=strict,
             stated_result=stated,
             unverified_signature=unverified,
+            authserv_id=src.authserv_id if src and stated is not None else None,
+            authres_index=src.index if src and stated is not None else None,
         )
 
     if source is None:
@@ -201,6 +211,9 @@ def _pair(
     relaxed = strict or (f_org is not None and f_org == i_org)
     if not relaxed:
         return make("misaligned", None, f_org, i_org, relaxed, strict)
+    if stated is None:
+        # A domain match without a stated result proves nothing (no_stated_result).
+        return make("unknown", "no_stated_result", f_org, i_org, relaxed, strict)
     state: AlignmentState = "aligned" if stated == "pass" else "aligned_but_not_passed"
     return make(state, None, f_org, i_org, relaxed, strict)
 
@@ -211,29 +224,40 @@ def analyze_alignment(block: HeaderBlock) -> AlignmentReport:
     headers = parse_all_authentication_results(block)
     pairs: list[AlignmentPair] = []
 
-    spf = _topmost(headers, "spf")
+    spf_hdr, spf = _topmost(headers, "spf")
     spf_info = spf[0] if spf else None
     stated_spf = spf_info.result if spf_info else None
     mailfrom = spf_info.smtp_mailfrom if spf_info else None
     if mailfrom is not None:
         pairs.append(
-            _pair("spf", "smtp.mailfrom", from_id, _mailfrom_identity(mailfrom), stated_spf)
+            _pair(
+                "spf",
+                "smtp.mailfrom",
+                from_id,
+                _mailfrom_identity(mailfrom),
+                stated_spf,
+                src=spf_hdr,
+            )
         )
     else:
+        # The stated spf result is about another identity (e.g. smtp.helo): do not borrow it.
         rp = _return_path_identity(block)
         if rp is None:
-            pairs.append(_pair("spf", None, from_id, _NONE, stated_spf))
+            pairs.append(_pair("spf", None, from_id, _NONE, None))
         else:
-            pairs.append(_pair("spf", "return_path", from_id, rp, stated_spf))
+            pairs.append(_pair("spf", "return_path", from_id, rp, None))
 
     dkim_pairs: list[AlignmentPair] = []
     stated_ds: set[str] = set()
-    for info in _topmost(headers, "dkim"):
+    dkim_hdr, dkim_infos = _topmost(headers, "dkim")
+    for info in dkim_infos:
         raw_d = info.header_d
         ident = _domain(raw_d) if raw_d else _Ident(None, "missing_d")
         if ident.domain:
             stated_ds.add(ident.domain)
-        dkim_pairs.append(_pair("dkim", "authres_header_d", from_id, ident, info.result))
+        dkim_pairs.append(
+            _pair("dkim", "authres_header_d", from_id, ident, info.result, src=dkim_hdr)
+        )
     for field in block.get_all("DKIM-Signature"):
         ident = _dkim_signature_d(field.raw_value)
         if ident.domain is not None and ident.domain in stated_ds:
@@ -244,13 +268,13 @@ def analyze_alignment(block: HeaderBlock) -> AlignmentReport:
     if not dkim_pairs:
         pairs.append(_pair("dkim", None, from_id, _NONE, None))
 
-    dmarc = _topmost(headers, "dmarc")
+    dmarc_hdr, dmarc = _topmost(headers, "dmarc")
     stated_dmarc = dmarc[0].result if dmarc else None
     states = {p.state for p in pairs}
     computed: DmarcComputed
     if "aligned" in states:
         computed = "pass"
-    elif "unknown" in states or states == {"not_evaluated"}:
+    elif "unknown" in states or not any(p.stated_result is not None for p in pairs):
         computed = "not_evaluated"
     else:
         computed = "fail"
@@ -263,6 +287,8 @@ def analyze_alignment(block: HeaderBlock) -> AlignmentReport:
         pairs=tuple(pairs),
         from_domains=from_domains,
         stated_dmarc=stated_dmarc,
+        stated_dmarc_authserv_id=dmarc_hdr.authserv_id if dmarc_hdr else None,
+        stated_dmarc_index=dmarc_hdr.index if dmarc_hdr else None,
         computed_dmarc=computed,
         dmarc_mismatch=mismatch,
         truncated=truncated,

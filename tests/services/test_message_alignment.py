@@ -123,11 +123,12 @@ def test_org_domains_reported():
         "return_path",
     )
     # no stated spf result: domain match is never "aligned"
-    assert p.state == "aligned_but_not_passed" and p.stated_result is None
+    assert p.state == "unknown" and p.reason == "no_stated_result" and p.stated_result is None
+    assert p.relaxed_aligned
 
 
 RETURN_PATH_CASES = [
-    ("Return-Path: <b@example.com>", "aligned_but_not_passed", None),
+    ("Return-Path: <b@example.com>", "unknown", "no_stated_result"),
     ("Return-Path: <>", "unknown", "null_return_path"),
     ("Return-Path:", "unknown", "null_return_path"),
     ("Return-Path: nonsense", "unknown", "invalid_address"),
@@ -201,8 +202,8 @@ def test_dkim_signature_unverified():
     p = _pair(r, "dkim")
     assert p.unverified_signature and p.stated_result is None
     assert p.identifier_source == "dkim_signature"
-    assert p.state == "aligned_but_not_passed" and p.strict_aligned
-    assert r.computed_dmarc == "fail"
+    assert p.state == "unknown" and p.reason == "no_stated_result" and p.strict_aligned
+    assert r.computed_dmarc == "not_evaluated"
 
 
 def test_dkim_signature_matching_stated_result_is_not_duplicated():
@@ -250,7 +251,7 @@ def test_no_data_is_not_evaluated():
 
 def test_no_authres_and_misaligned_means_computed_fail():
     r = _report("From: a@example.com", "Return-Path: <b@other.org>")
-    assert r.computed_dmarc == "fail"
+    assert r.computed_dmarc == "not_evaluated"  # nothing was stated by a receiver
 
 
 @pytest.mark.parametrize(
@@ -295,3 +296,45 @@ def test_dkim_pairs_capped():
     r = _report("From: a@example.com", *sigs)
     assert r.truncated
     assert len([p for p in r.pairs if p.kind == "dkim"]) == MAX_DKIM_PAIRS
+
+
+def test_signature_only_with_stated_dmarc_pass_is_not_a_mismatch():
+    r = _report(
+        "From: a@good.com",
+        "DKIM-Signature: v=1; d=good.com; s=a; b=y",
+        "Authentication-Results: mx.example.net; dmarc=pass header.from=good.com",
+    )
+    assert r.computed_dmarc == "not_evaluated" and not r.dmarc_mismatch
+
+
+def test_return_path_only_without_authres_is_not_evaluated():
+    r = _report("From: a@good.com", "Return-Path: <x@good.com>")
+    assert r.computed_dmarc == "not_evaluated"
+    assert _pair(r, "spf").reason == "no_stated_result"
+
+
+def test_helo_pass_does_not_align_return_path():
+    r = _report(
+        "From: a@good.com",
+        "Return-Path: <x@good.com>",
+        "Authentication-Results: mx.example.net; spf=pass smtp.helo=good.com",
+    )
+    p = _pair(r, "spf")
+    assert (p.state, p.stated_result, p.reason) == ("unknown", None, "no_stated_result")
+    assert r.computed_dmarc == "not_evaluated"
+
+
+def test_sources_are_carried_and_mixed_sources_visible():
+    r = _report(
+        "From: a@example.com",
+        "Authentication-Results: mx.a.net; dmarc=pass header.from=example.com",
+        "Authentication-Results: mx.b.net; spf=pass smtp.mailfrom=a@example.com;"
+        " dkim=pass header.d=example.com",
+        "DKIM-Signature: v=1; d=other.org; s=a",
+    )
+    assert (r.stated_dmarc_authserv_id, r.stated_dmarc_index) == ("mx.a.net", 0)
+    spf, dkim = _pair(r, "spf"), _pair(r, "dkim")
+    assert (spf.authserv_id, spf.authres_index) == ("mx.b.net", 1)
+    assert (dkim.authserv_id, dkim.authres_index) == ("mx.b.net", 1)
+    sig = _pair(r, "dkim", 1)
+    assert (sig.authserv_id, sig.authres_index) == (None, None)
