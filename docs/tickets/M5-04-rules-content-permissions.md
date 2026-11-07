@@ -15,4 +15,4 @@ Acceptance criteria:
 - Tenant admin of tenant A cannot manage tenant B rules nor global rules; instance admin without membership can manage global but gets nothing on a tenant it is not a member of unless the existing model already grants that (coder states the rule and tests it).
 - Existing matrix/enumeration tests updated; module docstring role matrix updated.
 New i18n keys: none
-Status: todo
+Status: done

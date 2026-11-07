@@ -108,7 +108,7 @@ Carried over from M0-07 QA:
   - [x] M5-01 CSRF form cap vs localized 413 (opus)
   - [x] M5-02 MIME cap consistency, any capped input is error-class
   - [x] M5-03 ReDoS-safe regex runner with enforced timeout (opus)
-  - [ ] M5-04 permissions content.analyze, rules.manage global/tenant (opus)
+  - [x] M5-04 permissions content.analyze, rules.manage global/tenant (opus)
   - [ ] M5-05 content_rules model + migration + repository (opus)
   - [ ] M5-06 dkim_selectors model + migration + repository + seed sync (opus)
   - [ ] M5-07 custom_checks model + migration + repository (opus)
