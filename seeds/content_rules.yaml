@@ -1,0 +1,56 @@
+# Content rules seed (M5-12). Synced into global `content_rules` rows at app start (seed_sync).
+# Keep it SMALL. A rule is `verified` only when a primary source (official page, read on
+# `verified_on`) states the practice it flags; such a rule cites that page in `sources`.
+# Everything else is an `unverified` heuristic and ships `enabled: false` until the maintainer
+# confirms it. Never add vendor/ISP "spam word" lists or attribute a rule to a mailbox provider
+# without its official page.
+# Display text comes from i18n keys CONTENT_RULE.<key>.title / CONTENT_RULE.<key>.advice (en, it).
+# `flags` are names: ignorecase, multiline, dotall, verbose, ascii. Regex patterns must pass
+# app.core.safe_regex.compile_checked. A key removed from this file disables the global row
+# (never deletes it); rows an instance admin modified (locally_modified) are left alone.
+rules:
+  # Google "Email sender guidelines", section "Message formatting requirements and guidelines":
+  # "don't send messages with subject lines starting with Re: or Fwd: unless the messages are
+  # actual replies or forwards". Rules have no target field yet: \A anchors the start of each
+  # searched text (subject, and the start of the body texts).
+  - key: subject_fake_reply_forward_prefix
+    kind: regex
+    pattern: '\A\s*(?:re|fwd)\s*:'
+    flags: [ignorecase]
+    weight: 20
+    category: deceptive_subject
+    severity: medium
+    language: null
+    enabled: true
+    status: verified
+    verified_on: 2026-11-07
+    sources:
+      - https://support.google.com/a/answer/81126
+
+  # Generic heuristic, no primary source: runs of three or more ! or ?.
+  - key: shouting_punctuation
+    kind: regex
+    pattern: '[!?]{3,}'
+    flags: []
+    weight: 5
+    category: formatting
+    severity: low
+    language: null
+    enabled: false
+    status: unverified
+    verified_on: null
+    sources: []
+
+  # Generic heuristic, no primary source: four or more consecutive all-caps words.
+  - key: all_caps_run
+    kind: regex
+    pattern: '\b[A-Z]{2,}(?:\s+[A-Z]{2,}){3,}\b'
+    flags: []
+    weight: 5
+    category: formatting
+    severity: low
+    language: null
+    enabled: false
+    status: unverified
+    verified_on: null
+    sources: []
