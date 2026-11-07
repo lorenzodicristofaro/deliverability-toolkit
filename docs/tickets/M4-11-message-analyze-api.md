@@ -1,7 +1,7 @@
 # M4-11 REST endpoint POST /api/v1/message/analyze
 Milestone: M4
 Branch: feature/m4-11-api
-Files in scope: app/api/v1/message.py, app/api/__init__.py (one include_router line), tests/api/test_message_analyze.py, locales/en.json, locales/it.json
+Files in scope: app/api/v1/message.py, app/api/__init__.py (one include_router line), tests/api/test_message_analyze.py,  tests/tenancy/test_matrix.py, locales/en.json, locales/it.json
 Out of scope: UI, CLI, new dependencies (no multipart: the body is raw), storage.
 Depends on: M4-06, M4-10
 Parallel-safe: no (router registry app/api/__init__.py and locale files)
@@ -14,4 +14,4 @@ Acceptance criteria:
 - Offline: test with sockets blocked and a DNS backend fake that asserts zero queries.
 - Nothing stored: test asserts no DB row counts change and no request content in logs (caplog).
 New i18n keys: api.message.error.unsupported_media_type, api.message.error.too_large, api.message.error.nul_byte, api.message.error.empty (en + it)
-Status: todo
+Status: done

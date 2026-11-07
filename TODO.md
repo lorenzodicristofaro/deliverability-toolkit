@@ -92,7 +92,7 @@ Carried over from M0-07 QA:
   - [x] M4-08 alignment analysis
   - [x] M4-09 anomaly findings + MSG_* texts
   - [x] M4-10 analysis service
-  - [ ] M4-11 REST endpoint
+  - [x] M4-11 REST endpoint
   - [ ] M4-12 web UI
   - [ ] M4-13 CLI `analyze`
   - [ ] M4-14 acceptance tests + docs/HEADERS.md
@@ -136,6 +136,7 @@ Carried over from M0-07 QA:
 - [ ] Security review checklist, dependency/license audit, v0.1.0 release
 
 ## Follow-ups (post-M1)
+- [ ] tests/tenancy World.send: add a raw-body option so the matrix can show 200 for permitted roles on raw-body routes (M4-11 QA nit).
 - [ ] Received redaction (done in M4-10: all `@` tokens masked). Remaining: `<local>` with no domain and fullwidth ＠ stay visible; Message-ID-style hop ids become None. Also a dedicated MSG_SECTION_FAILED code (en+it) instead of reusing MSG_PARSER_LIMIT, whose "exceeded limits" text misleads for internal failures.
 - [ ] Public RFC 5322 Date parser; message_findings parses Date via parse_received_values, so a valid Date with a comment containing ";" is reported MSG_DATE_INVALID (M4-09 QA). Also rename test_authserv_mismatch_lists_ids_escaped (no longer escaped).
 - [ ] Received: a 4-word date is reported as `date_no_timezone` without a shape check (received.py:256, M4-03 QA nit)
