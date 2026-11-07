@@ -15,6 +15,8 @@ from app.core.permissions import (
     MembershipGrant,
     PermissionDenied,
     Principal,
+    RuleScope,
+    RuleScopeResource,
     TenantResource,
     can,
     require,
@@ -32,11 +34,16 @@ SITUATIONS: dict[str, object] = {
     "own_unassigned_domain": DomainResource(A, UNASSIGNED),
     # Same domain id as an assigned one, but in tenant B: must never pass.
     "other_tenant_domain": DomainResource(B, ASSIGNED),
+    # M5-04 rule scopes.
+    "global_rules": RuleScopeResource(RuleScope.GLOBAL),
+    "own_tenant_rules": RuleScopeResource(RuleScope.TENANT, A),
+    "other_tenant_rules": RuleScopeResource(RuleScope.TENANT, B),
 }
 
 ACT = Action
 TENANT_LEVEL = {"own_tenant"}
 DOMAIN_ALL = {"own_assigned_domain", "own_unassigned_domain"}
+OWN_RULES = {"own_tenant_rules"}
 
 # role -> {action: allowed situations}; missing action means denied everywhere.
 ROLE_EXPECTED: dict[str, dict[Action, set[str]]] = {
@@ -52,6 +59,9 @@ ROLE_EXPECTED: dict[str, dict[Action, set[str]]] = {
         ACT.DNS_TOOLS: TENANT_LEVEL,
         ACT.CHECK_RUN: DOMAIN_ALL,
         ACT.MESSAGE_ANALYZE: TENANT_LEVEL,
+        ACT.CONTENT_ANALYZE: TENANT_LEVEL,
+        ACT.RULES_READ: TENANT_LEVEL,
+        ACT.RULES_MANAGE: OWN_RULES,
     },
     "admin": {
         ACT.TENANT_READ: TENANT_LEVEL,
@@ -64,6 +74,9 @@ ROLE_EXPECTED: dict[str, dict[Action, set[str]]] = {
         ACT.DNS_TOOLS: TENANT_LEVEL,
         ACT.CHECK_RUN: DOMAIN_ALL,
         ACT.MESSAGE_ANALYZE: TENANT_LEVEL,
+        ACT.CONTENT_ANALYZE: TENANT_LEVEL,
+        ACT.RULES_READ: TENANT_LEVEL,
+        ACT.RULES_MANAGE: OWN_RULES,
     },
     "analyst": {
         ACT.TENANT_READ: TENANT_LEVEL,
@@ -72,6 +85,8 @@ ROLE_EXPECTED: dict[str, dict[Action, set[str]]] = {
         ACT.DNS_TOOLS: TENANT_LEVEL,
         ACT.CHECK_RUN: DOMAIN_ALL,
         ACT.MESSAGE_ANALYZE: TENANT_LEVEL,
+        ACT.CONTENT_ANALYZE: TENANT_LEVEL,
+        ACT.RULES_READ: TENANT_LEVEL,
     },
     "client_viewer": {
         ACT.TENANT_READ: TENANT_LEVEL,
@@ -81,7 +96,11 @@ ROLE_EXPECTED: dict[str, dict[Action, set[str]]] = {
     },
     "none": {},
 }
-INSTANCE_ADMIN_EXTRA: dict[Action, set[str]] = {ACT.INSTANCE_MANAGE: {"instance"}}
+# The instance admin flag adds instance-level grants only, whatever the role (or none).
+INSTANCE_ADMIN_EXTRA: dict[Action, set[str]] = {
+    ACT.INSTANCE_MANAGE: {"instance"},
+    ACT.RULES_MANAGE: {"global_rules"},
+}
 
 
 def _grant(role: str, tenant: int = A, toggles: dict[str, Any] | None = None) -> MembershipGrant:
@@ -109,10 +128,10 @@ def _principal(role: str, *, admin: bool = False, active: bool = True) -> Princi
 def _expected(role: str, admin: bool, active: bool, action: Action, situation: str) -> bool:
     if not active:
         return False
-    allowed = dict(ROLE_EXPECTED[role])
+    allowed = set(ROLE_EXPECTED[role].get(action, set()))
     if admin:
-        allowed |= INSTANCE_ADMIN_EXTRA
-    return situation in allowed.get(action, set())
+        allowed |= INSTANCE_ADMIN_EXTRA.get(action, set())  # union: owner keeps own_tenant_rules
+    return situation in allowed
 
 
 MATRIX = [
@@ -126,8 +145,8 @@ MATRIX = [
 
 
 def test_matrix_size() -> None:
-    # 5 role kinds x admin flag x active flag x 12 actions x 6 situations.
-    assert len(MATRIX) == 5 * 2 * 2 * 12 * 6 == 1440
+    # 5 role kinds x admin flag x active flag x 15 actions x 9 situations.
+    assert len(MATRIX) == 5 * 2 * 2 * 15 * 9 == 2700
 
 
 @pytest.mark.parametrize(("role", "admin", "active", "action", "situation"), MATRIX)
@@ -159,6 +178,9 @@ def test_action_list_is_the_m1_set_plus_later_milestone_actions() -> None:
         "dns.tools",  # M2-11
         "check.run",  # M3-14
         "message.analyze",  # M4-06
+        "content.analyze",  # M5-04
+        "rules.read",  # M5-04
+        "rules.manage",  # M5-04
     }
 
 
@@ -355,7 +377,9 @@ def test_instance_admin_with_membership_tenant_none_gets_no_tenant_data() -> Non
         memberships=(MembershipGrant(None, MembershipRole.OWNER),),  # type: ignore[arg-type]
     )
     for action, situation in itertools.product(Action, SITUATIONS):
-        expected = action is Action.INSTANCE_MANAGE and situation == "instance"
+        expected = (action is Action.INSTANCE_MANAGE and situation == "instance") or (
+            action is Action.RULES_MANAGE and situation == "global_rules"
+        )
         assert can(p, action, SITUATIONS[situation]) is expected
 
 
@@ -835,3 +859,271 @@ def test_message_analyze_toggle_is_independent_of_dns_tools_and_check_run() -> N
     assert can(q, Action.MESSAGE_ANALYZE, TenantResource(A)) is False
     assert can(q, Action.DNS_TOOLS, TenantResource(A)) is True
     assert can(q, Action.CHECK_RUN, DomainResource(A, ASSIGNED)) is True
+
+
+# --- M5-04: content.analyze, rules.read, rules.manage (ticket M5-04) -------------------------
+# content.analyze / rules.read: tenant-level, owner/admin/analyst, never client viewers, toggles
+# only deny. rules.manage: scope `global` -> only the instance admin flag (no membership needed,
+# tenant role irrelevant, toggles do not apply); scope `tenant` -> owner/admin of that same,
+# active tenant, toggles deny, the instance flag adds nothing.
+
+TENANT_LEVEL_M5 = (Action.CONTENT_ANALYZE, Action.RULES_READ)
+M5_ROLES_TENANT_LEVEL = {"owner": True, "admin": True, "analyst": True, "client_viewer": False}
+M5_ROLES_MANAGE_TENANT = {"owner": True, "admin": True, "analyst": False, "client_viewer": False}
+M5_STATES = (
+    "member",
+    "instance_admin_member",
+    "inactive_user",
+    "inactive_instance_admin",
+    "active_elsewhere",
+    "no_active_tenant",
+    "no_membership",
+    "instance_admin_no_membership",
+)
+M5_RESOURCES: dict[str, object] = {
+    "global_rules": RuleScopeResource(RuleScope.GLOBAL),
+    "global_rules_str": RuleScopeResource("global"),  # type: ignore[arg-type]
+    "own_tenant_rules": RuleScopeResource(RuleScope.TENANT, A),
+    "own_tenant_rules_str": RuleScopeResource("tenant", A),  # type: ignore[arg-type]
+    "other_tenant_rules": RuleScopeResource(RuleScope.TENANT, B),
+    "own_tenant": TenantResource(A),
+    "other_tenant": TenantResource(B),
+    "own_domain": DomainResource(A, ASSIGNED),
+    "instance": InstanceResource(),
+}
+M5_TOGGLE_KINDS = (
+    "none",
+    "true",
+    "false",
+    "none_value",
+    "str_yes",
+    "str_true",
+    "zero",
+    "one",
+    "unrelated_false",
+)
+ALLOWING_TOGGLES = {"none", "true", "unrelated_false"}
+
+
+def _toggles_for(action: Action, kind: str) -> dict[str, Any]:
+    v = action.value
+    return {
+        "none": {},
+        "true": {v: True},
+        "false": {v: False},
+        "none_value": {v: None},
+        "str_yes": {v: "yes"},
+        "str_true": {v: "true"},
+        "zero": {v: 0},
+        "one": {v: 1},
+        "unrelated_false": {
+            k: False for k in ("message.analyze", "dns.tools", "check.run", "domain.read")
+        },
+    }[kind]
+
+
+def _m5_principal(role: str, toggles: dict[str, Any], state: str) -> Principal:
+    no_membership = state in {"no_membership", "instance_admin_no_membership"}
+    return Principal(
+        user_id=1,
+        is_active=state not in {"inactive_user", "inactive_instance_admin"},
+        is_instance_admin=state
+        in {"instance_admin_member", "inactive_instance_admin", "instance_admin_no_membership"},
+        active_tenant_id={"active_elsewhere": B, "no_active_tenant": None}.get(state, A),
+        memberships=() if no_membership else (_grant(role, toggles=toggles),),
+    )
+
+
+def _m5_expected(action: Action, role: str, toggle: str, state: str, resource: str) -> bool:
+    if state in {"inactive_user", "inactive_instance_admin"}:
+        return False
+    if action is Action.RULES_MANAGE and resource.startswith("global_rules"):
+        # Global scope: the instance flag alone decides; role and toggles are irrelevant.
+        return state in {"instance_admin_member", "instance_admin_no_membership"}
+    if state not in {"member", "instance_admin_member"} or toggle not in ALLOWING_TOGGLES:
+        return False
+    if action is Action.RULES_MANAGE:
+        return M5_ROLES_MANAGE_TENANT[role] and resource.startswith("own_tenant_rules")
+    return M5_ROLES_TENANT_LEVEL[role] and resource == "own_tenant"
+
+
+@pytest.mark.parametrize(
+    ("action", "role", "toggle", "state", "resource"),
+    [
+        pytest.param(a, r, t, st, res, id=f"{a}-{r}-{t}-{st}-{res}")
+        for a, r, t, st, res in itertools.product(
+            (*TENANT_LEVEL_M5, Action.RULES_MANAGE),
+            M5_ROLES_TENANT_LEVEL,
+            M5_TOGGLE_KINDS,
+            M5_STATES,
+            M5_RESOURCES,
+        )
+    ],
+)
+def test_m5_actions_roles_x_toggles_x_states(
+    action: Action, role: str, toggle: str, state: str, resource: str
+) -> None:
+    p = _m5_principal(role, _toggles_for(action, toggle), state)
+    expected = _m5_expected(action, role, toggle, state, resource)
+    res = M5_RESOURCES[resource]
+    assert can(p, action, res) is expected
+    assert can(p, action.value, res) is expected
+    if not expected:
+        with pytest.raises(PermissionDenied):
+            require(p, action, res)
+
+
+@pytest.mark.parametrize(
+    "resource",
+    [
+        RuleScopeResource("Global"),  # type: ignore[arg-type]
+        RuleScopeResource(" global"),  # type: ignore[arg-type]
+        RuleScopeResource("GLOBAL"),  # type: ignore[arg-type]
+        RuleScopeResource(""),  # type: ignore[arg-type]
+        RuleScopeResource("instance"),  # type: ignore[arg-type]
+        RuleScopeResource("tenant ", A),  # type: ignore[arg-type]
+        RuleScopeResource("Tenant", A),  # type: ignore[arg-type]
+        RuleScopeResource(None),  # type: ignore[arg-type]
+        RuleScopeResource(1),  # type: ignore[arg-type]
+        RuleScopeResource(b"global"),  # type: ignore[arg-type]
+        RuleScopeResource(RuleScope.GLOBAL, A),  # global with a tenant id is ambiguous
+        RuleScopeResource(RuleScope.GLOBAL, 0),
+        RuleScopeResource(RuleScope.TENANT),  # tenant scope without a tenant
+        RuleScopeResource(RuleScope.TENANT, 0),
+        RuleScopeResource(RuleScope.TENANT, -1),
+        RuleScopeResource(RuleScope.TENANT, True),  # True == 1 must not match tenant A
+        RuleScopeResource(RuleScope.TENANT, "1"),  # type: ignore[arg-type]
+        RuleScopeResource(RuleScope.TENANT, 1.0),  # type: ignore[arg-type]
+        None,
+        "global",
+        {"scope": "global"},
+    ],
+)
+def test_rules_manage_malformed_scope_denied(resource: object) -> None:
+    # Owner of A who is also instance admin: the strongest principal still gets nothing.
+    p = _p(is_instance_admin=True)
+    for action in Action:
+        assert can(p, action, resource) is False
+
+
+@pytest.mark.parametrize(
+    ("action", "resource"),
+    [
+        (Action.RULES_MANAGE, TenantResource(A)),
+        (Action.RULES_MANAGE, InstanceResource()),
+        (Action.RULES_MANAGE, DomainResource(A, ASSIGNED)),
+        (Action.RULES_READ, RuleScopeResource(RuleScope.TENANT, A)),
+        (Action.RULES_READ, RuleScopeResource(RuleScope.GLOBAL)),
+        (Action.RULES_READ, InstanceResource()),
+        (Action.CONTENT_ANALYZE, RuleScopeResource(RuleScope.TENANT, A)),
+        (Action.CONTENT_ANALYZE, DomainResource(A, ASSIGNED)),
+        (Action.CONTENT_ANALYZE, InstanceResource()),
+        (Action.INSTANCE_MANAGE, RuleScopeResource(RuleScope.GLOBAL)),
+        (Action.TENANT_MANAGE, RuleScopeResource(RuleScope.TENANT, A)),
+    ],
+)
+def test_m5_wrong_resource_type_denied(action: Action, resource: object) -> None:
+    p = _p(is_instance_admin=True)
+    assert can(p, action, resource) is False
+
+
+@pytest.mark.parametrize(
+    ("label", "principal"),
+    [
+        ("anonymous", None),
+        ("not a principal", object()),
+        ("dict principal", {"user_id": 1, "is_active": True, "is_instance_admin": True}),
+        ("inactive instance admin", _p(is_instance_admin=True, is_active=False)),
+        ("is_active truthy non-bool", _p(is_instance_admin=True, is_active=1)),
+        ("instance flag truthy non-bool", _p(is_instance_admin=1, memberships=())),
+        ("instance flag string", _p(is_instance_admin="true", memberships=())),
+        ("duplicate membership", _p(memberships=(_grant("owner"), _grant("admin")))),
+        ("unknown role", _p(memberships=(MembershipGrant(A, "superuser"),))),  # type: ignore[arg-type]
+        ("role not a string", _p(memberships=(MembershipGrant(A, 1),))),  # type: ignore[arg-type]
+        ("memberships not a tuple", _p(memberships=[_grant("owner")])),
+        (
+            "toggles not a mapping",
+            _p(memberships=(MembershipGrant(A, MembershipRole.OWNER, feature_toggles=None),)),  # type: ignore[arg-type]
+        ),
+    ],
+)
+def test_m5_actions_denied_for_malformed_principal(label: str, principal: object) -> None:
+    for action, resource in itertools.product(
+        (Action.CONTENT_ANALYZE, Action.RULES_READ, Action.RULES_MANAGE), M5_RESOURCES.values()
+    ):
+        assert can(principal, action, resource) is False, label
+
+
+def test_tenant_admin_cannot_manage_other_tenant_or_global_rules() -> None:
+    # Admin of A, also owner of B (agency): only A's tenant rules while A is active.
+    p = _p(memberships=(_grant("admin"), _grant("owner", B)))
+    assert can(p, Action.RULES_MANAGE, RuleScopeResource(RuleScope.TENANT, A)) is True
+    assert can(p, Action.RULES_MANAGE, RuleScopeResource(RuleScope.TENANT, B)) is False
+    assert can(p, Action.RULES_MANAGE, RuleScopeResource(RuleScope.GLOBAL)) is False
+    # Every toggle true still never grants global.
+    q = _p(memberships=(_grant("owner", toggles=_ALL_TOGGLES_TRUE),))
+    assert can(q, Action.RULES_MANAGE, RuleScopeResource(RuleScope.GLOBAL)) is False
+
+
+def test_instance_admin_without_membership_gets_global_rules_only() -> None:
+    # Rule (existing model, maintainer decision 2026-11-04): the instance flag grants
+    # instance-level resources only; inside a tenant it has no membership, so nothing.
+    for active in (A, None):
+        p = _p(is_instance_admin=True, memberships=(), active_tenant_id=active)
+        for action, resource in itertools.product(Action, M5_RESOURCES.values()):
+            expected = (
+                action is Action.RULES_MANAGE
+                and isinstance(resource, RuleScopeResource)
+                and resource.tenant_id is None
+            ) or (action is Action.INSTANCE_MANAGE and isinstance(resource, InstanceResource))
+            assert can(p, action, resource) is expected, (active, action, resource)
+
+
+def test_instance_admin_with_viewer_role_gets_global_but_not_tenant_rules() -> None:
+    p = _p(is_instance_admin=True, memberships=(_grant("client_viewer"),))
+    assert can(p, Action.RULES_MANAGE, RuleScopeResource(RuleScope.GLOBAL)) is True
+    assert can(p, Action.RULES_MANAGE, RuleScopeResource(RuleScope.TENANT, A)) is False
+    assert can(p, Action.RULES_READ, TenantResource(A)) is False
+    assert can(p, Action.CONTENT_ANALYZE, TenantResource(A)) is False
+
+
+def test_rules_manage_toggle_does_not_touch_global_scope() -> None:
+    # A per-membership toggle in the active tenant denies tenant rules, not global ones.
+    p = _p(is_instance_admin=True, memberships=(_grant("owner", toggles={"rules.manage": False}),))
+    assert can(p, Action.RULES_MANAGE, RuleScopeResource(RuleScope.TENANT, A)) is False
+    assert can(p, Action.RULES_MANAGE, RuleScopeResource(RuleScope.GLOBAL)) is True
+
+
+@pytest.mark.parametrize("action", [Action.CONTENT_ANALYZE, Action.RULES_READ, Action.RULES_MANAGE])
+def test_client_viewer_never_gets_m5_actions(action: Action) -> None:
+    grants = (
+        _grant("client_viewer"),
+        _grant("client_viewer", toggles=_ALL_TOGGLES_TRUE),
+        MembershipGrant(
+            A,
+            MembershipRole.CLIENT_VIEWER,
+            domain_ids=frozenset(range(1, 50)),
+            feature_toggles=MappingProxyType(_ALL_TOGGLES_TRUE),
+        ),
+        MembershipGrant(A, "client_viewer"),  # type: ignore[arg-type]
+    )
+    for grant in grants:
+        p = _p(memberships=(grant,))
+        for resource in M5_RESOURCES.values():
+            assert can(p, action, resource) is False
+
+
+def test_m5_toggles_are_independent() -> None:
+    # content.analyze and message.analyze have separate toggle keys; so do rules.read and
+    # rules.manage.
+    p = _p(memberships=(_grant("owner", toggles={"message.analyze": False}),))
+    assert can(p, Action.CONTENT_ANALYZE, TenantResource(A)) is True
+    q = _p(memberships=(_grant("owner", toggles={"content.analyze": False}),))
+    assert can(q, Action.CONTENT_ANALYZE, TenantResource(A)) is False
+    assert can(q, Action.MESSAGE_ANALYZE, TenantResource(A)) is True
+    r = _p(memberships=(_grant("owner", toggles={"rules.manage": False}),))
+    assert can(r, Action.RULES_READ, TenantResource(A)) is True
+    assert can(r, Action.RULES_MANAGE, RuleScopeResource(RuleScope.TENANT, A)) is False
+    s = _p(memberships=(_grant("owner", toggles={"rules.read": False}),))
+    assert can(s, Action.RULES_READ, TenantResource(A)) is False
+    assert can(s, Action.RULES_MANAGE, RuleScopeResource(RuleScope.TENANT, A)) is True
