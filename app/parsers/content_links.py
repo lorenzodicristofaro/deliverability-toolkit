@@ -97,7 +97,10 @@ class LinkAnalysis:
     sender_domains: tuple[str, ...] = ()  # organizational domains used for alignment
     # Web links whose host could not be parsed; they cannot be checked for alignment.
     malformed_count: int = 0
-    # None when no sender domain was given, no link has a host, or any web link is malformed.
+    # Links that could not be checked for alignment: malformed web links, over-length hrefs,
+    # and anchors beyond the link-count cap (their kind is unknown, so all of them count).
+    unevaluated_count: int = 0
+    # None when no sender domain was given, no link has a host, or any link is unevaluated.
     all_aligned: bool | None = None
     unaligned_count: int | None = None  # among links with a parsed host
     # Distinct registrable domains of web links outside the sender domains (all web domains
@@ -423,11 +426,13 @@ def analyze_links(
         links.append(info)
     with_host = [link for link in links if link.registrable_domain is not None]
     malformed = sum(1 for link in links if link.kind == "web" and link.malformed is not None)
+    too_long = sum(1 for link in links if link.kind == "too_long")
+    unevaluated = malformed + too_long + (len(anchors) - len(links))
     all_aligned: bool | None = None
     unaligned: int | None = None
     if senders and with_host:
         unaligned = sum(1 for link in with_host if not link.aligned)
-        all_aligned = unaligned == 0 if malformed == 0 else None
+        all_aligned = unaligned == 0 if unevaluated == 0 else None
     counts = Counter(
         link.registrable_domain
         for link in with_host
@@ -441,6 +446,7 @@ def analyze_links(
         cap_reason=cap_reason,
         sender_domains=senders,
         malformed_count=malformed,
+        unevaluated_count=unevaluated,
         all_aligned=all_aligned,
         unaligned_count=unaligned,
         other_domains=ordered,

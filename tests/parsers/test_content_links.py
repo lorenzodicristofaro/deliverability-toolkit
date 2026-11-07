@@ -207,6 +207,54 @@ def test_malformed_count_without_sender() -> None:
     assert (result.malformed_count, result.all_aligned) == (1, None)
 
 
+LONG = "https://bank.example/" + "a" * 5000
+
+
+@pytest.mark.parametrize(
+    ("hrefs", "max_links", "unevaluated", "malformed", "all_aligned", "unaligned"),
+    [
+        # everything evaluated and aligned
+        (["https://bank.example/", "https://www.bank.example/"], 500, 0, 0, True, 0),
+        # over-length href is not evaluated
+        (["https://bank.example/", LONG], 500, 1, 0, None, 0),
+        # over-length plus a malformed web link
+        (["https://bank.example/", LONG, "http://"], 500, 2, 1, None, 0),
+        # link-count cap: anchors beyond the cap are not evaluated
+        (
+            ["https://bank.example/", "https://evil.example/", "https://x.example/"],
+            1,
+            2,
+            0,
+            None,
+            0,
+        ),
+        (["https://bank.example/", "/rel"], 1, 1, 0, None, 0),
+        # exactly at the cap: nothing skipped
+        (["https://bank.example/", "https://www.bank.example/"], 2, 0, 0, True, 0),
+        # unaligned links are still counted; only the overall verdict is withheld
+        (["https://evil.example/", LONG], 500, 1, 0, None, 1),
+    ],
+)
+def test_unevaluated_links_block_all_aligned(
+    hrefs: list[str],
+    max_links: int,
+    unevaluated: int,
+    malformed: int,
+    all_aligned: bool | None,
+    unaligned: int,
+) -> None:
+    result = analyze_links(
+        [("x", h) for h in hrefs],
+        sender_domains=["bank.example"],
+        shorteners=(),
+        limits=LinkLimits(max_links=max_links),
+    )
+    assert (result.unevaluated_count, result.malformed_count) == (unevaluated, malformed)
+    assert result.all_aligned is all_aligned
+    assert result.unaligned_count == unaligned
+    assert result.capped is (unevaluated - malformed > 0)
+
+
 def test_homograph_flag_needs_mismatch_or_mixed_script() -> None:
     assert one("https://xn--pple-43d.com", "https://apple.com").homograph_suspect is True
     assert one("https://xn--bcher-kva.example", "bücher.example").homograph_suspect is False
