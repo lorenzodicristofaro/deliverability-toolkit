@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import Iterator
 from typing import Any
@@ -10,6 +11,7 @@ import pytest
 from fastapi import FastAPI, Request, Response
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
+from starlette.types import Message, Receive, Scope, Send
 
 from app.core import csrf, i18n
 from app.core.config import Settings
@@ -355,3 +357,211 @@ def test_deny_by_default_for_non_safe_methods(
 
 def test_safe_methods_set() -> None:
     assert frozenset({"GET", "HEAD", "OPTIONS", "TRACE"}) == csrf.SAFE_METHODS
+
+
+# --- M5-01: per-route form cap ------------------------------------------------------------------
+
+BIG_PATH = "/ui/big"
+BIG_CAP = csrf.MAX_FORM_BYTES + 8192
+csrf.register_form_cap(BIG_PATH, BIG_CAP)
+CHUNK = 64 * 1024
+
+
+def _capped_app() -> FastAPI:
+    """`_app()` plus an opted-in route that caps its own body and answers 413 above it."""
+    app = _app()
+
+    @app.post(BIG_PATH)
+    async def big(request: Request) -> Response:
+        size = 0
+        async for chunk in request.stream():
+            size += len(chunk)
+            if size > BIG_CAP:
+                return Response("too large", status_code=413)
+        return Response(str(size), status_code=200)
+
+    return app
+
+
+@pytest.fixture(scope="module")
+def capped() -> Iterator[TestClient]:
+    with TestClient(_capped_app()) as c:
+        yield c
+
+
+def _sized(n: int, token: str | None = SESSION_CSRF, token_last: bool = False) -> bytes:
+    """A urlencoded body of exactly `n` bytes, token first (browser order) or last."""
+    head = f"csrf_token={token}&" if token is not None and not token_last else ""
+    tail = f"&csrf_token={token}" if token is not None and token_last else ""
+    pad = n - len(head) - len(tail) - len("pad=")
+    assert pad >= 0
+    body = (head + "pad=" + "a" * pad + tail).encode()
+    assert len(body) == n
+    return body
+
+
+@pytest.mark.parametrize(
+    ("path", "cap", "over_status"),
+    [("/ui/action", csrf.MAX_FORM_BYTES, 403), (BIG_PATH, BIG_CAP, 413)],
+    ids=["default", "opted-in"],
+)
+@pytest.mark.parametrize(("delta", "ok"), [(-1, True), (0, True), (1, False)])
+def test_form_cap_boundaries(
+    capped: TestClient, path: str, cap: int, over_status: int, delta: int, ok: bool
+) -> None:
+    """No-JS style: token in the body, at cap-1, cap and cap+1."""
+    headers = {**_cookie_header(AUTH), "Content-Type": FORM}
+    response = capped.post(path, headers=headers, content=_sized(cap + delta))
+    assert response.status_code == (200 if ok else over_status)
+
+
+@pytest.mark.parametrize(
+    ("token", "token_last"),
+    [(None, False), ("", False), (OTHER_SESSION_CSRF, False), (SESSION_CSRF, True)],
+    ids=["missing", "empty", "wrong", "valid-but-last"],
+)
+@pytest.mark.parametrize("delta", [0, 1, 4 * 1024 * 1024], ids=["at-cap", "cap+1", "cap+4MiB"])
+def test_opted_in_route_still_enforces_csrf(
+    capped: TestClient, token: str | None, token_last: bool, delta: int
+) -> None:
+    """A big body is no bypass: a bad token, or one past the cap, is a CSRF 403."""
+    body = _sized(BIG_CAP + delta, token, token_last)
+    headers = {**_cookie_header(AUTH), "Content-Type": FORM}
+    response = capped.post(BIG_PATH, headers=headers, content=body)
+    if token_last and delta == 0:
+        assert response.status_code == 200  # complete body: the token may be anywhere
+    else:
+        assert response.status_code == 403
+        assert response.json() == {"detail": t("csrf.invalid", "en")}
+
+
+def test_opted_in_header_token_post_uses_route_cap(capped: TestClient) -> None:
+    """JS/HTMX style: the token travels in the header and only the route's cap applies."""
+    headers = {**_cookie_header(AUTH), "Content-Type": FORM, "X-CSRF-Token": SESSION_CSRF}
+    assert capped.post(BIG_PATH, headers=headers, content=_sized(BIG_CAP, None)).status_code == 200
+    over = _sized(BIG_CAP + 1, None)
+    assert capped.post(BIG_PATH, headers=headers, content=over).status_code == 413
+
+
+def test_default_route_regression_missing_token_is_403(capped: TestClient) -> None:
+    headers = {**_cookie_header(AUTH), "Content-Type": FORM}
+    assert capped.post("/ui/action", headers=headers, content=b"a=1").status_code == 403
+    assert capped.post(BIG_PATH, headers=headers, content=b"a=1").status_code == 403
+
+
+class _State:
+    def __init__(self) -> None:
+        self.settings = _settings()
+
+
+class _FakeApp:
+    def __init__(self) -> None:
+        self.state = _State()
+
+
+async def _drive(path: str, receive: Receive, content_length: str | None = None) -> int:
+    """Run CSRFMiddleware directly (session cookie, token in the body). The inner app drains
+    the body like a capped route: 413 above the path's form cap, else 200."""
+
+    async def inner(scope: Scope, inner_receive: Receive, send: Send) -> None:
+        size = 0
+        while True:
+            message = await inner_receive()
+            size += len(message.get("body", b""))
+            if size > csrf.form_cap_for(path):
+                await Response(status_code=413)(scope, inner_receive, send)
+                return
+            if not message.get("more_body", False):
+                break
+        await Response(status_code=200)(scope, inner_receive, send)
+
+    headers = [
+        (b"content-type", FORM.encode()),
+        (b"cookie", f"{SESSION_COOKIE_NAME}={SESSION_COOKIE}".encode()),
+    ]
+    if content_length is not None:
+        headers.append((b"content-length", content_length.encode()))
+    scope = {"type": "http", "method": "POST", "path": path, "headers": headers, "app": _FakeApp()}
+    statuses: list[int] = []
+
+    async def send(message: Message) -> None:
+        if message["type"] == "http.response.start":
+            statuses.append(message["status"])
+
+    await csrf.CSRFMiddleware(inner)(scope, receive, send)
+    return statuses[0]
+
+
+def _chunked(first: bytes, total_chunks: int) -> tuple[Receive, list[int]]:
+    """A streaming body with no Content-Length: `first`, then padding chunks; `pulled` counts
+    the messages taken from the server."""
+    pulled: list[int] = []
+
+    async def receive() -> Message:
+        index = len(pulled)
+        pulled.append(index)
+        body = first if index == 0 else b"a" * CHUNK
+        return {"type": "http.request", "body": body, "more_body": index < total_chunks}
+
+    return receive, pulled
+
+
+@pytest.mark.parametrize(
+    ("path", "cap", "status"),
+    [("/ui/action", csrf.MAX_FORM_BYTES, 403), (BIG_PATH, BIG_CAP, 413)],
+    ids=["default", "opted-in"],
+)
+def test_chunked_body_is_cut_at_cap(path: str, cap: int, status: int) -> None:
+    first = f"csrf_token={SESSION_CSRF}&pad=".encode()
+    receive, pulled = _chunked(first, 1000)
+    assert asyncio.run(_drive(path, receive)) == status
+    # Reading stops at the first chunk past the cap (1000 chunks were on offer).
+    assert len(pulled) == _messages_to_pass(cap, first)
+
+
+def _messages_to_pass(cap: int, first: bytes) -> int:
+    """Messages pulled until the running size first exceeds `cap`."""
+    return 1 + -(-(cap - len(first) + 1) // CHUNK)
+
+
+def test_chunked_body_without_token_in_prefix_is_403() -> None:
+    receive, pulled = _chunked(b"pad=", 1000)
+    assert asyncio.run(_drive(BIG_PATH, receive)) == 403
+    assert len(pulled) == _messages_to_pass(BIG_CAP, b"pad=")
+
+
+@pytest.mark.parametrize("declared", ["abc", "-1", "1e9", str(csrf.MAX_FORM_BYTES + 1)])
+def test_default_route_refuses_bad_declared_length_unread(declared: str) -> None:
+    receive, pulled = _chunked(f"csrf_token={SESSION_CSRF}".encode(), 0)
+    assert asyncio.run(_drive("/ui/action", receive, content_length=declared)) == 403
+    assert pulled == []
+
+
+@pytest.mark.parametrize(
+    ("prefix", "expected"),
+    [
+        (b"", b""),
+        (b"csrf_token=abc", b""),  # the last field may be truncated: never used
+        (b"csrf_token=abc&pad=aa", b"csrf_token=abc"),
+        (b"a=1&b=2&c", b"a=1&b=2"),
+        (b"&", b""),
+    ],
+)
+def test_complete_fields(prefix: bytes, expected: bytes) -> None:
+    assert csrf._complete_fields(prefix) == expected
+
+
+@pytest.mark.parametrize(
+    ("path", "max_bytes"),
+    [("relative", BIG_CAP), ("/x", csrf.MAX_FORM_BYTES), ("/x", 0), ("", BIG_CAP)],
+)
+def test_register_form_cap_rejects_bad_input(path: str, max_bytes: int) -> None:
+    with pytest.raises(ValueError):
+        csrf.register_form_cap(path, max_bytes)
+    assert csrf.form_cap_for(path) == csrf.MAX_FORM_BYTES
+
+
+def test_unregistered_paths_keep_default_cap() -> None:
+    assert csrf.form_cap_for("/ui/action") == csrf.MAX_FORM_BYTES
+    assert csrf.form_cap_for(BIG_PATH + "/") == csrf.MAX_FORM_BYTES  # exact match only
+    assert csrf.form_cap_for(BIG_PATH) == BIG_CAP

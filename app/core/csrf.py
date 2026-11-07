@@ -23,9 +23,16 @@ Two token kinds, chosen by whether the request carries a validly signed session 
    plant a cookie without knowing SECRET_KEY cannot forge a pair.
 
 All comparisons use `hmac.compare_digest`. Templates get the token through `csrf_token_for`.
-The form body is read (and replayed to the app) only when no header token is present; bodies
-larger than `MAX_FORM_BYTES` are refused (403) rather than buffered. Multipart bodies are not
-parsed here (python-multipart is not a dependency): multipart forms must send the header.
+The form body is read (and replayed to the app) only when no header token is present, and never
+buffered beyond the route's form cap. Default cap: `MAX_FORM_BYTES`; a larger body is refused
+(403). A route that accepts larger forms opts in with `register_form_cap(path, max_bytes)` (M5-01:
+the message analyzer; later the content analyzer). For such a route the body is read up to its
+cap; if it is larger, the token is taken from the complete fields of the read prefix (forms put the
+hidden `csrf_token` input first, so browsers serialize it first). A valid token lets the request
+through, prefix replayed and the rest streamed, so the route answers with its own localized 413
+(it caps its body itself); a missing or invalid token is still a 403, so a big body never
+bypasses the check. Multipart bodies are not parsed here (python-multipart is not a
+dependency): multipart forms must send the header.
 """
 
 from __future__ import annotations
@@ -61,6 +68,8 @@ SAFE_METHODS: Final = frozenset({"GET", "HEAD", "OPTIONS", "TRACE"})
 EXEMPT_PATHS: Final = frozenset({"/healthz"})
 MAX_FORM_BYTES: Final = 1024 * 1024
 _FORM_CONTENT_TYPE = "application/x-www-form-urlencoded"
+# Exact request path -> form cap in bytes, for routes that accept forms over MAX_FORM_BYTES.
+_FORM_CAPS: dict[str, int] = {}
 
 _SESSION_LABEL = b"deliverability-toolkit/csrf-session/v1"
 _DOUBLE_SUBMIT_LABEL = b"deliverability-toolkit/csrf-double-submit/v1"
@@ -137,16 +146,27 @@ def csrf_token_for(conn: HTTPConnection, response: Response, settings: Settings)
     return value
 
 
+def register_form_cap(path: str, max_bytes: int) -> None:
+    """Opt `path` (exact match) in to a form cap above `MAX_FORM_BYTES`. The route must enforce
+    `max_bytes` on its own body and answer an oversize body with its localized 413."""
+    if not path.startswith("/") or max_bytes <= MAX_FORM_BYTES:
+        raise ValueError("form cap must be registered for an absolute path above MAX_FORM_BYTES")
+    _FORM_CAPS[path] = max_bytes
+
+
+def form_cap_for(path: str) -> int:
+    """The form cap the middleware applies to `path`."""
+    return _FORM_CAPS.get(path, MAX_FORM_BYTES)
+
+
 def _forbidden(scope: Scope) -> Response:
     lang = resolve_language(accept_language=Headers(scope=scope).get("accept-language"))
     return JSONResponse({"detail": t(CSRF_INVALID_KEY, lang)}, status_code=403)
 
 
-class _BodyTooLarge(Exception):
-    pass
-
-
-async def _read_body(receive: Receive) -> tuple[bytes, list[Message]]:
+async def _read_body(receive: Receive, cap: int) -> tuple[bytes, list[Message], bool]:
+    """Read messages until the body ends or exceeds `cap`. Returns (body truncated to `cap`,
+    the messages read, complete). Reading stops at the first chunk past the cap."""
     chunks: list[bytes] = []
     messages: list[Message] = []
     size = 0
@@ -157,12 +177,23 @@ async def _read_body(receive: Receive) -> tuple[bytes, list[Message]]:
             break
         chunk = message.get("body", b"")
         size += len(chunk)
-        if size > MAX_FORM_BYTES:
-            raise _BodyTooLarge
         chunks.append(chunk)
+        if size > cap:
+            return b"".join(chunks)[:cap], messages, False
         if not message.get("more_body", False):
             break
-    return b"".join(chunks), messages
+    return b"".join(chunks), messages, True
+
+
+def _complete_fields(prefix: bytes) -> bytes:
+    """The fields of a truncated urlencoded body that are certainly complete."""
+    end = prefix.rfind(b"&")
+    return prefix[:end] if end >= 0 else b""
+
+
+def _declared_too_large(headers: Headers, cap: int) -> bool:
+    declared = headers.get("content-length")
+    return declared is not None and (not declared.isdigit() or int(declared) > cap)
 
 
 def _form_token(body: bytes) -> str | None:
@@ -202,12 +233,18 @@ class CSRFMiddleware:
         downstream_receive = receive
         content_type = headers.get("content-type", "").split(";", 1)[0].strip().lower()
         if submitted is None and content_type == _FORM_CONTENT_TYPE:
-            try:
-                body, messages = await _read_body(receive)
-            except _BodyTooLarge:
+            path = scope.get("path", "")
+            cap = form_cap_for(path)
+            opted_in = path in _FORM_CAPS
+            if not opted_in and _declared_too_large(headers, cap):
                 await _forbidden(scope)(scope, receive, send)
                 return
-            submitted = _form_token(body)
+            body, messages, complete = await _read_body(receive, cap)
+            if not complete and not opted_in:
+                await _forbidden(scope)(scope, receive, send)
+                return
+            submitted = _form_token(body if complete else _complete_fields(body))
+            del body
             pending = list(messages)
 
             async def replay() -> Message:

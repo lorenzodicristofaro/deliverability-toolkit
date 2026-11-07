@@ -12,8 +12,11 @@ progressive enhancement and reads the `.eml` into the textarea in the browser. T
 with a hard cap (declared length first, then counted while streaming). A urlencoded text can be
 up to three times larger than the raw bytes (`%0D%0A` per CRLF), so the transport cap is
 `3 * MAX_RAW_BYTES + overhead` and the real limit, `MAX_RAW_BYTES` on the decoded message, is
-checked afterwards. Note that the CSRF middleware refuses form bodies over its own
-`MAX_FORM_BYTES` when no `X-CSRF-Token` header is sent.
+checked afterwards. The route registers `MAX_BODY_BYTES` as its CSRF form cap
+(`csrf.register_form_cap`), so a no-JS post with the token in the body is read up to the same
+cap and an oversize body gets this route's localized 413, not the CSRF 403 (M5-01). The file
+picker's `data-max-bytes` is `MAX_RAW_BYTES`, the constant the server checks on the decoded
+message.
 
 Nothing is stored. The pasted text is never echoed back, logged, or put in a URL or cookie, and
 every response is `Cache-Control: no-store`. Values from the message are autoescaped by Jinja
@@ -31,6 +34,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, Response
 from starlette.concurrency import run_in_threadpool
 
+from app.core.csrf import register_form_cap
 from app.core.permissions import Action, Principal, TenantResource, can
 from app.parsers.message import MAX_RAW_BYTES
 from app.services.message_analysis import MessageAnalysis, analyze_message
@@ -44,6 +48,8 @@ FORM_OVERHEAD_BYTES: Final = 4096
 MAX_BODY_BYTES: Final = 3 * MAX_RAW_BYTES + FORM_OVERHEAD_BYTES
 _MAX_FIELDS: Final = 8
 _NO_STORE: Final = {"Cache-Control": "no-store"}
+
+register_form_cap("/tools/message", MAX_BODY_BYTES)
 
 __all__ = ["MAX_BODY_BYTES", "message_allowed", "router", "visible"]
 

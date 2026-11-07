@@ -17,7 +17,7 @@ from alembic import command
 from alembic.config import Config
 from fastapi.testclient import TestClient
 
-from app.core import i18n
+from app.core import csrf, i18n
 from app.core.config import Settings
 from app.core.db import create_db_engine, create_session_factory
 from app.core.i18n import t
@@ -99,8 +99,7 @@ def analyze(w: World, who: str, raw: str = MESSAGE, **kw: Any) -> Any:
 
 
 def raw_post(w: World, content: bytes) -> Any:
-    """A urlencoded body sent with the CSRF header (the middleware reads at most 1 MiB of
-    form body when the token travels in the body)."""
+    """A urlencoded body sent with the CSRF header (JS/HTMX style)."""
     token = _login(w, "analyst")
     assert token is not None
     return w.client.post(
@@ -110,6 +109,27 @@ def raw_post(w: World, content: bytes) -> Any:
             "Accept": "text/html",
             "Content-Type": "application/x-www-form-urlencoded",
             CSRF_HEADER: token,
+        },
+        follow_redirects=False,
+    )
+
+
+def form_post(w: World, size: int, token: str | None = "", **headers: str) -> Any:
+    """No-JS style: a urlencoded body of exactly `size` bytes with `csrf_token` first (browser
+    order), a small valid message and padding. `token=""` means the analyst's real token."""
+    real = _login(w, "analyst")
+    assert real is not None
+    head = "" if token is None else urlencode({"csrf_token": token or real}) + "&"
+    head += urlencode({"raw": "Subject: hi\r\n\r\nbody"}) + "&pad="
+    content = (head + "a" * (size - len(head))).encode()
+    assert len(content) == size
+    return w.client.post(
+        PATH,
+        content=content,
+        headers={
+            "Accept": "text/html",
+            "Content-Type": "application/x-www-form-urlencoded",
+            **headers,
         },
         follow_redirects=False,
     )
@@ -259,6 +279,55 @@ def test_413_message_is_italian_when_asked(world: World) -> None:
     )
     assert r.status_code == 413
     assert t("message.error.too_large", "it") in r.text
+
+
+# --- M5-01: CSRF form cap = route cap -----------------------------------------------------------
+
+
+def test_route_registers_its_cap_with_csrf() -> None:
+    assert csrf.form_cap_for(PATH) == MAX_BODY_BYTES
+    assert MAX_BODY_BYTES > csrf.MAX_FORM_BYTES
+
+
+def test_file_picker_max_bytes_is_the_server_cap(world: World) -> None:
+    r = get(world, "analyst", PATH)
+    assert f'data-max-bytes="{MAX_RAW_BYTES}"' in r.text
+    # The largest file the picker accepts fits the transport cap even fully percent-encoded.
+    assert 3 * MAX_RAW_BYTES <= MAX_BODY_BYTES
+
+
+@pytest.mark.parametrize(("delta", "status"), [(-1, 200), (0, 200), (1, 413)])
+def test_no_js_post_at_route_cap(world: World, spy: list[bytes], delta: int, status: int) -> None:
+    r = form_post(world, MAX_BODY_BYTES + delta)
+    assert r.status_code == status
+    if status == 413:
+        assert t("message.error.too_large") in r.text
+        assert spy == []
+    else:
+        assert spy == [b"Subject: hi\r\n\r\nbody"]
+
+
+def test_no_js_post_over_old_csrf_cap_is_analyzed(world: World, spy: list[bytes]) -> None:
+    r = form_post(world, csrf.MAX_FORM_BYTES + 1)
+    assert r.status_code == 200
+    assert len(spy) == 1
+
+
+def test_no_js_413_is_italian_when_asked(world: World) -> None:
+    r = form_post(world, MAX_BODY_BYTES + 1, **{"Accept-Language": "it"})
+    assert r.status_code == 413
+    assert t("message.error.too_large", "it") in r.text
+
+
+@pytest.mark.parametrize("token", [None, "x" * 43], ids=["missing", "wrong"])
+@pytest.mark.parametrize("size", [csrf.MAX_FORM_BYTES + 1, MAX_BODY_BYTES + 1])
+def test_big_body_does_not_bypass_csrf(
+    world: World, spy: list[bytes], token: str | None, size: int
+) -> None:
+    r = form_post(world, size, token)
+    assert r.status_code == 403
+    assert t("message.error.too_large") not in r.text
+    assert spy == []
 
 
 def test_italian_page(world: World) -> None:
