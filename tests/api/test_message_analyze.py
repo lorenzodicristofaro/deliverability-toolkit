@@ -331,7 +331,7 @@ def test_unparseable_input_is_data_not_an_http_error(world: tuple[World, Any]) -
     w, _ = world
     r = post(w, "analyst", b"no header block here")
     assert r.status_code == 200
-    assert r.json()["status"] == "fail"
+    assert r.json()["status"] == "error"
 
 
 # --- offline and nothing stored ----------------------------------------------------------------
