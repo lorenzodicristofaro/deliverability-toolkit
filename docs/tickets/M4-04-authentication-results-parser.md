@@ -15,4 +15,4 @@ Acceptance criteria:
 - Malformed table: missing authserv-id, unterminated quote or comment, missing `=`, empty result, duplicate method with conflicting results, semicolon garbage, 10k resinfo entries (cap MAX_RESINFO 200, flagged truncated), NUL, RFC 2047 junk, uppercase results, unknown ptype.
 - Examples cited from RFC 8601 section 2.7 / appendix B are used as fixtures (source noted in the test comment); other fixtures synthetic with example.com.
 New i18n keys: none
-Status: in-review
+Status: done

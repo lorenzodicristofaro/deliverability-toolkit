@@ -16,4 +16,4 @@ Acceptance criteria:
 - Hostile input table: NUL (rejected upstream, still no crash if passed), huge IPv6, bracket garbage, `from` repeated, 1 MB single token, nested parentheses 10k deep (regex must be linear: include a timing guard test with a bounded input, no ReDoS-prone patterns), non-ASCII host, empty Received.
 - Test fixtures inline and synthetic: example.com, 192.0.2.0/24, 198.51.100.0/24, 203.0.113.0/24, 2001:db8::/32. RFC 5321 section 4.4 / appendix D examples may be used and cited.
 New i18n keys: none
-Status: todo
+Status: done

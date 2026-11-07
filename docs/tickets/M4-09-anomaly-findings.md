@@ -13,4 +13,7 @@ Acceptance criteria:
 - Severity per code documented in a table in the module docstring. No vendor-specific expectation (no "Gmail requires X" claims; those need a verified provider-requirements data file in a later milestone).
 - Every code has `finding.<CODE>.title`, `.detail`, `.remediation` (where a remediation exists) in en AND it; details never embed raw header values beyond a bounded, escaped excerpt (<= 200 chars, control chars removed).
 New i18n keys: finding.MSG_*.title/detail/remediation for each code above (en + it)
+Open points:
+- Decide whether the Received `for` address in `raw` must be redacted in output or UI.
+- QA nit: any 4-word date is reported as `date_no_timezone` without checking its shape (received.py:256). Optionally tighten this.
 Status: todo

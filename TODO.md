@@ -84,8 +84,8 @@ Carried over from M0-07 QA:
 - Tickets (docs/tickets/):
   - [x] M4-01 raw message limits + header block parser (opus)
   - [ ] M4-02 MIME structure + size (opus)
-  - [ ] M4-03 Received chain + hop delays (opus)
-  - [ ] M4-04 Authentication-Results parser (opus)
+  - [x] M4-03 Received chain + hop delays (opus)
+  - [x] M4-04 Authentication-Results parser (opus)
   - [ ] M4-05 ARC chain parser (opus)
   - [x] M4-06 `message.analyze` permission (opus)
   - [x] M4-07 sample corpus + MANIFEST (provider samples unverified until maintainer supplies them)

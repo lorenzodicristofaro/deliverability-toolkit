@@ -17,4 +17,11 @@ Acceptance criteria:
 - `docs/HEADERS.md`: scope and the offline guarantee (no DNS: what is reported is what the receiving server STATED, signatures are not verified), input limits table, parser behaviour on malformed input, finding code list with severities, permission `message.analyze` and why, CLI usage and exit codes, how to add a corpus sample (sanitization checklist), list of unverified provider samples and what the maintainer must supply.
 New i18n keys: none
 Notes from M4-07 QA: MANIFEST `alignment` in the ARC entry means identifier alignment, not DMARC alignment (rename to `identifier_alignment` here); RFC 8601 B.3/B.4 Date and Received stamps use a non-RFC 5322 format copied from the RFC, so do not assert date parsing on them; MANIFEST facts are hand-written and must be checked against parser output.
+Notes for docs/HEADERS.md (from M4-03/M4-04 QA):
+- authres lowercases method/result names; `raw` keeps the original text.
+- Obsolete pvalue `"x" @ example.com` (whitespace around `@`) is not joined.
+- Received: unknown/military zones are read as -0000 with `date_zone_unknown`; a date with no zone gives None, never UTC.
+- More than 100 hops keeps the newest 100 (`truncated`); the 8 KiB cap is counted in UTF-8 bytes.
+- 1-digit time fields are accepted (lenient).
+- A keyword used as a value (`by id`) gives `missing_clause_value`.
 Status: todo
