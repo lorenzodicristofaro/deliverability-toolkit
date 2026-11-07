@@ -45,7 +45,8 @@ it or use the API or CLI to send the exact bytes.
 | Header count | 500 | `error` | `MSG_PARSER_LIMIT` (medium) | 200 / 200 | 2 |
 | `Received` hops | 100 (newest kept, `truncated`) | `error` | `MSG_PARSER_LIMIT` (medium) | 200 / 200 | 2 |
 | One `Received` hop | 8 KiB, counted in UTF-8 bytes | `error` | `MSG_RECEIVED_UNPARSED` (low), hop warning `hop_too_long` | 200 / 200 | 2 |
-| MIME depth | 10 | `warn` | `MSG_MIME_TRUNCATED` (low) | 200 / 200 | 1 |
+| MIME depth | 10 | `error` | `MSG_PARSER_LIMIT` (medium), also `MSG_MIME_TRUNCATED` (low) | 200 / 200 | 2 |
+| MIME boundary length | 70 | `error` | `MSG_PARSER_LIMIT` (medium), also `MSG_MIME_TRUNCATED` (low) | 200 / 200 | 2 |
 | MIME parts | 200 | `error` | `MSG_PARSER_LIMIT` (medium), also `MSG_MIME_TRUNCATED` (low) | 200 / 200 | 2 |
 | ARC instances | 50 (a 51-set chain is read as 50 sets plus ungrouped fields) | `warn` | `MSG_ARC_INVALID` (low) | 200 / 200 | 1 |
 
@@ -60,6 +61,8 @@ size check happens while streaming, so an oversized body is never buffered.
 ## Parser behaviour on malformed input
 
 - Nothing is truncated silently: a cap is reported (`truncated`, `MSG_PARSER_LIMIT`).
+- One rule: any capped input (header, `Received`, MIME parts, MIME depth, boundary length) is
+  error-class: `MSG_PARSER_LIMIT` and status `error`. `MSG_MIME_TRUNCATED` is only extra detail.
 - A bare CR is not a line delimiter. 8-bit bytes are decoded as UTF-8 with replacement.
 - Broken RFC 2047 encoded-words are kept as text and flagged (`MSG_ENCODED_HEADER_BROKEN`).
 - `Authentication-Results`: method and result names are lowercased; `raw` keeps the original text.
@@ -116,7 +119,7 @@ taken from the docstring of `app/services/message_findings.py`.
 | MSG_LIST_UNSUBSCRIBE_MISSING | info | no List-Unsubscribe |
 | MSG_LIST_UNSUBSCRIBE_NO_ONECLICK | info | List-Unsubscribe without RFC 8058 post |
 | MSG_ENCODED_HEADER_BROKEN | low | undecodable RFC 2047 encoded-word |
-| MSG_MIME_TRUNCATED | low | MIME walk stopped at a cap |
+| MSG_MIME_TRUNCATED | low | MIME walk stopped at a cap (detail) |
 | MSG_NO_TEXT_PART | low | no text/plain part |
 | MSG_PARSER_LIMIT | medium | input rejected or capped (error-class) |
 
