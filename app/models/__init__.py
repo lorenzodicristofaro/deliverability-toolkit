@@ -1,5 +1,6 @@
 from app.models.base import Base
 from app.models.content_rule import ContentRule
+from app.models.custom_check import CustomCheck
 from app.models.dkim_selector import DkimSelector
 from app.models.domain import Domain
 from app.models.instance_setup import InstanceSetup
@@ -11,6 +12,7 @@ from app.models.user import User
 __all__ = [
     "Base",
     "ContentRule",
+    "CustomCheck",
     "DkimSelector",
     "Domain",
     "DomainAccess",
