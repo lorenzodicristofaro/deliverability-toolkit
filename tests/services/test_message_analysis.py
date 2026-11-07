@@ -139,7 +139,15 @@ def test_redact_received(raw: str, expect: str) -> None:
 
 
 @pytest.mark.parametrize(
-    "clause", [f"for<{SECRET}>", f"for(c)<{SECRET}>", f"(for<{SECRET}>)", f"FOR\t{SECRET}"]
+    "clause",
+    [
+        f"for<{SECRET}>",
+        f"for(c)<{SECRET}>",
+        f"(for<{SECRET}>)",
+        f"FOR\t{SECRET}",
+        f"f\u200bor <{SECRET}>",
+        f"fo\u202er <{SECRET}>",
+    ],
 )
 def test_for_clause_forms_absent_from_json(clause: str) -> None:
     raw = (
@@ -334,3 +342,86 @@ def test_authres_failure_keeps_unrelated_findings(monkeypatch: pytest.MonkeyPatc
     assert "MSG_AUTHRES_MISSING" not in codes
     assert "authentication_results_failed" in {f.params.get("limits") for f in a.findings}
     assert a.authentication is None and a.received is not None
+
+
+def _hop_json(raw_hop: str) -> str:
+    raw = f"Received: {raw_hop}\r\nFrom: a@b.example\r\n\r\nx".encode()
+    return analyze_message(raw).model_dump_json()
+
+
+@pytest.mark.parametrize(
+    "hop",
+    [
+        f"from a.example by b\tf\u200bor <{SECRET}>; Tue, 03 Nov 2026 10:00:00 +0000",
+        f"from a.example by b\u200bFO\tR<{SECRET}>; Tue, 03 Nov 2026 10:00:00 +0000",
+        f"from a.example by b\u200bfor\u200b<{SECRET}>; Tue, 03 Nov 2026 10:00:00 +0000",
+        f"from a.example by b.example (envelope-from <{SECRET}>); Tue, 03 Nov 2026 10:00:00 +0000",
+        f"from a.example by b.example (user {SECRET} ok); Tue, 03 Nov 2026 10:00:00 +0000",
+        'from a.example by b.example (envelope-from "victim secret"@private.example);'
+        " Tue, 03 Nov 2026 10:00:00 +0000",
+        'from a.example by b.example (x <"victim secret"@private.example>);'
+        " Tue, 03 Nov 2026 10:00:00 +0000",
+        f"from a.example by {SECRET} with SMTP; Tue, 03 Nov 2026 10:00:00 +0000",
+        f"from {SECRET} by b.example id <{SECRET}>; Tue, 03 Nov 2026 10:00:00 +0000",
+    ],
+)
+def test_hop_address_leaks_closed(hop: str) -> None:
+    dumped = _hop_json(hop)
+    for needle in ("victim.secret", "private.example", "victim secret", "SECRET"):
+        assert needle not in dumped
+    assert '"victim' not in dumped
+
+
+def test_clean_raw_masks_at_tokens_and_envelope_from() -> None:
+    out = ma._clean_raw("from a (envelope-from <a@b>) by c (u@h) id 1")
+    assert "@" not in out and out.count("[redacted]") == 2
+    assert out.startswith("from a (envelope-from [redacted]")
+
+
+def test_hop_field_with_address_is_dropped_with_warning() -> None:
+    from app.parsers.received import ReceivedHop
+
+    hop = ReceivedHop(
+        index=0,
+        raw="from x by y",
+        parsed=True,
+        from_host="ok.example",
+        from_ip=None,
+        from_ip_reserved=None,
+        by_host=f"b\u200b@{SECRET}",
+        via=None,
+        with_protocol="SMTP<x>",
+        id=SECRET,
+        has_for=False,
+        timestamp=None,
+        delay_seconds=None,
+        warnings=(),
+    )
+    v = ma._hop(hop)
+    assert (v.by_host, v.with_protocol, v.id) == (None, None, None)
+    assert v.from_host == "ok.example"
+    assert v.warnings == ("hop_field_redacted",)
+
+
+def test_for_keyword_obfuscation_fuzz() -> None:
+    import random
+
+    base = f"from a.example by b.example for <{SECRET}>; Tue, 03 Nov 2026 10:00:00 +0000"
+    start = base.index("for <")
+    end = start + len("for <" + SECRET + ">")
+    chars = ["\t", "\u200b", "\u202e", "\r", "\n", "\x00", "\u2028", "\ufeff", "\x0b"]
+    # every position of the keyword + address, every inserted character
+    for pos in range(start, end + 1):
+        for ch in chars:
+            text = base[:pos] + ch + base[pos:]
+            assert SECRET not in ma._clean_raw(text)
+            assert "victim.secret" not in ma._clean_raw(text)
+    rng = random.Random(20261107)
+    for _ in range(300):
+        text = base
+        for _ in range(rng.randint(1, 4)):
+            p = rng.randint(start, end)
+            text = text[:p] + rng.choice(chars) + text[p:]
+        assert "victim.secret" not in ma._clean_raw(text)
+        if not any(c in text for c in "\r\n\x00\x0b\u2028"):
+            assert "victim.secret" not in _hop_json(text)
