@@ -10,7 +10,6 @@ from __future__ import annotations
 import ast
 import logging
 import re
-import socket
 import time
 from collections.abc import Iterator
 from pathlib import Path
@@ -38,6 +37,7 @@ from app.services import message_findings
 from app.services.message_analysis import MessageAnalysis, analyze_message
 from tests.support.dns_backend import fake_backend
 from tests.support.dns_zones import FakeServerSet
+from tests.support.socket_guard import db_endpoint, install
 from tests.tenancy.test_matrix import MATRIX
 from tests.web.test_domains_ui import CSRF_HEADER, KEY, ROOT, World, _login, _seed, post
 
@@ -67,13 +67,7 @@ def _strict_mode() -> Iterator[None]:
 
 @pytest.fixture(autouse=True)
 def _no_sockets(monkeypatch: pytest.MonkeyPatch) -> None:
-    def blocked(*_a: Any, **_k: Any) -> None:
-        raise AssertionError("network access in the M4 suite")
-
-    for name in ("connect", "connect_ex", "sendto"):
-        monkeypatch.setattr(socket.socket, name, blocked)
-    monkeypatch.setattr(socket, "getaddrinfo", blocked)
-    monkeypatch.setattr(socket, "gethostbyname", blocked)
+    install(monkeypatch, "the M4 suite", db_endpoint())
 
 
 @pytest.fixture
