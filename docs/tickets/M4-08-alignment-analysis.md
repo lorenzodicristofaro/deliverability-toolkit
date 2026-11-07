@@ -13,4 +13,4 @@ Acceptance criteria:
 - InvalidDomainName, IP literals, multiple From addresses, empty Return-Path `<>`, IDN (u-label vs punycode), uppercase, trailing dot, subdomain vs apex, public-suffix domains (`github.io`, `co.uk`) are tested in a table.
 - DMARC pass is reported only as the receiver stated it (dmarc=pass in Authentication-Results); alignment computed here is labelled `computed` vs `stated`, and a mismatch between computed and stated is surfaced to M4-09.
 New i18n keys: none (codes only; text in M4-09)
-Status: todo
+Status: done

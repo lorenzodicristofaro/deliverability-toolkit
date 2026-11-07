@@ -89,7 +89,7 @@ Carried over from M0-07 QA:
   - [x] M4-05 ARC chain parser (opus)
   - [x] M4-06 `message.analyze` permission (opus)
   - [x] M4-07 sample corpus + MANIFEST (provider samples unverified until maintainer supplies them)
-  - [ ] M4-08 alignment analysis
+  - [x] M4-08 alignment analysis
   - [ ] M4-09 anomaly findings + MSG_* texts
   - [ ] M4-10 analysis service
   - [ ] M4-11 REST endpoint
@@ -136,6 +136,7 @@ Carried over from M0-07 QA:
 - [ ] Security review checklist, dependency/license audit, v0.1.0 release
 
 ## Follow-ups (post-M1)
+- [ ] Received: a 4-word date is reported as `date_no_timezone` without a shape check (received.py:256, M4-03 QA nit)
 - [ ] M4-01 QA nits: make `decode_rfc2047` private or give it a public signature, and make `_lookup_charset` and `_Warnings` public (imported privately by app/parsers/mime.py, M4-02 QA); warn mixed endings on the header-terminating blank line; document that MAX_HEADER_BYTES excludes the blank line
 - [ ] authres `_Issues` and the DKIM tag-list parser are private; arc.py has local copies — consider a shared public helper (M4-05)
 - [ ] ARC (M4-05 QA nits): store a has_h_tag flag on the seal, not a lookup in the capped issue list (arc.py:530); an empty `h=` on a seal should also count as cv fail (GM reading of RFC 8617 4.1.3: an h tag is found).

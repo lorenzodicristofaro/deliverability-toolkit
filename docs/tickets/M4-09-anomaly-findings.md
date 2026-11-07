@@ -16,4 +16,8 @@ New i18n keys: finding.MSG_*.title/detail/remediation for each code above (en + 
 Open points:
 - Decide whether the Received `for` address in `raw` must be redacted in output or UI.
 - QA nit: any 4-word date is reported as `date_no_timezone` without checking its shape (received.py:256). Optionally tighten this.
+- M4-08 output: each alignment pair carries `authserv_id`/`authres_index`, and the report carries `stated_dmarc_authserv_id`/`stated_dmarc_index`. Flag mixed authserv-ids and do not treat AR results as trusted (RFC 8601 §5). `state` includes `aligned_but_not_passed` and `unknown` (reason `no_stated_result`). `computed_dmarc` ∈ pass/fail/not_evaluated.
+GM decisions (2026-11-07):
+- Findings never include the Received `for` address. M4-10 redacts the `for` clause from any raw hop excerpt it returns.
+- The 4-word date nit (received.py) is out of scope here; tracked in TODO.md Follow-ups.
 Status: todo
