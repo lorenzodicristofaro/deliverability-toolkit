@@ -91,7 +91,7 @@ Carried over from M0-07 QA:
   - [x] M4-07 sample corpus + MANIFEST (provider samples unverified until maintainer supplies them)
   - [x] M4-08 alignment analysis
   - [x] M4-09 anomaly findings + MSG_* texts
-  - [ ] M4-10 analysis service
+  - [x] M4-10 analysis service
   - [ ] M4-11 REST endpoint
   - [ ] M4-12 web UI
   - [ ] M4-13 CLI `analyze`
@@ -136,7 +136,7 @@ Carried over from M0-07 QA:
 - [ ] Security review checklist, dependency/license audit, v0.1.0 release
 
 ## Follow-ups (post-M1)
-- [ ] Message analysis privacy: addresses in other Received clauses/comments (e.g. `(envelope-from <a@b>)`) are not redacted; only the `for` clause is (M4-10 QA). Also a dedicated MSG_SECTION_FAILED code (en+it) instead of reusing MSG_PARSER_LIMIT, whose "exceeded limits" text misleads for internal failures.
+- [ ] Received redaction (done in M4-10: all `@` tokens masked). Remaining: `<local>` with no domain and fullwidth ＠ stay visible; Message-ID-style hop ids become None. Also a dedicated MSG_SECTION_FAILED code (en+it) instead of reusing MSG_PARSER_LIMIT, whose "exceeded limits" text misleads for internal failures.
 - [ ] Public RFC 5322 Date parser; message_findings parses Date via parse_received_values, so a valid Date with a comment containing ";" is reported MSG_DATE_INVALID (M4-09 QA). Also rename test_authserv_mismatch_lists_ids_escaped (no longer escaped).
 - [ ] Received: a 4-word date is reported as `date_no_timezone` without a shape check (received.py:256, M4-03 QA nit)
 - [ ] M4-01 QA nits: make `decode_rfc2047` private or give it a public signature, and make `_lookup_charset` and `_Warnings` public (imported privately by app/parsers/mime.py, M4-02 QA); warn mixed endings on the header-terminating blank line; document that MAX_HEADER_BYTES excludes the blank line

@@ -18,4 +18,4 @@ GM notes (2026-11-07, from M4-09):
 - Use `build_message_findings(...)` and `rejected_input_findings(code)` from app/services/message_findings.py; pass `evaluated=result.evaluated` to CheckResult.build.
 - Redact the Received `for` clause from any raw hop excerpt returned.
 - Excerpts are raw text (not HTML-escaped); escaping is done at render time.
-Status: todo
+Status: done
