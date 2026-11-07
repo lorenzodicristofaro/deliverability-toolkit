@@ -213,6 +213,11 @@ def test_verified_sample_facts(sample: dict[str, Any]) -> None:
         for kind in ("spf", "dkim"):
             assert facts["identifier_alignment"][kind] == "aligned"
             assert any(p.relaxed_aligned for p in a.alignment.pairs if p.kind == kind), kind
+            # the RFC sample uses smtp.from / header.i, which the parser does not take as a
+            # stated result: it keeps the pair `unknown` with reason `no_stated_result`
+            assert {(p.state, p.reason) for p in a.alignment.pairs if p.relaxed_aligned} == {
+                ("unknown", "no_stated_result")
+            }
     if facts.get("must_not_crash"):
         for defect in facts["defects"]:
             assert DEFECTS[defect](a), defect
@@ -492,35 +497,133 @@ def test_every_referenced_m4_key_exists_in_both_locales() -> None:
         assert missing == [], (lang, missing)
 
 
+_KEY = re.compile(r"^[a-z][a-z0-9_]*(\.[A-Za-z0-9_]+)+\.?$")
+_T_CALL = re.compile(r"""\bt\(\s*(["'])[^"']*\1""")
+_JINJA_EXPR = re.compile(r"\{\{(.*?)\}\}", re.S)
+_TEXT_ATTRS = re.compile(
+    r"""\b(placeholder|title|aria-label|alt|value)\s*=\s*("[^"]*"|'[^']*')""", re.S
+)
+_LETTERS = re.compile(r"[A-Za-z]{2,}")
+
+
+def _expr_literals(expr: str) -> list[str]:
+    """String literals with letters in a Jinja expression, outside t("key") calls."""
+    expr = _T_CALL.sub("t()", expr)
+    found = re.finditer(r"""(["'])([^"']*)\1""", expr)
+    return [m.group(2) for m in found if _LETTERS.search(m.group(2))]
+
+
+def scan_template(src: str) -> list[str]:
+    """Hardcoded user-facing text in a template: text nodes, literals printed by `{{ }}` and
+    the text attributes placeholder, title, aria-label, alt and value."""
+    src = re.sub(r"\{#.*?#\}", "", src, flags=re.S)
+    src = re.sub(r"\{%.*?%\}", "", src, flags=re.S)
+    src = re.sub(r"<(script|style)\b.*?</\1>", "", src, flags=re.S)
+    found: list[str] = []
+    for tag in re.finditer(r"<[^>]*>", src, flags=re.S):
+        for attr in _TEXT_ATTRS.finditer(tag.group(0)):
+            value = attr.group(2)[1:-1]
+            for expr in _JINJA_EXPR.findall(value):
+                found += _expr_literals(expr)
+            found += _LETTERS.findall(_JINJA_EXPR.sub("", value))
+    text = re.sub(r"<[^>]*>", "", src, flags=re.S)
+    for expr in _JINJA_EXPR.findall(text):
+        found += _expr_literals(expr)
+    plain = re.sub(r"&\w+;", "", _JINJA_EXPR.sub("", text))
+    found += re.findall(r"[A-Za-z]{3,}", plain)
+    return found
+
+
+# Non-text literals the CLI may use: option names, mode words and status names.
+_CLI_ALLOWED = frozenset({"text", "json", "error", "warn", "fail", "rb", "--format", "--lang"})
+
+
+def scan_python(source: str, catalogue: dict[str, str]) -> list[str]:
+    """String literals with letters that are neither docstrings, i18n keys (existing in the
+    catalogue, or a key prefix) nor an allowed non-text word."""
+    tree = ast.parse(source)
+    skip: set[int] = set()
+    for n in ast.walk(tree):
+        if (
+            isinstance(n, (ast.Module, ast.FunctionDef, ast.ClassDef))
+            and n.body
+            and isinstance(n.body[0], ast.Expr)
+            and isinstance(n.body[0].value, ast.Constant)
+        ):
+            skip.add(id(n.body[0].value))
+    out: list[str] = []
+    for n in ast.walk(tree):
+        if not (isinstance(n, ast.Constant) and isinstance(n.value, str)) or id(n) in skip:
+            continue
+        v = n.value
+        if not re.search(r"[A-Za-z]", v) or v in _CLI_ALLOWED:
+            continue
+        if _KEY.match(v) and (v in catalogue or v.endswith(".")):
+            continue
+        out.append(v)
+    return out
+
+
 def test_no_hardcoded_text_in_m4_templates() -> None:
     assert M4_TEMPLATES
     for path in M4_TEMPLATES:
-        text = path.read_text()
-        text = re.sub(r"\{#.*?#\}", "", text, flags=re.S)
-        text = re.sub(r"\{%.*?%\}", "", text, flags=re.S)
-        text = re.sub(r"\{\{.*?\}\}", "", text, flags=re.S)
-        text = re.sub(r"<(script|style)\b.*?</\1>", "", text, flags=re.S)
-        text = re.sub(r"<[^>]*>", "", text, flags=re.S)
-        words = re.findall(r"[A-Za-z]{3,}", re.sub(r"&\w+;", "", text))
-        assert words == [], (path.name, words)
+        assert scan_template(path.read_text()) == [], path.name
 
 
 def test_no_hardcoded_text_in_the_cli_command() -> None:
-    tree = ast.parse((APP / "cli" / "analyze.py").read_text())
-    docstrings = {
-        id(n.body[0].value)
-        for n in ast.walk(tree)
-        if isinstance(n, (ast.Module, ast.FunctionDef, ast.ClassDef))
-        and n.body
-        and isinstance(n.body[0], ast.Expr)
-        and isinstance(n.body[0].value, ast.Constant)
-    }
-    offenders = [
-        n.value
-        for n in ast.walk(tree)
-        if isinstance(n, ast.Constant)
-        and isinstance(n.value, str)
-        and id(n) not in docstrings
-        and re.search(r"[A-Za-z]{3,}\s+[A-Za-z]{3,}", n.value)
-    ]
-    assert offenders == []
+    cat = i18n.load_catalogue("en")
+    assert scan_python((APP / "cli" / "analyze.py").read_text(), cat) == []
+
+
+@pytest.mark.parametrize(
+    "html",
+    [
+        "<p>Hello world</p>",
+        '<input placeholder="Paste here">',
+        '<a title="Open">x</a>',
+        '<button aria-label="Close">x</button>',
+        '<img alt="Logo" src="x">',
+        '<input type="submit" value="Analyze">',
+        '<p>{{ "Literal" }}</p>',
+        "<p>{{ 'Literal' if x else t('message.ok') }}</p>",
+        "<input title=\"{{ 'Literal' }}\">",
+        "<p>{# comment #}Stray</p>",
+    ],
+)
+def test_template_scanner_catches_planted_text(html: str) -> None:
+    assert scan_template(html) != []
+
+
+@pytest.mark.parametrize(
+    "html",
+    [
+        '<p>{{ t("message.section.summary") }}</p>',
+        '<input placeholder="{{ t(\'message.x\') }}" value="{{ csrf_token() }}">',
+        "<p class=\"{{ 'failure' if x else 'ok' }}\">{{ '· ' * 2 }}{{ v|visible }}</p>",
+        "{# Only a comment #}{% if x %}<br>{% endif %}",
+    ],
+)
+def test_template_scanner_accepts_keys_and_non_text(html: str) -> None:
+    assert scan_template(html) == []
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        'typer.echo("Error")',
+        'typer.echo("Usage: analyze FILE")',
+        'print("Done")',
+        'x = f"Hop {n}"',
+        'typer.echo("message.section.nonexistent")',
+    ],
+)
+def test_python_scanner_catches_planted_text(code: str) -> None:
+    assert scan_python(code, {"message.section.summary": "x"}) != []
+
+
+def test_python_scanner_accepts_keys_docstrings_and_allowed_words() -> None:
+    code = (
+        '"""Module doc words."""\nx = t("message.section.summary")\n'
+        'y = "json"\nz = "cli.check.status."'
+    )
+    assert scan_python(code, {"message.section.summary": "x"}) == []

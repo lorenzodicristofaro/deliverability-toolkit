@@ -36,18 +36,18 @@ it or use the API or CLI to send the exact bytes.
 
 | Limit | Value | Result |
 |---|---|---|
-| Raw message | 2 MiB | REST/UI 413, CLI exit 2 |
-| Empty input | - | REST/UI 422, CLI exit 2 |
-| NUL byte | - | REST/UI 422, CLI exit 2 |
+| Raw message | 2 MiB | REST 413, UI 413, CLI exit 2 (not analyzed) |
+| Empty input | - | REST 422, UI 422, CLI exit 2 (not analyzed) |
+| NUL byte | - | REST 422, UI 422, CLI exit 2 (not analyzed) |
 | Header block | 128 KiB | status `error`, finding `MSG_PARSER_LIMIT` |
 | Physical header line | 8 KiB | status `error`, `MSG_PARSER_LIMIT` |
 | Unfolded header field | 64 KiB | status `error`, `MSG_PARSER_LIMIT` |
 | Header count | 500 | status `error`, `MSG_PARSER_LIMIT` |
-| `Received` hops | 100 (newest kept, `truncated`); 8 KiB per hop, counted in UTF-8 bytes | partial result |
+| `Received` hops | 100 (newest kept, `truncated`); 8 KiB per hop, counted in UTF-8 bytes | more than 100 hops: status `error`, `MSG_PARSER_LIMIT` (medium); the newest 100 are kept and analyzed |
 | MIME depth / parts | 10 / 200 | partial result, `MSG_MIME_TRUNCATED` |
 | ARC instances | 50 | structural issue |
 
-An input the analyzer refuses is data: HTTP 200 with status `error`, never a crash. The REST
+Only the first three rows (size, empty, NUL) are refused before analysis. Every other limit is data: HTTP 200 on REST and UI, exit 2 on the CLI, status `error` with a `MSG_PARSER_LIMIT` finding, never a crash. The REST
 size check happens while streaming, so an oversized body is never buffered.
 
 ## Parser behaviour on malformed input

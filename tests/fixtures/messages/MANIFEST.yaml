@@ -114,7 +114,7 @@ samples:
     sources:
       - https://www.rfc-editor.org/rfc/rfc5322.txt (section 2.2.3)
     verified_on: '2026-11-07'
-    notes: "Hand-written. 5000 continuation lines in one Subject (RFC 5322 2.2.3 folding). The source cites the rule being violated, not a provider claim."
+    notes: "Hand-written STRESS sample, not a rule violation: 5000 continuation lines in one Subject. RFC 5322 2.2.3 defines folding but sets no limit on the number of folds; the analyzer's own caps bound it. The source cites the folding syntax only, not a provider claim."
     facts:
       must_not_crash: true
       defects: []  # 5000 short folds stay under the parser caps: accepted, no defect reported
