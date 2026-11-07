@@ -24,9 +24,12 @@ a public suffix itself) the host itself is used, as in ``app.services.message_fi
 
 Heuristics (not vendor rules): the masked-link test extracts a host from the visible text only
 when the text token has an explicit scheme, starts with ``www.``, or ends in a suffix known to
-the Public Suffix List; ``mixed_script`` groups Han/Hiragana/Katakana/Hangul as one script so
-ordinary Japanese/Korean labels are not flagged, and it cannot see single-script homographs
-(an all-Cyrillic label), for which only the ``idn`` flag is set. The default caps (500 links,
+the Public Suffix List (so file names whose extension is also a TLD, such as ``readme.md`` or
+``setup.zip``, are read as hosts). Without a scheme an IP is accepted from the text only as a
+plain decimal dotted quad (``version 1.2`` is not read as ``1.0.0.2``). ``mixed_script``
+groups Han/Hiragana/Katakana/Hangul as one script so ordinary Japanese/Korean labels are not
+flagged, and it cannot see single-script homographs (an all-Cyrillic label), for which only the
+``idn`` flag is set. The default caps (500 links,
 4096 characters per href, 512 characters of visible text per link) are conservative bounds chosen
 here, not taken from any specification.
 """
@@ -92,9 +95,11 @@ class LinkAnalysis:
     capped: bool = False
     cap_reason: str | None = None  # link_count | url_length (first one hit)
     sender_domains: tuple[str, ...] = ()  # organizational domains used for alignment
-    # None when no sender domain was given or no link has a host.
+    # Web links whose host could not be parsed; they cannot be checked for alignment.
+    malformed_count: int = 0
+    # None when no sender domain was given, no link has a host, or any web link is malformed.
     all_aligned: bool | None = None
-    unaligned_count: int | None = None
+    unaligned_count: int | None = None  # among links with a parsed host
     # Distinct registrable domains of web links outside the sender domains (all web domains
     # when no sender is given), most common first.
     other_domains: tuple[str, ...] = ()
@@ -117,6 +122,10 @@ _AUTH_END_RE = re.compile(r"[/\\?#]")
 _TAB_NL = str.maketrans("", "", "\t\r\n")
 _TOKEN_STRIP = "<>()[]{}\"'.,;:!?«»“”‘’"
 _TEXT_TOKENS = 20
+_DOTTED_QUAD = re.compile(
+    r"(?:(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}"
+    r"(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])"
+)
 _CJK = frozenset({"CJK", "HIRAGANA", "KATAKANA", "HANGUL", "IDEOGRAPHIC"})
 
 
@@ -287,7 +296,12 @@ def _text_host(text: str, limits: LinkLimits) -> str | None:
             parsed = _parse_host(authority)
         except _BadHost:
             continue
-        if parsed.ip or explicit or parsed.host.startswith("www."):
+        if parsed.ip:
+            # Without a scheme only a plain dotted quad counts ("version 1.2" is not an IP).
+            if explicit or _DOTTED_QUAD.fullmatch(authority.partition(":")[0]):
+                return parsed.host
+            continue
+        if explicit or parsed.host.startswith("www."):
             return parsed.host
         if _psl().publicsuffix(parsed.host, accept_unknown=False) is not None:
             return parsed.host
@@ -408,11 +422,12 @@ def analyze_links(
             capped, cap_reason = True, "url_length"
         links.append(info)
     with_host = [link for link in links if link.registrable_domain is not None]
+    malformed = sum(1 for link in links if link.kind == "web" and link.malformed is not None)
     all_aligned: bool | None = None
     unaligned: int | None = None
     if senders and with_host:
         unaligned = sum(1 for link in with_host if not link.aligned)
-        all_aligned = unaligned == 0
+        all_aligned = unaligned == 0 if malformed == 0 else None
     counts = Counter(
         link.registrable_domain
         for link in with_host
@@ -425,6 +440,7 @@ def analyze_links(
         capped=capped,
         cap_reason=cap_reason,
         sender_domains=senders,
+        malformed_count=malformed,
         all_aligned=all_aligned,
         unaligned_count=unaligned,
         other_domains=ordered,

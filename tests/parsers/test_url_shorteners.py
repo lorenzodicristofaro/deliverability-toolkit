@@ -46,6 +46,12 @@ def test_shipped_seed_loads_and_is_honest() -> None:
             assert e.operator is None
 
 
+def test_shipped_seed_unverified_entries_pending_maintainer() -> None:
+    status = {e.domain: e.status for e in list_shorteners()}
+    assert status["t.co"] == "unverified"
+    assert {d for d, s in status.items() if s == "verified"} == {"bit.ly", "goo.gl"}
+
+
 def test_good_parses_sorted() -> None:
     out = parse_shorteners(GOOD, TODAY)
     assert [s.domain for s in out] == ["bit.ly", "ow.ly"]

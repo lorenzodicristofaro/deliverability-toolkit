@@ -13,11 +13,10 @@ shorteners:
     sources:
       - https://dev.bitly.com/api-reference/
   - domain: t.co
-    operator: x
-    notes: X help page "About X's link service (http://t.co)"; used for links posted on X only
-    status: verified
-    sources:
-      - https://help.x.com/en/using-x/url-shortener
+    operator: null
+    notes: official page https://help.x.com/en/using-x/url-shortener returned 403 to the check; maintainer to confirm
+    status: unverified
+    sources: []
   - domain: goo.gl
     operator: google
     notes: Google URL Shortener links in the form https://goo.gl/*; turned down, active links kept (2025 update)

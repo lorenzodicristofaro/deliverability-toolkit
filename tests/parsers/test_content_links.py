@@ -143,6 +143,19 @@ def test_link_facts(href: str | None, expected: dict[str, object]) -> None:
         ("Click here", "https://evil.example", None, False),
         ("Mr.Smith", "https://evil.example", None, False),
         ("readme.txt", "https://evil.example", None, False),
+        # documented heuristic limit: .md is a real TLD, so the file name reads as a host
+        ("readme.md", "https://evil.example", "readme.md", True),
+        # scheme-less text: only a plain decimal dotted quad is an IP
+        ("version 1.2", "https://evil.example", None, False),
+        ("v1.2.3 released", "https://evil.example", None, False),
+        ("build 3221225985", "https://evil.example", None, False),
+        ("0x7f.1", "https://evil.example", None, False),
+        ("010.0.0.1", "https://evil.example", None, False),
+        ("192.0.2.1", "https://evil.example", "192.0.2.1", True),
+        ("192.0.2.1:8080/x", "https://evil.example", "192.0.2.1", True),
+        ("192.0.2.1", "http://192.0.2.1/", "192.0.2.1", False),
+        ("http://0x7f.1", "https://evil.example", "127.0.0.1", True),
+        ("http://1.2", "https://evil.example", "1.0.0.2", True),
         ("", "https://evil.example", None, False),
         ("www.example.com", "mailto:a@evil.example", None, False),
         (
@@ -157,6 +170,41 @@ def test_link_facts(href: str | None, expected: dict[str, object]) -> None:
 def test_masked_links(text: str, href: str, text_host: str | None, masked: bool) -> None:
     info = one(href, text)
     assert (info.text_host, info.masked) == (text_host, masked)
+
+
+@pytest.mark.parametrize(
+    ("hrefs", "malformed", "all_aligned", "unaligned"),
+    [
+        (
+            [
+                "https://bank.example/",
+                "https://bank.example%40evil.example",
+                "http://[fe80::1%25eth0]",
+            ],
+            2,
+            None,
+            0,
+        ),
+        (["https://bank.example/", "http://"], 1, None, 0),
+        (["https://bank.example/", "https://evil.example", "http://999.1.1.1"], 1, None, 1),
+        (["https://bank.example/", "/relative", "mailto:a@evil.example"], 0, True, 0),
+        (["https://bank.example/", "javascript:x"], 0, True, 0),
+    ],
+)
+def test_malformed_web_links_block_all_aligned(
+    hrefs: list[str], malformed: int, all_aligned: bool | None, unaligned: int
+) -> None:
+    result = analyze_links(
+        [("x", h) for h in hrefs], sender_domains=["bank.example"], shorteners=()
+    )
+    assert result.malformed_count == malformed
+    assert result.all_aligned is all_aligned
+    assert result.unaligned_count == unaligned
+
+
+def test_malformed_count_without_sender() -> None:
+    result = analyze_links([("x", "http://")], sender_domains=[], shorteners=())
+    assert (result.malformed_count, result.all_aligned) == (1, None)
 
 
 def test_homograph_flag_needs_mismatch_or_mixed_script() -> None:
