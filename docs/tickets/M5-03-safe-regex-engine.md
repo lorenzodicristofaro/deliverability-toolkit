@@ -14,4 +14,4 @@ Acceptance criteria:
 - Table-driven: valid patterns, empty pattern, invalid syntax, catastrophic patterns (nested quantifiers, alternation overlap), huge text, unicode, flags; no network.
 - Timeout failure is distinguishable by callers so rules can report `error`, not `ok` (CLAUDE.md non-negotiable).
 New i18n keys: none
-Status: todo
+Status: done

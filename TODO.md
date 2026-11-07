@@ -107,7 +107,7 @@ Carried over from M0-07 QA:
 - Tickets (docs/tickets/):
   - [x] M5-01 CSRF form cap vs localized 413 (opus)
   - [ ] M5-02 MIME cap consistency, any capped input is error-class
-  - [ ] M5-03 ReDoS-safe regex runner with enforced timeout (opus)
+  - [x] M5-03 ReDoS-safe regex runner with enforced timeout (opus)
   - [ ] M5-04 permissions content.analyze, rules.manage global/tenant (opus)
   - [ ] M5-05 content_rules model + migration + repository (opus)
   - [ ] M5-06 dkim_selectors model + migration + repository + seed sync (opus)
@@ -170,6 +170,7 @@ Carried over from M0-07 QA:
 - [ ] Message UI nits (M4-12 QA): MIME table first column uses `message.col.hop`; needs a part/index key. (JS `data-max-bytes` part closed by M5-01.)
 - [x] Message UI (M4-12): CSRFMiddleware rejects form bodies > 1 MiB with token-in-body as 403, so no-JS pastes above ~1 MiB encoded get 403 instead of the localized 413; fix in core/csrf (raise its form cap or return 413). Closed by M5-01.
 - [ ] CSRF form cap nits (M5-01 QA): Content-Length `isdigit()` accepts non-ASCII digits (use isascii()) in core/csrf.py and web/message.py; oversize opted-in post holds ~3x cap (avoid join+slice copy); test-registered BIG_PATH form cap never cleaned up.
+- [ ] safe_regex nits (M5-03 QA): search_many should re-validate CompiledRule flags/pattern (or only compile_checked may build rules — M5-13/18/22 must use compile_checked); kill+reap the child if _Worker setup fails after Popen; suppress TimeoutExpired from wait() after SIGKILL; docstring: synchronous call up to ~15s, async callers use a thread pool; fix the subprocess docs citation (project runs 3.12, "3.15.2" looks wrong); rewrap ARCHITECTURE.md:204. Worker cap is per OS process (N uvicorn workers x 4).
 - [ ] tests/tenancy World.send: add a raw-body option so the matrix can show 200 for permitted roles on raw-body routes (M4-11 QA nit).
 - [ ] Received redaction (done in M4-10: all `@` tokens masked). Remaining: `<local>` with no domain and fullwidth ＠ stay visible; Message-ID-style hop ids become None. Also a dedicated MSG_SECTION_FAILED code (en+it) instead of reusing MSG_PARSER_LIMIT, whose "exceeded limits" text misleads for internal failures.
 - [ ] Public RFC 5322 Date parser; message_findings parses Date via parse_received_values, so a valid Date with a comment containing ";" is reported MSG_DATE_INVALID (M4-09 QA). Also rename test_authserv_mismatch_lists_ids_escaped (no longer escaped).
