@@ -21,6 +21,20 @@ def test_empty_or_whitespace(text: str) -> None:
 
 
 @pytest.mark.parametrize(
+    ("text", "empty"),
+    [
+        ("​‍", True),  # zero-width only: nothing visible
+        ("‮ ⁦", True),  # bidi format chars only
+        ("﻿", True),
+        ("​x", False),
+        ("\x00", False),  # control char is Cc, not Cf: not empty
+    ],
+)
+def test_format_chars_only_is_empty(text: str, empty: bool) -> None:
+    assert analyze_subject(text).empty is empty
+
+
+@pytest.mark.parametrize(
     ("text", "cp", "by", "gr"),
     [
         ("abc", 3, 3, 3),
@@ -70,6 +84,8 @@ def test_emoji(text: str, emoji: int) -> None:
         ("你好世界你好世界你好", None, 0, 10),
         ("مرحبا שלום", None, 0, 9),
         ("ΣΑΒΓΔΕΖΗΘ", True, 9, 0),
+        ("ǅǅǅǅǅǅǅǅ", True, 8, 0),  # Lt counts as upper
+        ("ǅabcdefg", False, 8, 0),
     ],
 )
 def test_caps(text: str, all_caps: bool | None, cased: int, caseless: int) -> None:
@@ -149,6 +165,16 @@ def test_control_and_bidi(text: str, controls: int, nul: bool, bidi: int, overri
         ("مرحبا hello", ("ARABIC", "LATIN"), True, False),
         ("שלום", ("HEBREW",), False, False),
         ("1234 !!!", (), False, False),
+        ("コーヒー", ("CJK",), False, False),  # U+30FC is Lm: no script of its own
+        ("人々", ("CJK",), False, False),  # U+3005 is Lm
+        ("〆切 ゝ ヽ", ("CJK",), False, False),
+        ("ｺｰﾋｰ ＡＢ", ("CJK", "LATIN"), True, False),  # half/full
+        ("5µm", ("LATIN",), False, False),  # U+00B5 MICRO SIGN is not Greek
+        ("1ª 2º", (), False, False),
+        ("Kelvin 5K", ("LATIN",), False, False),  # Letterlike Symbols skipped
+        ("Аpple", ("CYRILLIC", "LATIN"), True, True),  # Cyrillic A lookalike
+        ("gοogle", ("GREEK", "LATIN"), True, True),  # Greek omicron lookalike
+        ("\U0001f600", (), False, False),
     ],
 )
 def test_scripts(text: str, scripts: tuple[str, ...], mixed: bool, word: bool) -> None:
@@ -190,6 +216,37 @@ def test_encoded_input_uses_m4_decoder(raw: str, decoded: str) -> None:
 def test_malformed_encoded_words_do_not_raise(raw: str) -> None:
     f = analyze_subject(raw, encoded=True)
     assert f.present is True and f.length_codepoints is not None
+
+
+@pytest.mark.parametrize(
+    ("raw", "encoded", "controls", "length"),
+    [
+        ("Re: x\r\nBcc: y", True, 2, 13),  # bare CRLF is not folding: kept and counted
+        ("Re: x\nBcc: y", True, 1, 12),
+        ("a\rb", True, 1, 3),
+        ("a\r\n b", True, 0, 3),  # folding removed, the whitespace stays
+        ("a\n\tb", True, 0, 3),
+        ("a\r\n b", False, 2, 5),  # decoded input: no unfolding
+    ],
+)
+def test_unfold_only_folding(raw: str, encoded: bool, controls: int, length: int) -> None:
+    f = analyze_subject(raw, encoded=encoded)
+    assert (f.control_chars, f.length_codepoints) == (controls, length)
+
+
+@pytest.mark.parametrize(
+    ("raw", "encoded", "warnings"),
+    [
+        ("plain", False, None),
+        ("=?UTF-8?B?!!!?=", False, None),
+        ("plain", True, ()),
+        ("=?UTF-8?Q?caf=C3=A9?=", True, ()),
+        ("=?bogus-charset?Q?x?=", True, ("encoded_word_unknown_charset",)),
+        ("=?UTF-8?B?!!!?=", True, ("encoded_word_invalid",)),
+    ],
+)
+def test_decode_warnings(raw: str, encoded: bool, warnings: tuple[str, ...] | None) -> None:
+    assert analyze_subject(raw, encoded=encoded).decode_warnings == warnings
 
 
 def test_encoded_nul_is_flagged() -> None:

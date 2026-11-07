@@ -3,8 +3,11 @@
 The Subject is hostile input. ``analyze_subject`` never raises on text and does no I/O.
 
 Input: normally the *decoded* Subject (M4-01). With ``encoded=True`` the value is treated as
-a raw header value: folding (CR/LF followed by whitespace) is removed and RFC 2047 encoded
-words are decoded with the M4 decoder (``app.parsers.message.decode_rfc2047``, not a copy).
+a raw header value: folding (``\r?\n`` immediately followed by space or tab) is removed and
+RFC 2047 encoded words are decoded with the M4 decoder (``app.parsers.message.decode_rfc2047``,
+not a copy). A bare CR or LF that is not folding stays in the text and counts as a control
+character (e.g. ``"Re: x\r\nBcc: y"``). ``decode_warnings`` holds the decoder's warning codes
+(failed encoded words stay raw); it is ``None`` when ``encoded=False``.
 
 Evaluation contract: a fact that could not be evaluated is ``None``, never ``False``.
 ``subject=None`` (header absent) leaves every fact ``None`` except ``present=False``.
@@ -24,7 +27,17 @@ been checked for them and none must be attributed to a vendor. Findings must be 
 
 Caveats: the caps ratio only considers cased letters, so scripts without case (CJK, Arabic,
 Hebrew, Thai, ...) are excluded; ``caseless_letters`` reports how many were skipped. Emoji
-detection is range based (approximation), and script detection uses Unicode character names.
+detection is range based (approximation). ``empty`` is True when the text is empty or holds
+only whitespace and format characters (category Cf: zero-width, bidi controls, ...), i.e.
+nothing visible; the bidi/control facts still report those characters.
+
+Script detection (stdlib has no Unicode Script property, so this is an approximation):
+only letters of category Lu/Ll/Lt/Lo count; modifier letters (Lm, e.g. U+30FC, U+3005),
+marks, digits and other Common/Inherited characters are left out, as are the non-script
+letters in ``_NOT_SCRIPT`` (MICRO SIGN, ordinal indicators) and the Letterlike Symbols block.
+The script is the first word of the Unicode name (after a FULLWIDTH/HALFWIDTH prefix), then
+mapped through ``_SCRIPT_GROUPS``: Han, Hiragana, Katakana and Bopomofo are one group
+``CJK`` because Japanese (and Chinese) text mixes them normally.
 Size facts (code points, bytes) describe the full text; all other facts describe the first
 ``max_chars`` characters (``capped=True`` when the text was longer).
 """
@@ -61,7 +74,7 @@ class SubjectFacts:
     length_bytes: int | None = None
     length_graphemes: int | None = None  # of the analysed prefix
     is_long: bool | None = None  # graphemes > limits.long_graphemes (heuristic)
-    empty: bool | None = None  # empty or whitespace-only
+    empty: bool | None = None  # nothing visible: only whitespace / Cf format chars
     capped: bool | None = None  # analysis ran on the first max_chars characters only
     cased_letters: int | None = None
     caseless_letters: int | None = None
@@ -79,15 +92,26 @@ class SubjectFacts:
     scripts: tuple[str, ...] | None = None
     mixed_scripts: bool | None = None
     mixed_script_word: bool | None = None  # one word mixing scripts (e.g. Latin + Cyrillic)
+    decode_warnings: tuple[str, ...] | None = None  # RFC 2047 decoder codes; None unless encoded
 
 
-_FOLD = re.compile(r"\r\n?|\n")
+_FOLD = re.compile(r"\r?\n(?=[ \t])")
 _REPLY = re.compile(r"^\s*(re|fwd?)\s*(?:\[\d{1,4}\])?\s*:", re.IGNORECASE)
 _PUNCT = frozenset("!?！？")
 _BIDI_ALL = frozenset([0x061C, 0x200E, 0x200F, *range(0x202A, 0x202F), *range(0x2066, 0x206A)])
 _BIDI_OVERRIDE = frozenset([*range(0x202A, 0x202F), *range(0x2066, 0x206A)])
 _ZERO_WIDTH_JOIN = frozenset([0x200C, 0x200D])
-_SCRIPT_GROUPS = {"HIRAGANA": "CJK", "KATAKANA": "CJK", "CJK": "CJK", "BOPOMOFO": "CJK"}
+_SCRIPT_GROUPS = {
+    "HIRAGANA": "CJK",
+    "KATAKANA": "CJK",
+    "KATAKANA-HIRAGANA": "CJK",
+    "CJK": "CJK",
+    "IDEOGRAPHIC": "CJK",
+    "BOPOMOFO": "CJK",
+}
+_SCRIPT_CATEGORIES = frozenset(["Lu", "Ll", "Lt", "Lo"])
+_NOT_SCRIPT = frozenset([0x00AA, 0x00B5, 0x00BA])  # ordinal indicators, MICRO SIGN
+_WIDTH_PREFIXES = frozenset(["FULLWIDTH", "HALFWIDTH"])
 _MISC_EMOJI = frozenset(
     [0x231A, 0x231B, 0x23E9, 0x23F0, 0x2B05, 0x2B06, 0x2B07, 0x2934, 0x2935, 0x2B1B, 0x2B1C]
 )
@@ -142,11 +166,13 @@ def _segment(text: str) -> tuple[int, int]:
     return units, emoji
 
 
-def _script(ch: str) -> str:
-    try:
-        first = unicodedata.name(ch).split(" ", 1)[0]
-    except ValueError:
-        return "UNKNOWN"
+def _script(ch: str, cat: str) -> str | None:
+    """Script group of a letter, or None when it is not a real script letter."""
+    cp = ord(ch)
+    if cat not in _SCRIPT_CATEGORIES or cp in _NOT_SCRIPT or 0x2100 <= cp <= 0x214F:
+        return None
+    words = unicodedata.name(ch, "UNKNOWN").split(" ", 2)
+    first = words[1] if words[0] in _WIDTH_PREFIXES and len(words) > 1 else words[0]
     return _SCRIPT_GROUPS.get(first, first)
 
 
@@ -163,9 +189,12 @@ def analyze_subject(
         return SubjectFacts(present=False)
 
     text = subject
+    decode_warnings: tuple[str, ...] | None = None
     if encoded:
         text = _FOLD.sub("", text)  # unfold: line break removed, the whitespace stays
-        text = decode_rfc2047(text, 0, _Warnings())
+        warnings = _Warnings()
+        text = decode_rfc2047(text, 0, warnings)
+        decode_warnings = tuple(w.code for w in warnings.items)
     length_cp = len(text)
     length_bytes = len(text.encode("utf-8", errors="surrogatepass"))
     capped = length_cp > lim.max_chars
@@ -193,15 +222,16 @@ def analyze_subject(
         else:
             run = 0
         if ch.isalpha():
-            if ch.isupper():
+            if cat == "Lt" or ch.isupper():  # titlecase (e.g. U+01C5) counts as upper
                 upper += 1
             elif ch.islower():
                 lower += 1
             else:
                 caseless += 1
-            sc = _script(ch)
-            scripts.add(sc)
-            word_scripts.add(sc)
+            sc = _script(ch, cat)
+            if sc is not None:
+                scripts.add(sc)
+                word_scripts.add(sc)
         elif cat not in ("Mn", "Mc", "Me", "Nd") and cp not in _ZERO_WIDTH_JOIN:
             if len(word_scripts) > 1:
                 mixed_word = True
@@ -231,7 +261,7 @@ def analyze_subject(
         length_bytes=length_bytes,
         length_graphemes=graphemes,
         is_long=graphemes > lim.long_graphemes,
-        empty=body.strip() == "" and not capped,
+        empty=not capped and all(c.isspace() or unicodedata.category(c) == "Cf" for c in body),
         capped=capped,
         cased_letters=cased,
         caseless_letters=caseless,
@@ -249,4 +279,5 @@ def analyze_subject(
         scripts=tuple(sorted(scripts)),
         mixed_scripts=len(scripts) > 1,
         mixed_script_word=mixed_word,
+        decode_warnings=decode_warnings,
     )
