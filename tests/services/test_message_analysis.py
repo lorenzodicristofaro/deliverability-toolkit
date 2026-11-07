@@ -124,6 +124,9 @@ def test_received_for_clause_redacted_in_json() -> None:
         ('from a by b for <"a@y.z', "from a by b for [redacted]"),
         ("from a by b for\tx@y.z id 5", "from a by b for [redacted]"),
         ("from a by b", "from a by b"),
+        ("from a by b for<x@y.z>; Tue, 03 Nov 2026", "from a by b for [redacted]"),
+        ("from a by b for(c)<x@y.z>", "from a by b for [redacted]"),
+        ("from a by b (for<x@y.z>)", "from a by b (for [redacted]"),
         ("", ""),
     ],
 )
@@ -133,6 +136,20 @@ def test_redact_received(raw: str, expect: str) -> None:
     assert "y.z" not in out
     if "FOR" not in raw:
         assert out.startswith(expect)
+
+
+@pytest.mark.parametrize(
+    "clause", [f"for<{SECRET}>", f"for(c)<{SECRET}>", f"(for<{SECRET}>)", f"FOR\t{SECRET}"]
+)
+def test_for_clause_forms_absent_from_json(clause: str) -> None:
+    raw = (
+        f"Received: from a.example (a.example [8.8.8.8]) by b.example with SMTP {clause};"
+        " Tue, 03 Nov 2026 10:00:00 +0000\r\nFrom: a@b.example\r\n\r\nx"
+    ).encode()
+    a = analyze_message(raw)
+    assert SECRET not in a.model_dump_json()
+    assert "private.example" not in a.model_dump_json()
+    assert a.received is not None and a.received.hops
 
 
 def test_redaction_when_hop_unparsed() -> None:
@@ -276,3 +293,44 @@ def test_hostile_two_mib_inputs_finish_in_bounded_time(build: Any) -> None:
     payload = a.model_dump_json()
     assert len(payload) < 16 * 1024 * 1024
     json.loads(payload)
+
+
+_FALSE_CODES = {
+    "parse_received_chain": {"MSG_RECEIVED_NONE", "MSG_RECEIVED_UNPARSED"},
+    "parse_all_authentication_results": {"MSG_AUTHRES_MISSING", "MSG_DMARC_NOT_PASS"},
+    "parse_arc_chain": {"MSG_ARC_INVALID", "MSG_ARC_CV_FAIL"},
+    "analyze_alignment": {"MSG_DMARC_NOT_PASS", "MSG_ALIGNMENT_FAIL", "MSG_AUTHRES_MISSING"},
+    "parse_mime": {"MSG_NO_TEXT_PART", "MSG_MIME_TRUNCATED"},
+}
+
+
+@pytest.mark.parametrize("target", list(_FALSE_CODES))
+def test_failed_section_produces_no_false_findings(
+    monkeypatch: pytest.MonkeyPatch, target: str
+) -> None:
+    clean = {f.code for f in analyze_message(msg()).findings}
+    assert not clean & _FALSE_CODES[target]
+
+    def boom(*_: Any, **__: Any) -> None:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(ma, target, boom)
+    a = analyze_message(msg())
+    assert a.status == "error"
+    codes = {f.code for f in a.findings}
+    assert not codes & _FALSE_CODES[target]
+    assert any(f.params.get("limits", "").endswith("_failed") for f in a.findings)
+
+
+def test_authres_failure_keeps_unrelated_findings(monkeypatch: pytest.MonkeyPatch) -> None:
+    def boom(*_: Any, **__: Any) -> None:
+        raise RuntimeError("boom")
+
+    raw = msg().replace(b"Message-ID: <1@example.com>\r\n", b"")
+    monkeypatch.setattr(ma, "parse_all_authentication_results", boom)
+    a = analyze_message(raw)
+    codes = {f.code for f in a.findings}
+    assert "MSG_MISSING_MESSAGE_ID" in codes
+    assert "MSG_AUTHRES_MISSING" not in codes
+    assert "authentication_results_failed" in {f.params.get("limits") for f in a.findings}
+    assert a.authentication is None and a.received is not None

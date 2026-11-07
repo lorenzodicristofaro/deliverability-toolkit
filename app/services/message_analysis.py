@@ -14,9 +14,11 @@ Hard rules (ticket M4-10):
   ``MSG_PARSER_LIMIT`` finding and no partial data (every section ``None``).
 - A failure in one sub-parser is isolated: its section is ``None``, an error finding
   (``MSG_PARSER_LIMIT``, ``limits="<section>_failed"``) is added and the overall status is
-  ``error``; the other sections are still produced. The findings builder then sees an empty
-  stand-in for the failed section, so it may add "missing data" findings for it; the error
-  finding is the authoritative signal.
+  ``error``; the other sections are still produced. The findings builder sees an empty
+  stand-in for the failed section, and every finding that depends on that section is dropped
+  afterwards (:data:`_DEPENDENT_CODES`), so a failure never produces false "missing data"
+  findings. A failed Authentication-Results parse is hidden from the builder (the fields are
+  removed from the block it sees) so the unrelated findings survive.
 - Every string taken from the message is passed through :func:`message_findings.excerpt`
   (control characters removed, bounded; NOT HTML-escaped, escaping is done at render time).
 - The ``for <addr>`` clause of a Received hop is redacted from the returned ``raw`` excerpt.
@@ -32,6 +34,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import UTC, datetime
 from email.utils import getaddresses, parsedate_to_datetime
 from typing import Any
@@ -66,8 +69,39 @@ NO_HEADER_BLOCK = "no_header_block"
 INTERNAL_ERROR = "internal_error"
 
 _EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
-_FOR_CLAUSE = re.compile(r"\bfor\s", re.IGNORECASE)
+_FOR_CLAUSE = re.compile(r"\bfor\b", re.IGNORECASE)
 _REDACTED = "for [redacted]"
+
+_RECEIVED_CODES = frozenset(
+    {
+        "MSG_RECEIVED_NONE",
+        "MSG_RECEIVED_UNPARSED",
+        "MSG_RECEIVED_CLOCK_SKEW",
+        "MSG_HOP_DELAY_HIGH",
+        "MSG_RECEIVED_PRIVATE_IP_ORIGIN",
+        "MSG_DATE_FAR_FROM_RECEIVED",
+    }
+)
+_AUTH_CODES = frozenset(
+    {
+        "MSG_AUTHRES_MISSING",
+        "MSG_AUTHRES_AUTHSERV_MISMATCH",
+        "MSG_SPF_NOT_PASS",
+        "MSG_DKIM_NOT_PASS",
+        "MSG_DMARC_NOT_PASS",
+    }
+)
+_ALIGNMENT_CODES = frozenset(
+    {"MSG_ALIGNMENT_FAIL", "MSG_ALIGNMENT_STATED_MISMATCH", "MSG_UNVERIFIED_DKIM_SIGNATURE"}
+)
+# Findings that cannot be trusted when the named section failed (alignment is computed from
+# the Authentication-Results too, auth findings read the alignment report).
+_DEPENDENT_CODES: dict[str, frozenset[str]] = {
+    "received": _RECEIVED_CODES,
+    "authentication_results": _AUTH_CODES | _ALIGNMENT_CODES,
+    "alignment": _AUTH_CODES | _ALIGNMENT_CODES | {"MSG_REPLY_TO_DIFFERS", "MSG_REPLY_TO_UNUSABLE"},
+    "arc": frozenset({"MSG_ARC_INVALID", "MSG_ARC_CV_FAIL"}),
+}
 
 
 class _Model(BaseModel):
@@ -267,7 +301,10 @@ def redact_received(raw: str) -> str:
         cand = rest[rest.rfind(";") + 1 :].strip()
         if not any(c in cand for c in '@<>"'):
             tail = cand
-    out = raw[: m.start()] + _REDACTED
+    out = raw[: m.start()]
+    if out and out[-1].isalnum():
+        out += " "
+    out += _REDACTED
     return f"{out}; {tail}" if tail else out
 
 
@@ -559,11 +596,18 @@ def _analyze(raw: bytes) -> MessageAnalysis:
 
     findings: list[Finding] = []
     evaluated = True
+    builder_block = block
+    if headers is None:  # hide the unparseable fields so the builder does not fail on them
+        builder_block = replace(
+            block,
+            fields=tuple(f for f in block.fields if f.name.lower() != "authentication-results"),
+        )
+    failed_before = set(failed)
     mf = _section(
         "findings",
         failed,
         lambda: build_message_findings(
-            block,
+            builder_block,
             received=received or ReceivedChain((), None, False, 0),
             mime=mime,
             arc=arc or ArcChain("none", (), (), (), (), 0, False),
@@ -572,12 +616,14 @@ def _analyze(raw: bytes) -> MessageAnalysis:
         ),
     )
     if mf is not None:
-        findings.extend(mf.findings)
+        dropped: frozenset[str] = frozenset().union(
+            *(_DEPENDENT_CODES.get(n, frozenset()) for n in failed_before)
+        )
+        findings.extend(f for f in mf.findings if f.code not in dropped)
         evaluated = mf.evaluated
     for name in failed:
         findings.append(finding("MSG_PARSER_LIMIT", "medium", {"limits": f"{name}_failed"}))
         evaluated = False
-    _ = headers  # parsed once here for isolation; build_message_findings re-reads the block
 
     status, ordered = _finish(findings, evaluated)
     return MessageAnalysis.model_validate(
