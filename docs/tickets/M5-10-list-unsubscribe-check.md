@@ -12,4 +12,4 @@ Acceptance criteria:
 - Facts only; verdicts come in M5-14. Duplicate headers, folded headers, comments, whitespace, mixed case, empty value, 100+ URIs (capped), NUL all covered by table-driven malformed tests.
 - No network, no DNS.
 New i18n keys: none
-Status: todo
+Status: done

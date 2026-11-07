@@ -115,7 +115,7 @@ Carried over from M0-07 QA:
   - [x] M5-07 custom_checks model + migration + repository (opus)
   - [x] M5-08 HTML/text structural parser
   - [x] M5-09 static link analysis + url_shorteners seed (no network)
-  - [ ] M5-10 List-Unsubscribe / One-Click analysis (RFC 2369, RFC 8058)
+  - [x] M5-10 List-Unsubscribe / One-Click analysis (RFC 2369, RFC 8058)
   - [ ] M5-11 subject analysis
   - [ ] M5-12 content_rules seed + sync
   - [ ] M5-13 content rules engine (opus)
