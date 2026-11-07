@@ -11,6 +11,6 @@ Acceptance criteria:
 - CI schema validation: unknown keys rejected, `verified_on` not in the future (host-clock tolerance noted in Follow-ups), sources required for `verified`, every regex compiles via `compile_checked` (M5-03 must be merged first; if not, coder adds only a TODO test and says so), language codes valid.
 - Sync into `content_rules` global rows is idempotent, keeps admin edits (same `locally_modified` rule as M5-06), disables rows removed from the seed, never touches tenant rows.
 - Tests: schema negative cases, sync idempotency, admin edit preserved, removed row disabled.
-New i18n keys: none (rule names/explanations live in the seed; en + it text fields `title`/`advice` required per rule so the UI needs no key)
+New i18n keys: CONTENT_RULE.<seed_key>.title / .advice for every seed rule (en + it), superseding the earlier "text in the seed" plan (GM decision 2026-11-07)
 GM notes (from M5-05): seeded rule text comes from i18n keys derived from seed_key (en+it, added by this ticket), not DB columns; `sources` is a JSON list (1-10 http(s) URLs); a tenant override row shares the global seed_key and must point at an existing global seed row. Define and test what sync does when a seed entry is removed: the global row is disabled, not deleted, so tenant overrides are never orphaned; skip rows with `locally_modified`.
 Status: todo
