@@ -33,4 +33,5 @@ Notes for docs/HEADERS.md (from M4-03/M4-04 QA):
 - cv=fail precedence.
 - Alignment verdict is relaxed, with strict reported alongside it. With a public suffix, only an exact match counts. The topmost AR per method is used.
 - Add an acceptance row: pass despite an unknown sibling (spf=pass with aligned smtp.mailfrom, plus dkim=pass without header.d → computed pass) (M4-08 QA nit).
+- UI upload reads files via FileReader as UTF-8; non-UTF-8 .eml may be mangled (paste or API for exact bytes). Pasted text is never echoed back.
 Status: todo
