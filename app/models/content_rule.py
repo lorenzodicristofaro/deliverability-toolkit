@@ -123,7 +123,7 @@ class ContentRule(Base):
     advice: Mapped[str | None] = mapped_column(String(MAX_ADVICE_LENGTH), nullable=True)
     # JSON list of http(s) URLs (at most MAX_SOURCES); validated by the repository, the database
     # only stores it (no portable JSON CHECK on SQLite and PostgreSQL).
-    sources: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
+    sources: Mapped[list[str] | None] = mapped_column(JSON(none_as_null=True), nullable=True)
     verified_on: Mapped[date | None] = mapped_column(Date, nullable=True)
     status: Mapped[str | None] = mapped_column(String(16), nullable=True)
     seed_key: Mapped[str | None] = mapped_column(String(MAX_SEED_KEY_LENGTH), nullable=True)

@@ -43,7 +43,7 @@ def upgrade() -> None:
         sa.Column("severity", sa.String(length=16), nullable=False),
         sa.Column("title", sa.String(length=200), nullable=True),
         sa.Column("advice", sa.String(length=2000), nullable=True),
-        sa.Column("sources", sa.JSON(), nullable=True),
+        sa.Column("sources", sa.JSON(none_as_null=True), nullable=True),
         sa.Column("verified_on", sa.Date(), nullable=True),
         sa.Column("status", sa.String(length=16), nullable=True),
         sa.Column("seed_key", sa.String(length=128), nullable=True),

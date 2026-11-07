@@ -435,6 +435,9 @@ class _ContentRuleStore:
             stmt = stmt.where(ContentRule.id != exclude_id)
         return self._session.scalars(stmt.limit(1)).first() is not None
 
+    def _check_seed_reference(self, seed_key: str | None) -> None:
+        """Hook: the tenant path requires seed_key to name an existing global rule."""
+
     def _flush(self) -> None:
         try:
             self._session.flush()
@@ -450,6 +453,7 @@ class _ContentRuleStore:
             raise ContentRuleInvalid(sorted(missing)[0], "required")
         _check_pattern(cleaned["kind"], cleaned["pattern"], cleaned.get("flags", 0))
         _check_title(cleaned.get("seed_key"), cleaned.get("title"))
+        self._check_seed_reference(cleaned.get("seed_key"))
         if self._seed_key_taken(cleaned.get("seed_key")):
             raise SeedKeyTaken
         row = ContentRule(**cleaned, **fixed)
@@ -469,6 +473,8 @@ class _ContentRuleStore:
             cleaned.get("flags", row.flags),
         )
         _check_title(cleaned.get("seed_key", row.seed_key), cleaned.get("title", row.title))
+        if "seed_key" in cleaned:
+            self._check_seed_reference(cleaned["seed_key"])
         if "seed_key" in cleaned and self._seed_key_taken(cleaned["seed_key"], row.id):
             raise SeedKeyTaken
         for key, value in cleaned.items():
@@ -512,6 +518,14 @@ class ContentRuleRepository(_ContentRuleStore):
 
     def _visible(self) -> ColumnElement[bool]:
         return or_(_global_criterion(), self._writable())
+
+    def _check_seed_reference(self, seed_key: str | None) -> None:
+        # A tenant seed_key only overrides a seeded global rule; it never invents one.
+        if seed_key is None:
+            return
+        stmt = self._select(_global_criterion()).where(ContentRule.seed_key == seed_key)
+        if self._session.scalars(stmt.limit(1)).first() is None:
+            raise ContentRuleInvalid("seed_key", "unknown")
 
     def create(self, values: Mapping[str, Any]) -> ContentRuleRecord:
         """Insert a tenant rule; scope, tenant_id and created_by come from the context."""

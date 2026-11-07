@@ -610,16 +610,62 @@ def test_title_required_without_seed_key(world: World) -> None:
     with pytest.raises(ContentRuleInvalid) as err:
         repo.create(_rule(title=None))
     assert (err.value.field, err.value.reason) == ("title", "required")
-    rec = repo.create(_rule(title=None, seed_key="g.two"))  # tenant override of a seeded rule
+    repo = world.repo("b")  # tenant A already overrides g.one with a1
+    rec = repo.create(_rule(title=None, seed_key="g.one"))  # tenant override of a seeded rule
     assert rec.title is None
     with pytest.raises(ContentRuleInvalid) as err:
         repo.update(rec.id, {"seed_key": None})  # would leave a rule with no text
     assert err.value.reason == "required"
     with pytest.raises(ContentRuleInvalid):
-        repo.update(world.rules["a1"], {"seed_key": None, "title": None})
+        world.repo("a").update(world.rules["a1"], {"seed_key": None, "title": None})
     assert repo.update(rec.id, {"seed_key": None, "title": "Own text"}) is not None
 
 
 def test_global_seeded_row_needs_no_title(world: World) -> None:
     rec = world.global_repo().create(_rule(title=None, seed_key="g.three"), actor=None)
     assert rec.title is None and rec.advice is None and rec.sources is None
+
+
+@pytest.mark.parametrize("seed_key", ["no.such.key", "g.onex", "g"])
+def test_tenant_seed_key_must_name_a_global_rule(world: World, seed_key: str) -> None:
+    repo = world.repo("b")
+    before = repo.count()
+    with pytest.raises(ContentRuleInvalid) as err:
+        repo.create(_rule(seed_key=seed_key))
+    assert (err.value.field, err.value.reason) == ("seed_key", "unknown")
+    with pytest.raises(ContentRuleInvalid) as err:
+        repo.update(world.rules["b1"], {"seed_key": seed_key})
+    assert (err.value.field, err.value.reason) == ("seed_key", "unknown")
+    world.session.rollback()
+    assert repo.count() == before
+    b1 = repo.get(world.rules["b1"])
+    assert b1 is not None and b1.seed_key is None
+
+
+def test_tenant_seed_key_cannot_reference_a_tenant_only_key(world: World) -> None:
+    # A key that exists only on a tenant row (raw insert) is not a seeded global rule.
+    world.session.execute(
+        text(
+            "INSERT INTO content_rules (scope, tenant_id, name, kind, pattern, weight, category, "
+            "severity, seed_key) VALUES ('tenant', :t, 'x', 'keyword', 'x', 1, 'c', 'low', "
+            "'tenant.only')"
+        ),
+        {"t": world.tenant_a},
+    )
+    for tenant in ("a", "b"):
+        with pytest.raises(ContentRuleInvalid) as err:
+            world.repo(tenant).create(_rule(seed_key="tenant.only"))
+        assert err.value.reason == "unknown"
+
+
+def test_sources_none_is_sql_null(world: World) -> None:
+    g = world.global_repo()
+    with_sources = g.create(_rule(sources=["https://example.org/a"]), actor=None)
+    cleared = g.update(with_sources.id, {"sources": None})
+    assert cleared is not None and cleared.sources is None
+    world.session.commit()
+    total = world.session.execute(text("SELECT COUNT(*) FROM content_rules")).scalar_one()
+    nulls = world.session.execute(
+        text("SELECT COUNT(*) FROM content_rules WHERE sources IS NULL")
+    ).scalar_one()
+    assert nulls == total
