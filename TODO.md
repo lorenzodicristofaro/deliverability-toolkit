@@ -103,6 +103,33 @@ Carried over from M0-07 QA:
 - [ ] Admin UI: global vs tenant rules, DKIM selectors, "test on sample" with ReDoS guard
 - [ ] Declarative custom checks (DNS/HTTP) with severity and remediation text
 - Accept: rules editable without redeploy; regex timeout enforced by test.
+- Scope note (GM): custom checks cover DNS kinds only in M5; the HTTP-fetch kind moves to M7 (needs the guarded client). M5-22 updates this block and ARCHITECTURE.md.
+- Tickets (docs/tickets/):
+  - [ ] M5-01 CSRF form cap vs localized 413 (opus)
+  - [ ] M5-02 MIME cap consistency, any capped input is error-class
+  - [ ] M5-03 ReDoS-safe regex runner with enforced timeout (opus)
+  - [ ] M5-04 permissions content.analyze, rules.manage global/tenant (opus)
+  - [ ] M5-05 content_rules model + migration + repository (opus)
+  - [ ] M5-06 dkim_selectors model + migration + repository + seed sync (opus)
+  - [ ] M5-07 custom_checks model + migration + repository (opus)
+  - [ ] M5-08 HTML/text structural parser
+  - [ ] M5-09 static link analysis + url_shorteners seed (no network)
+  - [ ] M5-10 List-Unsubscribe / One-Click analysis (RFC 2369, RFC 8058)
+  - [ ] M5-11 subject analysis
+  - [ ] M5-12 content_rules seed + sync
+  - [ ] M5-13 content rules engine (opus)
+  - [ ] M5-14 content analysis service + CONTENT_* findings
+  - [ ] M5-15 REST POST /api/v1/content/analyze
+  - [ ] M5-16 web UI content analyzer
+  - [ ] M5-17 CLI `content`
+  - [ ] M5-18 content rules admin service + REST + test on sample (opus)
+  - [ ] M5-19 content rules admin UI
+  - [ ] M5-20 DKIM selectors admin service + REST + check wiring (opus)
+  - [ ] M5-21 DKIM selectors admin UI
+  - [ ] M5-22 custom checks schema + DNS evaluator (http_fetch rejected, deferred to M7)
+  - [ ] M5-23 custom checks admin service + REST + run wiring (opus)
+  - [ ] M5-24 custom checks admin UI
+  - [ ] M5-25 acceptance tests + docs/CONTENT.md
 
 ## M6 — ESP profiles
 - [ ] YAML schema + CI validation, loader, per-domain ESP assignment
