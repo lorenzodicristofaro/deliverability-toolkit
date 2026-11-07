@@ -110,7 +110,7 @@ Carried over from M0-07 QA:
   - [x] M5-03 ReDoS-safe regex runner with enforced timeout (opus)
   - [x] M5-04 permissions content.analyze, rules.manage global/tenant (opus)
   - [x] M5-05 content_rules model + migration + repository (opus)
-  - [ ] M5-05b content_rules index rework, SQLite planner error (opus)
+  - [x] M5-05b content_rules index rework, SQLite planner error (opus)
   - [x] M5-06 dkim_selectors model + migration + repository + seed sync (opus)
   - [ ] M5-07 custom_checks model + migration + repository (opus)
   - [x] M5-08 HTML/text structural parser

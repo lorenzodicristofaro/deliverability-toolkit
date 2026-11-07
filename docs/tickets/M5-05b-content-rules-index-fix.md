@@ -13,4 +13,4 @@ Acceptance criteria:
 - Regression test: tenant OR-filter + seed_key lookup with bound parameters runs on SQLite (and PG on CI), plus the same with `kind`/`enabled` filters.
 - Single Alembic head; upgrade/downgrade -1/upgrade clean.
 New i18n keys: none
-Status: todo
+Status: done
