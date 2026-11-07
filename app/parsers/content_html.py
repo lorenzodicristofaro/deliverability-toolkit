@@ -100,8 +100,11 @@ class ContentStructure:
     capped: bool = False
     # input_size, element_count, nesting_depth, attribute_count
     cap_reason: str | None = None
-    html_bytes: int = 0
-    text_bytes: int = 0
+    # None when not measured (input_size cap); then *_at_least holds len(str), a lower bound.
+    html_bytes: int | None = 0
+    text_bytes: int | None = 0
+    html_bytes_at_least: int | None = None
+    text_bytes_at_least: int | None = None
     text_length: int = 0
     has_plain_text_part: bool = False
     has_html_part: bool = False
@@ -256,17 +259,28 @@ def parse_content(
     lim = limits or ContentLimits()
     # len(str) <= UTF-8 bytes, so a longer string is certainly over the cap: skip encoding.
     too_long = len(html or "") > lim.max_input_bytes or len(text or "") > lim.max_input_bytes
-    html_bytes = len(html.encode("utf-8", "replace")) if html and not too_long else 0
-    text_bytes = len(text.encode("utf-8", "replace")) if text and not too_long else 0
+    html_bytes: int | None = 0
+    text_bytes: int | None = 0
+    if too_long:
+        html_bytes = text_bytes = None
+    else:
+        html_bytes = len(html.encode("utf-8", "replace")) if html else 0
+        text_bytes = len(text.encode("utf-8", "replace")) if text else 0
     base: dict[str, object] = {
         "html_bytes": html_bytes,
         "text_bytes": text_bytes,
+        "html_bytes_at_least": len(html or "") if too_long else None,
+        "text_bytes_at_least": len(text or "") if too_long else None,
         "text_length": len(text) if text else 0,
         "has_plain_text_part": bool(text and text.strip()),
         "has_html_part": bool(html and html.strip()),
-        "exceeds_gmail_clip_threshold": html_bytes > GMAIL_CLIP_THRESHOLD_BYTES,
+        "exceeds_gmail_clip_threshold": (html_bytes or 0) > GMAIL_CLIP_THRESHOLD_BYTES,
     }
-    if too_long or html_bytes > lim.max_input_bytes or text_bytes > lim.max_input_bytes:
+    if (
+        too_long
+        or (html_bytes or 0) > lim.max_input_bytes
+        or (text_bytes or 0) > lim.max_input_bytes
+    ):
         return ContentStructure(capped=True, cap_reason="input_size", **base)  # type: ignore[arg-type]
     if not html or not html.strip():
         return ContentStructure(**base)  # type: ignore[arg-type]

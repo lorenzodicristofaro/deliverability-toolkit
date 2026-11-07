@@ -209,3 +209,15 @@ def test_oversize_string_capped_without_byte_counts() -> None:
     r = parse_content("x" * 100, None, limits=ContentLimits(max_input_bytes=10))
     assert r.capped
     assert r.cap_reason == "input_size"
+
+
+def test_capped_input_never_reports_zero_bytes() -> None:
+    r = parse_content("x" * 100, "y" * 5, limits=ContentLimits(max_input_bytes=10))
+    assert r.capped
+    assert r.html_bytes is None
+    assert r.text_bytes is None
+    assert r.html_bytes_at_least == 100
+    assert r.text_bytes_at_least == 5
+    ok = parse_content("<p>x</p>", None)
+    assert ok.html_bytes == 8
+    assert ok.html_bytes_at_least is None
