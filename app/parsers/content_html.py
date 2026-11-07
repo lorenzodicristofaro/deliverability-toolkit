@@ -9,7 +9,19 @@ Resource limits are enforced while parsing. Exceeding any of them yields a resul
 partial facts gathered so far are returned, nothing is silently truncated.
 
 Hidden-text detection only looks at literal inline ``style`` values. It reports
-candidates, not proof: stylesheets are not evaluated.
+candidates, not proof: stylesheets are not evaluated. The off-screen rule (a negative
+``left``/``top`` of at least 500 units on an absolutely/fixed positioned element, or a
+negative ``text-indent`` of that size) is a heuristic and `unverified`, like the Gmail
+clipping constant: no vendor documentation has been checked for it.
+
+Default limits (2 MB input, 20k elements, depth 100, 100 attributes per element) are
+conservative bounds chosen to keep parsing cheap on hostile input while comfortably
+exceeding real marketing emails; consumers may pass their own ``ContentLimits``.
+
+The parser never decodes bytes: input is already ``str`` and only the declared charset
+(meta tag) is reported. Malformed-HTML indicators: "unknown nesting" is covered by
+``unbalanced_end_tags`` (end tag with no matching open tag, or closing past unclosed tags).
+An unexpected parser exception yields ``capped=True`` with ``cap_reason="parser_error"``.
 """
 
 from __future__ import annotations
@@ -169,6 +181,12 @@ class _Collector(HTMLParser):
         self.doctype = False
         self.charset: str | None = None
 
+    def flush_anchor(self) -> None:
+        if self._anchor is not None:
+            parts, href = self._anchor
+            self.anchors.append((" ".join("".join(parts).split()), href))
+            self._anchor = None
+
     def handle_decl(self, decl: str) -> None:
         if decl.strip().lower().startswith("doctype"):
             self.doctype = True
@@ -198,6 +216,7 @@ class _Collector(HTMLParser):
                 if m:
                     self.charset = m.group(1).lower()
         elif tag == "a":
+            self.flush_anchor()
             self._anchor = ([], a.get("href") if "href" in a else None)
         if tag not in _VOID and not selfclose:
             if len(self.stack) + 1 > self.limits.max_depth:
@@ -213,10 +232,8 @@ class _Collector(HTMLParser):
     def handle_endtag(self, tag: str) -> None:
         if tag in _VOID:
             return
-        if tag == "a" and self._anchor is not None:
-            parts, href = self._anchor
-            self.anchors.append((" ".join("".join(parts).split()), href))
-            self._anchor = None
+        if tag == "a":
+            self.flush_anchor()
         if tag in self.stack:
             idx = len(self.stack) - 1 - self.stack[::-1].index(tag)
             self.unbalanced_end += sum(1 for t in self.stack[idx + 1 :] if t not in _OPTIONAL_END)
@@ -237,8 +254,10 @@ def parse_content(
     html: str | None, text: str | None, *, limits: ContentLimits | None = None
 ) -> ContentStructure:
     lim = limits or ContentLimits()
-    html_bytes = len(html.encode("utf-8", "replace")) if html else 0
-    text_bytes = len(text.encode("utf-8", "replace")) if text else 0
+    # len(str) <= UTF-8 bytes, so a longer string is certainly over the cap: skip encoding.
+    too_long = len(html or "") > lim.max_input_bytes or len(text or "") > lim.max_input_bytes
+    html_bytes = len(html.encode("utf-8", "replace")) if html and not too_long else 0
+    text_bytes = len(text.encode("utf-8", "replace")) if text and not too_long else 0
     base: dict[str, object] = {
         "html_bytes": html_bytes,
         "text_bytes": text_bytes,
@@ -247,7 +266,7 @@ def parse_content(
         "has_html_part": bool(html and html.strip()),
         "exceeds_gmail_clip_threshold": html_bytes > GMAIL_CLIP_THRESHOLD_BYTES,
     }
-    if html_bytes > lim.max_input_bytes or text_bytes > lim.max_input_bytes:
+    if too_long or html_bytes > lim.max_input_bytes or text_bytes > lim.max_input_bytes:
         return ContentStructure(capped=True, cap_reason="input_size", **base)  # type: ignore[arg-type]
     if not html or not html.strip():
         return ContentStructure(**base)  # type: ignore[arg-type]
@@ -264,6 +283,8 @@ def parse_content(
         capped = e.reason
     except Exception:  # parser must never raise on hostile input
         malformed.append("parser_error")
+        capped = "parser_error"
+    c.flush_anchor()
 
     if capped is None:
         if src.count("<!--") > src.count("-->"):

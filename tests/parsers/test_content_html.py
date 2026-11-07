@@ -175,3 +175,37 @@ def test_gmail_threshold_is_heuristic_constant() -> None:
 def test_script_and_style_not_visible() -> None:
     r = parse_content("<script>alert(1)</script><style>p{}</style><title>T</title>", None)
     assert r.visible_text_length == 0
+
+
+@pytest.mark.parametrize(
+    ("html", "limits", "anchors"),
+    [
+        ("<p>see <a href='http://x'>link", None, [("link", "http://x")]),
+        ("<a href=a>one<a href=b>two</a>", None, [("one", "a"), ("two", "b")]),
+        ("<a href=a>one</a><a>two", None, [("one", "a"), ("two", None)]),
+        ("<a href=a>one<b><b><b><b>", ContentLimits(max_depth=3), [("one", "a")]),
+        ("<a href=a>one<br><br><br>", ContentLimits(max_elements=3), [("one", "a")]),
+    ],
+)
+def test_no_anchor_lost(html: str, limits: ContentLimits | None, anchors: list) -> None:  # type: ignore[type-arg]
+    r = parse_content(html, None, limits=limits)
+    assert list(r.anchors) == anchors
+
+
+def test_unexpected_parser_exception_is_capped(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.parsers import content_html
+
+    def boom(self: object, data: str) -> None:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(content_html._Collector, "handle_data", boom)
+    r = parse_content("<p>x</p>", None)
+    assert r.capped
+    assert r.cap_reason == "parser_error"
+    assert "parser_error" in r.malformed
+
+
+def test_oversize_string_capped_without_byte_counts() -> None:
+    r = parse_content("x" * 100, None, limits=ContentLimits(max_input_bytes=10))
+    assert r.capped
+    assert r.cap_reason == "input_size"
