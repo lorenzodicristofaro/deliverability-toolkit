@@ -4,23 +4,29 @@ import os
 import re
 import signal
 import subprocess
+import threading
 import time
 
 import pytest
 
 from app.core import safe_regex
 from app.core.safe_regex import (
+    MAX_BATCH_S,
+    MAX_LIVE_WORKERS,
     MAX_MATCHES,
     MAX_PATTERN_LENGTH,
+    MAX_RULES,
     MAX_TEXT_BYTES,
     MAX_TIMEOUT_S,
     MIN_TIMEOUT_S,
     CompiledRule,
+    MatchResult,
     RegexRejectReason,
     RegexRuleError,
     SearchFailure,
     compile_checked,
     search_all,
+    search_many,
 )
 
 TIMEOUT = 0.5
@@ -234,35 +240,197 @@ def test_process_stays_responsive_after_timeout(recorded: list[_RecordingPopen])
 def test_timeout_is_clamped(
     monkeypatch: pytest.MonkeyPatch, requested: float, expected: float
 ) -> None:
-    seen: list[float | None] = []
-    real = subprocess.Popen.communicate
+    budgets: list[float] = []
+    real = safe_regex._Worker.exchange
 
-    def spy(self: subprocess.Popen[bytes], *args: object, **kwargs: object) -> object:
-        if args:  # first call carries the input
-            seen.append(kwargs.get("timeout"))  # type: ignore[arg-type]
-        return real(self, *args, **kwargs)  # type: ignore[arg-type,misc]
+    def spy(self: safe_regex._Worker, payload: bytes, deadline: float) -> bytes | None:
+        budgets.append(deadline - time.monotonic())
+        return real(self, payload, deadline)
 
-    monkeypatch.setattr(subprocess.Popen, "communicate", spy)
+    monkeypatch.setattr(safe_regex._Worker, "exchange", spy)
     search_all(compile_checked("a"), "a", timeout_s=requested)
-    assert seen == [expected]
+    assert len(budgets) == 2  # text/startup, then the rule
+    assert expected - 0.05 < budgets[1] <= expected
 
 
 # --- search_all: worker failures -------------------------------------------------------------
+
+_READY = "import sys; r=sys.stdin.buffer.readline; r(); print('\"ready\"', flush=True); r(); "
 
 
 @pytest.mark.parametrize(
     "worker",
     [
-        "import sys; sys.exit(3)",
-        "import sys; sys.stdout.write('not json')",
-        "import sys; sys.stdout.write('[[1]]')",
-        "import sys; sys.stdout.write('{\"a\": 1}')",
+        "import sys; sys.exit(3)",  # dies before ready
+        "print('nope', flush=True)",  # wrong handshake
+        _READY + "sys.exit(0)",  # dies during the rule
+        _READY + "print('not json', flush=True)",
+        _READY + "print('[[1]]', flush=True)",
+        _READY + "print('{\"a\": 1}', flush=True)",
+        _READY + "print('7', flush=True)",
     ],
 )
 def test_worker_failure_is_reported_not_raised(
-    monkeypatch: pytest.MonkeyPatch, worker: str
+    monkeypatch: pytest.MonkeyPatch, recorded: list[_RecordingPopen], worker: str
 ) -> None:
     monkeypatch.setattr(safe_regex, "_WORKER", worker)
     result = search_all(compile_checked("a"), "a", timeout_s=MAX_TIMEOUT_S)
     assert result.failure is SearchFailure.WORKER_FAILED
     assert not result.complete and result.matches == ()
+    _assert_no_live_workers(recorded)
+
+
+# --- search_many -----------------------------------------------------------------------------
+
+
+def _free_slots() -> int:
+    taken = 0
+    while safe_regex._WORKER_SLOTS.acquire(blocking=False):
+        taken += 1
+    for _ in range(taken):
+        safe_regex._WORKER_SLOTS.release()
+    return taken
+
+
+def _assert_no_live_workers(procs: list[_RecordingPopen]) -> None:
+    for proc in procs:
+        assert proc.returncode is not None
+        with pytest.raises(ProcessLookupError):
+            os.kill(proc.pid, 0)
+    assert _free_slots() == MAX_LIVE_WORKERS
+
+
+def test_batch_with_catastrophic_rule_in_the_middle(recorded: list[_RecordingPopen]) -> None:
+    rules = [
+        compile_checked("b"),
+        compile_checked("z"),
+        compile_checked("(a+)+$"),
+        compile_checked("a{3}"),
+        compile_checked("!"),
+    ]
+    text = "a" * 40 + "!b"
+    started = time.monotonic()
+    results = search_many(rules, text, timeout_s=TIMEOUT)
+    assert time.monotonic() - started < 2 * TIMEOUT + 2.0
+
+    assert [r.timed_out for r in results] == [False, False, True, False, False]
+    assert results[2].failure is SearchFailure.TIMEOUT and results[2].matches == ()
+    assert [m.start for m in results[0].matches] == [41]
+    assert results[1].matches == ()
+    assert len(results[3].matches) == 13
+    assert [m.start for m in results[4].matches] == [40]
+    assert all(r.complete for i, r in enumerate(results) if i != 2)
+
+    assert len(recorded) == 2  # one worker killed at the bad rule, one fresh for the rest
+    _assert_reaped_by_sigkill(recorded[0])
+    assert recorded[1].returncode == 0
+    _assert_no_live_workers(recorded)
+
+
+def test_batch_uses_one_worker_for_many_rules(recorded: list[_RecordingPopen]) -> None:
+    rules = [compile_checked(f"x{i}\\b") for i in range(50)]
+    results = search_many(rules, "x4 x7 x42", timeout_s=MAX_TIMEOUT_S)
+    assert all(r.complete for r in results)
+    assert [i for i, r in enumerate(results) if r.matches] == [4, 7, 42]
+    assert len(recorded) == 1
+    _assert_no_live_workers(recorded)
+
+
+def test_empty_batch(recorded: list[_RecordingPopen]) -> None:
+    assert search_many([], "text") == []
+    assert recorded == []
+
+
+def test_rule_count_cap(recorded: list[_RecordingPopen]) -> None:
+    rules = [compile_checked("a")] * (MAX_RULES + 3)
+    results = search_many(rules, "a", timeout_s=MAX_TIMEOUT_S)
+    assert len(results) == MAX_RULES + 3
+    assert all(r.complete for r in results[:MAX_RULES])
+    assert all(r.failure is SearchFailure.TOO_MANY_RULES for r in results[MAX_RULES:])
+    assert not any(r.complete for r in results[MAX_RULES:])
+    _assert_no_live_workers(recorded)
+
+
+def test_text_too_large_marks_every_rule(recorded: list[_RecordingPopen]) -> None:
+    results = search_many([compile_checked("a")] * 3, "aaaa", max_text_bytes=2)
+    assert [r.failure for r in results] == [SearchFailure.TEXT_TOO_LARGE] * 3
+    assert recorded == []
+
+
+def test_overall_deadline_marks_remaining_rules(recorded: list[_RecordingPopen]) -> None:
+    bad = compile_checked("(a+)+$")
+    rules = [compile_checked("a"), bad, bad, bad, compile_checked("!")]
+    started = time.monotonic()
+    results = search_many(rules, "a" * 40 + "!", timeout_s=0.4, total_timeout_s=1.0)
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 1.0 + 1.0
+    assert results[0].complete
+    assert [r.failure for r in results[1:3]] == [SearchFailure.TIMEOUT] * 2
+    assert [r.failure for r in results[3:]] == [SearchFailure.BATCH_DEADLINE] * 2
+    assert all(r.timed_out and not r.complete for r in results[1:])
+    _assert_no_live_workers(recorded)
+
+
+def test_overall_deadline_is_capped(monkeypatch: pytest.MonkeyPatch) -> None:
+    budgets: list[float] = []
+    real = safe_regex._start_worker
+
+    def spy(text_line: bytes, slot_wait_s: float, deadline: float) -> object:
+        budgets.append(deadline - time.monotonic())
+        return real(text_line, slot_wait_s, deadline)
+
+    monkeypatch.setattr(safe_regex, "_start_worker", spy)
+    search_many([compile_checked("a")], "a", total_timeout_s=10_000)
+    assert len(budgets) == 1 and budgets[0] <= MAX_BATCH_S
+
+
+def test_saturated_pool_returns_busy(monkeypatch: pytest.MonkeyPatch) -> None:
+    slots = threading.BoundedSemaphore(1)
+    monkeypatch.setattr(safe_regex, "_WORKER_SLOTS", slots)
+    assert slots.acquire(blocking=False)  # someone else holds the only slot
+    try:
+        started = time.monotonic()
+        results = search_many([compile_checked("a")] * 2, "a", timeout_s=TIMEOUT)
+        elapsed = time.monotonic() - started
+    finally:
+        slots.release()
+    assert [r.failure for r in results] == [SearchFailure.BUSY] * 2
+    assert not any(r.complete or r.timed_out for r in results)
+    assert TIMEOUT * 0.9 <= elapsed < TIMEOUT + 1.0
+
+
+def test_concurrency_cap_is_enforced(
+    monkeypatch: pytest.MonkeyPatch, recorded: list[_RecordingPopen]
+) -> None:
+    cap = 2
+    monkeypatch.setattr(safe_regex, "_WORKER_SLOTS", threading.BoundedSemaphore(cap))
+    peak = 0
+    lock = threading.Lock()
+    real_init = _RecordingPopen.__init__
+
+    def counting_init(self: _RecordingPopen, *args: object, **kwargs: object) -> None:
+        nonlocal peak
+        real_init(self, *args, **kwargs)
+        with lock:
+            peak = max(peak, sum(p.poll() is None for p in _RecordingPopen.instances))
+
+    monkeypatch.setattr(_RecordingPopen, "__init__", counting_init)
+    rule = compile_checked("(a+)+$")
+    outcomes: list[MatchResult] = []
+
+    def run() -> None:
+        outcomes.extend(search_many([rule], "a" * 40 + "!", timeout_s=TIMEOUT))
+
+    threads = [threading.Thread(target=run) for _ in range(6)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=10)
+    assert not any(t.is_alive() for t in threads)
+    assert len(outcomes) == 6  # every caller got an answer
+    assert not any(r.complete for r in outcomes)
+    assert {r.failure for r in outcomes} <= {SearchFailure.TIMEOUT, SearchFailure.BUSY}
+    assert 1 <= peak <= cap
+    for proc in recorded:
+        assert proc.returncode is not None

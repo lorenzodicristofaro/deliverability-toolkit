@@ -197,9 +197,11 @@ profile is older than 12 months.
   private, link-local, CGNAT and cloud metadata ranges, pin the resolved IP
   to avoid DNS rebinding, enforce size/time limits, restrict redirects.
 - Input validation of domains/IPs (IDNA, length, label rules) at the edge.
-- Regex rules run through `app/core/safe_regex.py` (M5-03): each search runs in a
-  short-lived subprocess killed (SIGKILL) on timeout, with caps on pattern length,
-  text size, match count and timeout. Not a thread (cannot be stopped) and not the
+- Regex rules run through `app/core/safe_regex.py` (M5-03): `search_many` runs all
+  rules for one text in one worker subprocess with a per-rule deadline; a rule that
+  times out gets its worker killed (SIGKILL) and a fresh worker runs the rest. Caps on
+  pattern length, text size, matches, per-rule timeout, rules per call, overall call
+  time, and live workers per process (bounded wait, then `busy`, never an unbounded queue). Not a thread (cannot be stopped) and not the
   `regex` module timeout (its docs do not say when the deadline is checked).
 - Uploaded `.eml` files and DMARC XML: size caps, zip-bomb protection, defusedxml.
 - Secrets encrypted with a key from env/file (Fernet or libsodium), rotation path documented.
