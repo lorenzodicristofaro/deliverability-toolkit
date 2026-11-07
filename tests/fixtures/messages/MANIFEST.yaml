@@ -2,6 +2,8 @@
 # status: verified = header shape taken from the cited document; unverified = built only from
 # RFC-defined syntax, NOT confirmed against a real message of the labelled provider.
 # facts are what M4-14 may assert; they are not parser output.
+# alignment states use the parser vocabulary (aligned, not_evaluated); hop_count 0 also covers
+# inputs the analyzer rejects (nul_byte, line_too_long), where the received section is absent.
 samples:
   - file: plain-rfc8601-b3.eml
     provider_label: plain-rfc
@@ -14,7 +16,7 @@ samples:
       hop_count: 1
       auth_methods: [spf]
       arc_chain: {instances: 0, state: none}
-      alignment: {spf: aligned, dkim: not_applicable}
+      alignment: {spf: aligned, dkim: not_evaluated}
   - file: plain-rfc8601-b4.eml
     provider_label: plain-rfc
     status: verified
@@ -26,7 +28,7 @@ samples:
       hop_count: 1
       auth_methods: [auth, spf, iprev]
       arc_chain: {instances: 0, state: none}
-      alignment: {spf: aligned, dkim: not_applicable}
+      alignment: {spf: aligned, dkim: not_evaluated}
   - file: plain-rfc5321-d3.eml
     provider_label: plain-rfc
     status: verified
@@ -38,7 +40,7 @@ samples:
       hop_count: 1
       auth_methods: []
       arc_chain: {instances: 0, state: none}
-      alignment: {spf: not_applicable, dkim: not_applicable}
+      alignment: {spf: not_evaluated, dkim: not_evaluated}
   - file: arc-rfc8617-appendix-b.eml
     provider_label: arc-rfc8617
     status: verified
@@ -49,8 +51,8 @@ samples:
     facts:
       hop_count: 4
       auth_methods: [spf, dkim, dmarc, arc]
-      arc_chain: {instances: 3, cv: [none, pass, pass], state: claimed_pass}
-      alignment: {spf: aligned, dkim: aligned}
+      arc_chain: {instances: 3, cv: [none, pass, pass], state: structurally_valid}
+      identifier_alignment: {spf: aligned, dkim: aligned}
   - file: gmail-unverified.eml
     provider_label: gmail
     status: unverified
@@ -112,10 +114,10 @@ samples:
     sources:
       - https://www.rfc-editor.org/rfc/rfc5322.txt (section 2.2.3)
     verified_on: '2026-11-07'
-    notes: "Hand-written. 5000 continuation lines in one Subject (RFC 5322 2.2.3 folding). The source cites the rule being violated, not a provider claim."
+    notes: "Hand-written STRESS sample, not a rule violation: 5000 continuation lines in one Subject. RFC 5322 2.2.3 defines folding but sets no limit on the number of folds; the analyzer's own caps bound it. The source cites the folding syntax only, not a provider claim."
     facts:
       must_not_crash: true
-      defects: [excessive_folding]
+      defects: []  # 5000 short folds stay under the parser caps: accepted, no defect reported
       hop_count: 0
   - file: malformed-nul.eml
     provider_label: malformed-nul
