@@ -33,6 +33,7 @@ analysis has no clock; only ``findings`` and ``status`` are taken from it.
 from __future__ import annotations
 
 import re
+import unicodedata
 from collections.abc import Callable
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -71,6 +72,7 @@ INTERNAL_ERROR = "internal_error"
 _EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 _FOR_CLAUSE = re.compile(r"\bfor\b", re.IGNORECASE)
 _REDACTED = "for [redacted]"
+_REDACTED_TOKEN = "[redacted]"
 
 _RECEIVED_CODES = frozenset(
     {
@@ -308,24 +310,92 @@ def redact_received(raw: str) -> str:
     return f"{out}; {tail}" if tail else out
 
 
+HOP_FIELD_REDACTED = "hop_field_redacted"
+_MAX_QUOTE_WALK = 8
+
+
+def _normalize(text: str) -> str:
+    """Whitespace and control characters become one space; format characters are dropped."""
+    out: list[str] = []
+    for ch in text:
+        cat = unicodedata.category(ch)
+        if cat == "Cf":
+            continue
+        if cat[0] in "CZ" or ch.isspace():
+            if not out or out[-1] != " ":
+                out.append(" ")
+            continue
+        out.append(ch)
+    return "".join(out)
+
+
+def _mask_addresses(text: str) -> str:
+    """Replace every space-delimited token containing ``@`` (and the opening part of a
+    quoted local-part such as ``"x y"@z``) with ``[redacted]``. Linear in the input."""
+    tokens = text.split(" ")
+    masked = [False] * len(tokens)
+    for i, tok in enumerate(tokens):
+        at = tok.find("@")
+        if at < 0:
+            continue
+        masked[i] = True
+        if at == 0 and i > 0:  # "local @domain": whitespace was inserted before the "@"
+            masked[i - 1] = True
+        if tok.endswith("@") and i + 1 < len(tokens):
+            masked[i + 1] = True
+        if tok.count('"', 0, at) % 2 == 1:
+            # a quote is still open before "@": it was opened in an earlier token
+            j = i - 1
+            while j >= 0 and i - j <= _MAX_QUOTE_WALK:
+                masked[j] = True
+                if '"' in tokens[j]:
+                    break
+                j -= 1
+    return " ".join(_REDACTED_TOKEN if m else t for t, m in zip(tokens, masked, strict=True))
+
+
+def _clean_raw(raw: str) -> str:
+    """Display form of a Received hop: normalised, ``for`` clause and addresses removed."""
+    return excerpt(_mask_addresses(redact_received(_normalize(raw))))
+
+
 def _hop(h: ReceivedHop) -> HopView:
+    warnings = list(_codes(h.warnings))
+    redacted = False
+
+    def field(value: str | None) -> str | None:
+        nonlocal redacted
+        if value is None:
+            return None
+        norm = _normalize(value)
+        if "@" in norm or "<" in norm:
+            redacted = True
+            return None
+        return excerpt(norm)
+
+    from_host = field(h.from_host)
+    from_ip = field(h.from_ip)
+    by_host = field(h.by_host)
+    via = field(h.via)
+    with_protocol = field(h.with_protocol)
+    hop_id = field(h.id)
+    if redacted:
+        warnings.append(HOP_FIELD_REDACTED)
     return HopView(
         index=h.index,
-        # Redact before AND after excerpt: excerpt strips tabs (joining "for" to the address)
-        # and ZWSP (hiding "for"), so either order alone can leak.
-        raw=redact_received(excerpt(redact_received(h.raw))),
+        raw=_clean_raw(h.raw),
         parsed=h.parsed,
-        from_host=_x(h.from_host),
-        from_ip=_x(h.from_ip),
+        from_host=from_host,
+        from_ip=from_ip,
         from_ip_reserved=h.from_ip_reserved,
-        by_host=_x(h.by_host),
-        via=_x(h.via),
-        with_protocol=_x(h.with_protocol),
-        id=_x(h.id),
+        by_host=by_host,
+        via=via,
+        with_protocol=with_protocol,
+        id=hop_id,
         has_for=h.has_for,
         timestamp=_iso(h.timestamp),
         delay_seconds=h.delay_seconds,
-        warnings=_codes(h.warnings),
+        warnings=tuple(warnings),
     )
 
 
