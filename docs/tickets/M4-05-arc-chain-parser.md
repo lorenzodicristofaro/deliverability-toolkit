@@ -14,4 +14,5 @@ Acceptance criteria:
 - Malformed table: duplicate instance, gap, i=0, i=-1, i=abc, i=51, missing tags, unknown a= algorithm (kept, flagged), truncated header, huge tag values (cap per header 8 KiB, already in M4-01), NUL.
 - Fixtures: RFC 8617 appendix B example headers (cited) and synthetic ones on example.com.
 New i18n keys: none
-Status: todo
+Follow-up: h= on ARC-Seal → cv fail (RFC 8617 4.1.3); i= 1*2DIGIT (3.9); algorithms verified (RFC 8617 4.1.3 → RFC 6376 3.5, RFC 8463) 2026-11-07
+Status: in-review

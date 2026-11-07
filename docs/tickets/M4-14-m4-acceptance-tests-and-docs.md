@@ -24,4 +24,11 @@ Notes for docs/HEADERS.md (from M4-03/M4-04 QA):
 - More than 100 hops keeps the newest 100 (`truncated`); the 8 KiB cap is counted in UTF-8 bytes.
 - 1-digit time fields are accepted (lenient).
 - A keyword used as a value (`by id`) gives `missing_clause_value`.
+- MIME size totals count encoded leaf bytes.
+- The QP decoded size is an estimate.
+- RFC 2231 values are not percent-decoded.
+- A bare CR is not a delimiter line.
+- A boundary outside bchars gets the `invalid_boundary` warning.
+- ARC is structural only (no crypto; verified=None).
+- cv=fail precedence.
 Status: todo

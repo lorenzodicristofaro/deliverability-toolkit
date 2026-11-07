@@ -14,4 +14,4 @@ Acceptance criteria:
 - Reports presence of text/plain and text/html alternatives (needed by M5 later, informational only).
 - Table-driven tests, no network.
 New i18n keys: none
-Status: todo
+Status: done
