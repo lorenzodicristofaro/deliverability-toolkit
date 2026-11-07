@@ -13,4 +13,4 @@ Acceptance criteria:
 - Tenancy tests: tenant A cannot read/update/delete tenant B rows (id guessing returns None/not found); global rows readable by all, writable by none via the tenant path.
 - Migration upgrade/downgrade tested; PG-specific constraints verified (PG params skip locally, will run on dev CI: coder notes this).
 New i18n keys: none
-Status: todo
+Status: done
