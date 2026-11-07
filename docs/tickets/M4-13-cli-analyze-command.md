@@ -12,4 +12,4 @@ Acceptance criteria:
 - Pure offline test: sockets blocked; missing file, directory, unreadable file, binary garbage, NUL, empty, symlink to /dev/zero (read capped) all covered.
 - No hardcoded user strings; text format uses i18n keys.
 New i18n keys: cli.analyze.help, cli.analyze.error.not_found, cli.analyze.error.too_large, cli.analyze.error.nul_byte, cli.analyze.error.empty, cli.analyze.summary (en + it)
-Status: todo
+Status: done
