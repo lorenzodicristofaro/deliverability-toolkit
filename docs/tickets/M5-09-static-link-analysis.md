@@ -14,4 +14,4 @@ Acceptance criteria:
 - Caps on link count and URL length enforced; over cap -> `capped=True`.
 - Table-driven tests incl. malformed URLs, whitespace/control chars in href, uppercase schemes, IDN, IPv6 literal, very long URL, relative URLs, empty href.
 New i18n keys: none
-Status: todo
+Status: done
