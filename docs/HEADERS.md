@@ -46,6 +46,7 @@ it or use the API or CLI to send the exact bytes.
 | `Received` hops | 100 (newest kept, `truncated`) | `error` | `MSG_PARSER_LIMIT` (medium) | 200 / 200 | 2 |
 | One `Received` hop | 8 KiB, counted in UTF-8 bytes | `error` | `MSG_RECEIVED_UNPARSED` (low), hop warning `hop_too_long` | 200 / 200 | 2 |
 | MIME depth | 10 | `error` | `MSG_PARSER_LIMIT` (medium), also `MSG_MIME_TRUNCATED` (low) | 200 / 200 | 2 |
+| MIME boundary length | 70 | `error` | `MSG_PARSER_LIMIT` (medium), also `MSG_MIME_TRUNCATED` (low) | 200 / 200 | 2 |
 | MIME parts | 200 | `error` | `MSG_PARSER_LIMIT` (medium), also `MSG_MIME_TRUNCATED` (low) | 200 / 200 | 2 |
 | ARC instances | 50 (a 51-set chain is read as 50 sets plus ungrouped fields) | `warn` | `MSG_ARC_INVALID` (low) | 200 / 200 | 1 |
 

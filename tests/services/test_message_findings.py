@@ -692,7 +692,12 @@ MIME_CAP_CASES = [
     ("neither", _MIXED, _FEW_PARTS, ()),
     ("parts", _MIXED, _MANY_PARTS, ("mime_parts",)),
     ("depth", ('Content-Type: multipart/mixed; boundary="b0"',), _nested_body(30), ("mime_depth",)),
-    ("both", _MIXED, _nested_body(30).replace("--b0", "--b") + _MANY_PARTS, None),
+    (
+        "both",
+        _MIXED,
+        _nested_body(30).replace("--b0", "--b") + _MANY_PARTS,
+        ("mime_parts", "mime_depth"),
+    ),
     (
         "boundary_too_long",
         ('Content-Type: multipart/mixed; boundary="' + "b" * 100 + '"',),
@@ -707,9 +712,7 @@ MIME_CAP_CASES = [
     [c[1:] for c in MIME_CAP_CASES],
     ids=[c[0] for c in MIME_CAP_CASES],
 )
-def test_mime_cap_is_error_class(
-    add: tuple[str, ...], body: str, limits: tuple[str, ...] | None
-) -> None:
+def test_mime_cap_is_error_class(add: tuple[str, ...], body: str, limits: tuple[str, ...]) -> None:
     r = run(("Content-Type",), add, body=body)
     found = codes(r)
     if limits == ():
@@ -720,7 +723,24 @@ def test_mime_cap_is_error_class(
     assert "MSG_PARSER_LIMIT" in found and "MSG_MIME_TRUNCATED" in found
     assert "parser" in r.unevaluated
     text = " ".join(str(f.params) for f in r.findings if f.code == "MSG_PARSER_LIMIT")
-    if limits is None:
-        assert "mime_parts" in text or "mime_depth" in text
     for label in limits or ():
         assert label in text
+
+
+_BAD_PART = "--b\r\nContent-Type: ;;;\r\nContent-Transfer-Encoding: ???\r\n\r\nx\r\n"
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        # warnings list full before the depth cap is reached
+        "".join(_BAD_PART for _ in range(150)) + _nested_body(30).replace("--b0", "--b"),
+        # warnings list full, then the part cap
+        "".join(_BAD_PART for _ in range(250)) + "--b--\r\n",
+    ],
+    ids=["warnings_full_then_depth", "warnings_full_then_parts"],
+)
+def test_mime_cap_after_warning_list_is_full(body: str) -> None:
+    r = run(("Content-Type",), _MIXED, body=body)
+    assert r.status == "error"
+    assert "MSG_PARSER_LIMIT" in codes(r)

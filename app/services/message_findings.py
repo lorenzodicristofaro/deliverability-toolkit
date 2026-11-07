@@ -538,6 +538,9 @@ def build_message_findings(
         for warning_code, label in _MIME_CAP_LIMITS:
             if warning_code in mime_codes:
                 limits.append(label)
+        if mime.truncated and not (mime_codes & {c for c, _ in _MIME_CAP_LIMITS}):
+            # The warning list is capped, so the specific cap warning may have been dropped.
+            limits.append("mime")
     if limits:
         acc.add("MSG_PARSER_LIMIT", "medium", {"limits": ", ".join(dict.fromkeys(limits))})
         acc.skip("parser")
