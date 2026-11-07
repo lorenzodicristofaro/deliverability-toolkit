@@ -72,6 +72,9 @@ def test_findings_sorted_severity_then_code() -> None:
         (12, "invalid_input"),
         (b"A: b\x00c\r\n\r\nbody", "nul_byte"),
         (b"\r\n\r\nonly body", "no_header_block"),
+        (b"hello", "no_header_block"),
+        (b"no header block here", "no_header_block"),
+        (b"line one\r\nline two\r\n\r\nbody", "no_header_block"),
         (b"\x00", "nul_byte"),
         (b"x" * (MAX_RAW_BYTES + 1), "message_too_large"),
         (b"".join(b"H%d: v\r\n" % i for i in range(MAX_HEADER_COUNT + 1)) + b"\r\nb", None),
@@ -425,3 +428,9 @@ def test_for_keyword_obfuscation_fuzz() -> None:
         assert "victim.secret" not in ma._clean_raw(text)
         if not any(c in text for c in "\r\n\x00\x0b\u2028"):
             assert "victim.secret" not in _hop_json(text)
+
+
+def test_colonless_lines_with_one_valid_header_stay_evaluated() -> None:
+    a = analyze_message(b"junk line\r\nFrom: a@b.example\r\nmore junk\r\n\r\nbody")
+    assert a.status != "error"
+    assert a.summary is not None

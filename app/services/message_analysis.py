@@ -646,7 +646,7 @@ def _analyze(raw: bytes) -> MessageAnalysis:
         block = parse_header_block(raw)
     except MessageParseError as e:
         return _rejected(e.code)
-    if not block.fields:
+    if not any(f.name for f in block.fields):  # colon-less text parses to empty names
         return _rejected(NO_HEADER_BLOCK)
 
     failed: list[str] = []
