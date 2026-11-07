@@ -135,7 +135,10 @@ URI_CASES = [
         {},
     ),
     ("empty_brackets", b"<>", ["empty"], None, {}),
+    # Documented: the inner "<https://..." has no scheme, so it is relative; the second ">" is
+    # trailing text (RFC 2369 section 2, rule 2).
     ("double_brackets", b"<<https://a.example/u>>", ["relative"], "trailing_text", {}),
+    ("double_brackets_x", b"<<https://x.example/u>>", ["relative"], "trailing_text", {}),
     ("relative", b"</unsubscribe>", ["relative"], None, {}),
     ("protocol_relative", b"<//a.example/u>", ["relative"], None, {}),
     (
@@ -199,6 +202,26 @@ URI_FACT_CASES = [
     ("mailto:off@ex%ffample.com", {"malformed": "mailto_percent_encoding"}),
     ("mailto:off@[192.0.2.1]", {"mailto_domain": None}),
     ("javascript:alert(1)", {"kind": "other", "scheme": "javascript"}),
+    # RFC 6068 section 2: addresses in to= hfields
+    ("mailto:?to=a@x.example", {"mailto_domain": "x.example", "malformed": None}),
+    ("mailto:?To=a@x.example&subject=unsubscribe", {"mailto_domain": "x.example"}),
+    ("mailto:?%74o=a@x.example", {"mailto_domain": "x.example"}),
+    ("mailto:?subject=u&to=a@x.example,b@y.example", {"mailto_domain": "x.example"}),
+    ("mailto:?to=a%40x.example", {"mailto_domain": "x.example"}),
+    ("mailto:a@x.example?to=b@y.example", {"mailto_domain": "x.example"}),
+    ("mailto:?cc=a@x.example", {"malformed": "mailto_no_address", "evaluated": True}),
+    ("mailto:?to=", {"malformed": "mailto_no_address", "evaluated": True}),
+    ("mailto:?to=a@", {"malformed": "mailto_domain_empty", "evaluated": True}),
+    ("mailto:a@x.example?subject", {"mailto_domain": "x.example", "evaluated": True}),
+    ("mailto:?subject", {"malformed": "mailto_hfield", "evaluated": False}),
+    ("mailto:?to=a@x%ff.example", {"malformed": "mailto_percent_encoding", "evaluated": False}),
+    ("mailto:?%ff=a@x.example", {"malformed": "mailto_percent_encoding", "evaluated": False}),
+    ("mailto:%22a,b%22@x.example", {"malformed": "mailto_quoted_local_part", "evaluated": False}),
+    # https without a "//" authority (RFC 3986 sections 3 and 3.2)
+    ("https:x.example/u", {"kind": "https", "host": "x.example", "nonstandard_authority": True}),
+    ("https:///x.example/u", {"host": "x.example", "nonstandard_authority": True}),
+    ("https:\\\\x.example\\u", {"host": "x.example", "nonstandard_authority": True}),
+    ("https://x.example/u", {"host": "x.example", "nonstandard_authority": False}),
     ("=?utf-8?q?https=3A//a.example/u?=", {"kind": "relative"}),
 ]
 
@@ -230,6 +253,24 @@ PRESENCE_CASES = [
         True,
     ),
     ("malformed_https_not_counted", b"<https://a.example:x/u>", False, False, False),
+    ("mailto_to_hfield", b"<mailto:?to=x@a.example>", False, False, True),
+    ("mailto_unreadable_unknown", b"<mailto:?to=x@a%ff.example>", False, False, None),
+    (
+        "mailto_unreadable_then_valid",
+        b"<mailto:?subject>, <mailto:x@a.example>",
+        False,
+        False,
+        True,
+    ),
+    ("mailto_no_address_false", b"<mailto:?subject=unsubscribe>", False, False, False),
+    ("https_no_slashes_not_counted", b"<https:x.example/u>", False, False, False),
+    (
+        "https_nonstandard_then_valid",
+        b"<https:///x.example/u>, <https://x.example/u>",
+        True,
+        False,
+        False,
+    ),
     (
         "https_after_rule2_ignored",
         b"<mailto:x@a.example> x <https://a.example/u>",
@@ -246,7 +287,7 @@ PRESENCE_CASES = [
     [c[1:] for c in PRESENCE_CASES],
     ids=[c[0] for c in PRESENCE_CASES],
 )
-def test_presence(value: bytes, https: bool, http: bool, mailto: bool) -> None:
+def test_presence(value: bytes, https: bool, http: bool, mailto: bool | None) -> None:
     result = facts(lu(value))
     assert (result.https_uri_present, result.http_uri_present, result.mailto_uri_present) == (
         https,
@@ -330,6 +371,10 @@ ELIGIBLE_CASES = [
     ("http_only", lu(b"<http://a.example/u>"), False),
     ("mailto_only", lu(b"<mailto:x@a.example>"), False),
     ("malformed_https", lu(b"<https://a.example:x/u>"), False),
+    ("https_no_slashes", lu(b"<https:x.example/u>"), False),
+    ("https_three_slashes", lu(b"<https:///x.example/u>"), False),
+    ("https_backslashes", lu(b"<https:\\\\x.example\\u>"), False),
+    ("https_backslash_path", lu(b"<https://x.example\\u>"), False),
     ("not_bracketed", lu(b"https://a.example/u"), False),
     ("post_without_list_unsubscribe", b"List-Unsubscribe-Post: List-Unsubscribe=One-Click", False),
     (

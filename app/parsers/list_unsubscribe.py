@@ -45,7 +45,14 @@ Derived facts (definitions chosen here, not taken from the RFCs):
   is signed; ``duplicated`` is reported alongside.
 - ``https_uri_present`` / ``http_uri_present`` / ``mailto_uri_present`` are ``None`` (unknown)
   instead of ``False`` when part of the input was not evaluated (field or URI caps, over-long
-  value, NUL byte).
+  value, NUL byte, a URI of that kind that could not be read).
+- mailto (RFC 6068 section 2): addresses come from the ``to`` part and from ``to=`` hfields;
+  ``mailto:?to=a@x.example`` is valid. Undecodable percent-encoding, a malformed hfield with no
+  address found, or a quoted-string local part make the URI not evaluated.
+- https URIs whose authority is not introduced by exactly ``//`` (RFC 3986 sections 3 and 3.2;
+  ``https:x.example/u``, ``https:///x.example/u``, backslashes instead of slashes) keep the host a
+  browser would use but set ``nonstandard_authority`` and do not count for
+  ``https_uri_present`` or One-Click.
 
 Host extraction for http(s) URIs reuses the M5-09 static link analysis
 (``app.parsers.content_links.analyze_links``). Caps (:data:`MAX_FIELDS`, :data:`MAX_URIS`,
@@ -100,8 +107,13 @@ class UnsubscribeUri:
     mailto_domain: str | None = None  # ASCII domain of the first mailto address
     mailto_has_query: bool = False  # ?subject=, ?body=, ...
     whitespace_removed: bool = False  # whitespace inside the brackets (RFC 2369 section 2)
+    # http(s) without a "//" authority (RFC 3986 sections 3 and 3.2), see M5-09 LinkInfo; the
+    # host is still extracted, but such an https URI does not count for One-Click.
+    nonstandard_authority: bool = False
+    evaluated: bool = True  # False: the URI could not be read (e.g. bad mailto encoding)
     # control_character | host_* / empty_host / invalid_ipv4 / invalid_ipv6 / port (M5-09) |
-    # mailto_no_address | mailto_percent_encoding | mailto_domain_<reason>
+    # mailto_no_address | mailto_domain_<reason> | not evaluated: mailto_percent_encoding,
+    # mailto_hfield, mailto_quoted_local_part
     malformed: str | None = None
 
 
@@ -122,7 +134,7 @@ class ListUnsubscribeFacts:
     field_count: int = 0
     duplicated: bool = False  # RFC 2369 section 3 / RFC 8058 section 3.1: one field
     fields: tuple[ListUnsubscribeField, ...] = ()  # first MAX_FIELDS instances
-    https_uri_present: bool | None = False  # https URI with a valid host
+    https_uri_present: bool | None = False  # https URI, valid host, "//" authority
     http_uri_present: bool | None = False  # http (non-TLS) URI with a valid host
     mailto_uri_present: bool | None = False  # mailto URI with a valid domain
     post_present: bool = False
@@ -209,9 +221,17 @@ def _has_controls(value: str) -> bool:
     return any(unicodedata.category(c) == "Cc" for c in value)
 
 
+def _pct(text: str) -> str:
+    """Percent-decode as UTF-8; raises UnicodeDecodeError on invalid UTF-8."""
+    return unquote_to_bytes(text).decode("utf-8")
+
+
 def _mailto(uri: UnsubscribeUri, text: str) -> UnsubscribeUri:
+    """RFC 6068 section 2: ``"mailto:" [ to ] [ hfields ]``; addresses are in ``to`` and in
+    ``to=`` hfields (``mailto:?to=a@x.example`` is valid). The first address's domain is
+    reported. Input that cannot be read is ``evaluated=False``, never "no address"."""
     body = text.split(":", 1)[1]
-    addresses, sep, _ = body.partition("?")
+    to_part, sep, query = body.partition("?")
     base = UnsubscribeUri(
         uri.index,
         uri.uri,
@@ -220,15 +240,28 @@ def _mailto(uri: UnsubscribeUri, text: str) -> UnsubscribeUri:
         mailto_has_query=bool(sep),
         whitespace_removed=uri.whitespace_removed,
     )
+    bad_hfield = False
     try:
-        decoded = unquote_to_bytes(addresses).decode("utf-8")
+        encoded = [to_part] if to_part else []
+        for hfield in query.split("&") if sep else []:
+            name, eq, value = hfield.partition("=")
+            if not eq:
+                bad_hfield = True  # RFC 6068 section 2: hfield = hfname "=" hfvalue
+            elif _pct(name).lower() == "to":
+                encoded.append(value)
+        addresses = [a for part in encoded for a in _pct(part).split(",") if a]
     except UnicodeDecodeError:
-        return replace(base, malformed="mailto_percent_encoding")
-    first = decoded.split(",", 1)[0]
-    if "@" not in first:
+        return replace(base, malformed="mailto_percent_encoding", evaluated=False)
+    if not addresses:
+        if bad_hfield:
+            return replace(base, malformed="mailto_hfield", evaluated=False)
         return replace(base, malformed="mailto_no_address")
-    local, domain = first.rsplit("@", 1)
-    if not local:
+    first = addresses[0]
+    if '"' in first:
+        # A quoted-string local part may contain "," or "@"; not split reliably here.
+        return replace(base, malformed="mailto_quoted_local_part", evaluated=False)
+    local, at, domain = first.rpartition("@")
+    if not at or not local:
         return replace(base, malformed="mailto_no_address")
     try:
         return replace(base, mailto_domain=to_ascii_domain(domain))
@@ -253,6 +286,7 @@ def _from_link(uri: UnsubscribeUri, text: str, link: LinkInfo) -> UnsubscribeUri
             host=link.host,
             ip_literal=link.ip_literal,
             has_userinfo=link.has_userinfo,
+            nonstandard_authority=link.nonstandard_authority,
             malformed=link.malformed,
         )
     return replace(uri, kind="other", scheme=link.scheme)
@@ -299,9 +333,14 @@ def _presence(fields: tuple[ListUnsubscribeField, ...], total: int, kind: str) -
     for f in fields:
         for uri in f.uris:
             if uri.kind == kind and uri.malformed is None:
+                if kind == "https" and uri.nonstandard_authority:
+                    continue
                 return True
     unknown = total > len(fields) or any(
-        not f.evaluated or f.capped or any(u.kind == "too_long" for u in f.uris) for f in fields
+        not f.evaluated
+        or f.capped
+        or any(u.kind == "too_long" or (u.kind == kind and not u.evaluated) for u in f.uris)
+        for f in fields
     )
     return None if unknown else False
 

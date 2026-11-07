@@ -71,6 +71,10 @@ class LinkInfo:
     registrable_domain: str | None = None  # organizational domain, else the host itself
     ip_literal: bool = False
     non_https: bool = False  # explicit http:
+    # Web link whose authority is not introduced by exactly "//" (RFC 3986 sections 3 and 3.2):
+    # "https:x.example", "https:///x.example", "https:\\x.example", or an authority ended by
+    # "\". The host above is still the one a browser would visit.
+    nonstandard_authority: bool = False
     has_userinfo: bool = False
     percent_encoded_host: bool = False
     has_control_chars: bool = False
@@ -245,6 +249,14 @@ def _parse_host(authority: str) -> _Host:
     return _Host(name, False, userinfo, percent)
 
 
+def _nonstandard_authority(rest: str) -> bool:
+    """``rest`` starts where "//" authority should begin (after ``scheme:``, or the href)."""
+    if rest[:2] != "//" or rest[2:3] in ("/", "\\"):
+        return True
+    match = _AUTH_END_RE.search(rest, 2)
+    return match is not None and match.group() == "\\"
+
+
 def _split_web(rest: str) -> str:
     """Authority part of a special-scheme URL after ``scheme:`` (or of ``//...``)."""
     rest = rest.lstrip("/\\")
@@ -360,6 +372,7 @@ def _analyze_one(
         masked = text_host is not None and kind in _DANGEROUS
         return replace(base, text_host=text_host, masked=masked)
     rest = cleaned if protocol_relative else cleaned[match.end() if match else 0 :]
+    base = replace(base, nonstandard_authority=_nonstandard_authority(rest))
     try:
         parsed = _parse_host(_split_web(rest))
     except _BadHost as exc:
