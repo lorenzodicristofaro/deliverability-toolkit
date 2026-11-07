@@ -12,4 +12,4 @@ Acceptance criteria:
 - Tests: tenant isolation, global/tenant CHECKs, kind `http_fetch` rejected by the DB CHECK, oversize definition rejected, NUL rejected before DB; migration up/down.
 New i18n keys: none
 GM notes (from M5-06 QA): SQLite (3.46 and 3.53) raises "internal query planner error" for `(global OR scope=tenant AND tenant_id=?) AND key=?` when a partial `(tenant_id, …) WHERE scope='tenant'` index exists. Use the 0006 pattern: non-partial unique (tenant_id, key) + partial global unique index; no partial tenant index. Add a test running the tenant OR-filter plus key lookup with bound params.
-Status: todo
+Status: done
