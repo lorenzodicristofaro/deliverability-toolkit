@@ -93,7 +93,7 @@ Carried over from M0-07 QA:
   - [x] M4-09 anomaly findings + MSG_* texts
   - [x] M4-10 analysis service
   - [x] M4-11 REST endpoint
-  - [ ] M4-12 web UI
+  - [x] M4-12 web UI
   - [ ] M4-13 CLI `analyze`
   - [ ] M4-14 acceptance tests + docs/HEADERS.md
 
@@ -136,6 +136,7 @@ Carried over from M0-07 QA:
 - [ ] Security review checklist, dependency/license audit, v0.1.0 release
 
 ## Follow-ups (post-M1)
+- [ ] Message UI nits (M4-12 QA): MIME table first column uses `message.col.hop`; needs a part/index key. JS `data-max-bytes` is 2 MiB but no-JS/JS form posts over 1 MiB hit the CSRF 403; cap the JS at 1 MiB or fix with the CSRF follow-up.
 - [ ] Message UI (M4-12): CSRFMiddleware rejects form bodies > 1 MiB with token-in-body as 403, so no-JS pastes above ~1 MiB encoded get 403 instead of the localized 413; fix in core/csrf (raise its form cap or return 413).
 - [ ] tests/tenancy World.send: add a raw-body option so the matrix can show 200 for permitted roles on raw-body routes (M4-11 QA nit).
 - [ ] Received redaction (done in M4-10: all `@` tokens masked). Remaining: `<local>` with no domain and fullwidth ＠ stay visible; Message-ID-style hop ids become None. Also a dedicated MSG_SECTION_FAILED code (en+it) instead of reusing MSG_PARSER_LIMIT, whose "exceeded limits" text misleads for internal failures.

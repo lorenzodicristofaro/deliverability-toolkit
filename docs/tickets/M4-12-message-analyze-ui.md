@@ -13,4 +13,4 @@ Acceptance criteria:
 - Route added to the route-coverage matrix. No hardcoded strings: i18n scan passes. Page works with JS disabled for paste.
 - Nothing stored; the pasted text is not echoed into logs, URLs or cookies; response `Cache-Control: no-store`.
 New i18n keys: message.page.title, message.form.label, message.form.file, message.form.submit, message.error.too_large, message.error.nul_byte, message.error.empty, message.section.received, message.section.authres, message.section.arc, message.section.alignment, message.section.mime, message.section.size, message.section.findings, message.col.* (hop, from, by, delay, time, method, result, instance, domain, aligned, type, bytes) (en + it)
-Status: todo
+Status: done
