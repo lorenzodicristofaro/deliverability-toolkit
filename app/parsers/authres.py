@@ -313,11 +313,16 @@ def _lex(value: str, issues: _Issues) -> list[_Tok]:
     n = len(value)
     i = 0
     while i < n:
+        prev = i
         ch = value[i]
         if ch in _WSP:
             i += 1
         elif ch == "(":
             i = _skip_comment(value, i, issues)
+        elif ch == ")":
+            # A ")" with no matching "(": not CFWS and not part of any token.
+            issues.add(UNEXPECTED_TOKEN, i)
+            i += 1
         elif ch == ";" or ch == "=":
             tokens.append(_Tok(";" if ch == ";" else "=", ch, i, i + 1))
             i += 1
@@ -347,7 +352,26 @@ def _lex(value: str, issues: _Issues) -> list[_Tok]:
             while i < n and value[i] not in _WORD_STOP:
                 i += 1
             tokens.append(_Tok("word", value[start:i], start, i))
+        if i <= prev:
+            # Structural guard: every branch must consume input. Never reached by the
+            # branches above; it turns a future lexer bug into a skipped char, not a hang.
+            i = prev + 1
     return tokens
+
+
+def _comment_tail(value: str, end: int) -> int:
+    """Extend ``end`` over comments (and the CFWS between them) that directly follow it."""
+    scratch = _Issues()  # comment issues were already reported by the lexer
+    n = len(value)
+    i = last = end
+    while i < n:
+        if value[i] in _WSP:
+            i += 1
+        elif value[i] == "(":
+            i = last = _skip_comment(value, i, scratch)
+        else:
+            break
+    return last
 
 
 def _join_dotted(tokens: list[_Tok], i: int) -> tuple[str, int]:
@@ -362,6 +386,11 @@ def _join_dotted(tokens: list[_Tok], i: int) -> tuple[str, int]:
         text += tokens[i].text
         i += 1
     return text, i
+
+
+def _quote(text: str) -> str:
+    """Re-quote an unquoted quoted-string (RFC 5322 section 3.2.4)."""
+    return '"' + text.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
 def _parse_version(text: str) -> int | None:
@@ -436,6 +465,16 @@ def _parse_resinfo(value: str, toks: list[_Tok], issues: _Issues) -> ResInfo | N
         if k < n and toks[k].kind in ("word", "qstr") and not _is_key(toks, k):
             pvalue = toks[k].text
             i = k + 1
+            if (
+                toks[k].kind == "qstr"
+                and i < n
+                and toks[i].kind == "word"
+                and toks[i].text.startswith("@")
+            ):
+                # pvalue = [local-part] "@" domain with a quoted-string local-part
+                # (RFC 8601 section 2.2, RFC 5322 section 3.4.1): keep it quoted.
+                domain, i = _join_dotted(toks, i)
+                pvalue = _quote(pvalue) + domain
         else:
             pvalue = ""
             issues.add(EMPTY_PROPERTY_VALUE, tok.start)
@@ -455,7 +494,7 @@ def _parse_resinfo(value: str, toks: list[_Tok], issues: _Issues) -> ResInfo | N
             issues.add(UNKNOWN_PTYPE, tok.start)
         props.append(AuthResProperty(ptype, prop, pvalue, tok.start))
 
-    raw = value[pos : toks[-1].end]
+    raw = value[pos : _comment_tail(value, toks[-1].end)]
     return ResInfo(method, method_version, result, reason, tuple(props), raw, pos, unknown)
 
 

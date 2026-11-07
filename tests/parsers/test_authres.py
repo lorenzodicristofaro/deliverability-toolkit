@@ -8,6 +8,8 @@ example.com / example.net / example.org only.
 from __future__ import annotations
 
 import dataclasses
+import random
+import threading
 import time
 from pathlib import Path
 
@@ -566,6 +568,42 @@ MALFORMED: list[tuple[str, str, list[str], str | None, list[tuple[str, str]]]] =
         [("spf", "pass")],
     ),
     ("non_ascii_authserv", "exämple.com; spf=pass", [], "exämple.com", [("spf", "pass")]),
+    # Stray ")" with no matching "(": skipped with unexpected_token (used to hang the lexer).
+    (
+        "stray_close_paren_trailing",
+        "example.com; spf=pass )",
+        [ar.UNEXPECTED_TOKEN],
+        "example.com",
+        [("spf", "pass")],
+    ),
+    (
+        "lone_close_paren",
+        ")",
+        [ar.UNEXPECTED_TOKEN, ar.MISSING_AUTHSERV_ID, ar.NO_RESINFO],
+        None,
+        [],
+    ),
+    (
+        "close_paren_inside_word",
+        "a)b",
+        [ar.UNEXPECTED_TOKEN, ar.INVALID_VERSION, ar.NO_RESINFO],
+        "a",
+        [],
+    ),
+    (
+        "double_close_paren",
+        "))",
+        [ar.UNEXPECTED_TOKEN, ar.UNEXPECTED_TOKEN, ar.MISSING_AUTHSERV_ID, ar.NO_RESINFO],
+        None,
+        [],
+    ),
+    (
+        "close_paren_in_resinfo",
+        "example.com; spf=pass ) smtp.mailfrom=example.com",
+        [ar.UNEXPECTED_TOKEN],
+        "example.com",
+        [("spf", "pass")],
+    ),
 ]
 
 
@@ -588,6 +626,68 @@ def test_malformed(
     for issue in header.issues:
         assert issue.term == ""  # never echo input
         assert 0 <= issue.position <= len(value)
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ('example.com; spf=pass smtp.mailfrom="john doe"@example.com', '"john doe"@example.com'),
+        ('example.com; spf=pass smtp.mailfrom="a\\"b"@example.com', '"a\\"b"@example.com'),
+        ('example.com; spf=pass smtp.mailfrom="x" @example . com', '"x"@example.com'),
+        ('example.com; spf=pass smtp.mailfrom="john doe"', "john doe"),
+    ],
+    ids=["quoted_local_part", "escaped_quote", "cfws_around_dot", "quoted_no_domain"],
+)
+def test_quoted_local_part_pvalue(value: str, expected: str) -> None:
+    header = parse(value)
+    assert header.spf[0].smtp_mailfrom == expected
+    assert codes(header) == []
+
+
+@pytest.mark.parametrize(
+    ("value", "raw"),
+    [
+        ("example.com; spf=pass (trailing)", "spf=pass (trailing)"),
+        ("example.com; spf=pass (a) (b)  ; dkim=pass", "spf=pass (a) (b)"),
+        ("example.com; spf=pass  ; dkim=pass", "spf=pass"),
+        ("example.com; spf=pass (open", "spf=pass (open"),
+    ],
+    ids=["one_comment", "two_comments_then_semicolon", "no_comment", "unterminated"],
+)
+def test_raw_includes_trailing_comment(value: str, raw: str) -> None:
+    assert parse(value).resinfo[0].raw == raw
+
+
+FUZZ_ALPHABET = 'a.=;/()"\\ @-'
+FUZZ_SEED = 8601
+FUZZ_CASES = 2_000
+FUZZ_CASE_SECONDS = 1.0
+
+
+def test_fuzz_never_hangs_or_raises() -> None:
+    rng = random.Random(FUZZ_SEED)
+    for _ in range(FUZZ_CASES):
+        value = "".join(rng.choice(FUZZ_ALPHABET) for _ in range(rng.randint(0, 40)))
+        outcome: list[AuthResHeader | BaseException] = []
+
+        def run(v: str = value, out: list[AuthResHeader | BaseException] = outcome) -> None:
+            try:
+                out.append(parse(v))
+            except BaseException as exc:  # reported below with the failing input
+                out.append(exc)
+
+        worker = threading.Thread(target=run, daemon=True)
+        worker.start()
+        worker.join(FUZZ_CASE_SECONDS)
+        assert not worker.is_alive(), (
+            f"parser did not finish within {FUZZ_CASE_SECONDS}s: {value!r}"
+        )
+        (result,) = outcome
+        assert isinstance(result, AuthResHeader), f"{value!r} raised {result!r}"
+        assert result.raw == value
+        for issue in result.issues:
+            assert issue.term == ""
+            assert 0 <= issue.position <= len(value)
 
 
 def test_unknown_values_kept_and_flagged() -> None:
