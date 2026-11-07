@@ -671,3 +671,56 @@ def test_no_english_tokens_are_substituted_into_text(code: str) -> None:
     assert "not_stated" not in "".join(
         f"{EN[k]}{IT[k]}" for k in EN if k.startswith(f"finding.{code}.")
     )
+
+
+def _nested_body(depth: int) -> str:
+    """Body under boundary ``b0`` nesting multipart containers ``depth`` levels deep."""
+    head = "".join(
+        f"--b{i}\r\nContent-Type: multipart/mixed; boundary=b{i + 1}\r\n\r\n" for i in range(depth)
+    )
+    return head + f"--b{depth}\r\nContent-Type: text/plain\r\n\r\nx\r\n"
+
+
+_MANY_PARTS = (
+    "".join("--b\r\nContent-Type: text/plain\r\n\r\nx\r\n" for _ in range(250)) + "--b--\r\n"
+)
+_FEW_PARTS = "--b\r\nContent-Type: text/plain\r\n\r\nx\r\n--b--\r\n"
+_MIXED = ('Content-Type: multipart/mixed; boundary="b"',)
+
+# (id, add, body, capped limits); depth bodies replace the whole message body
+MIME_CAP_CASES = [
+    ("neither", _MIXED, _FEW_PARTS, ()),
+    ("parts", _MIXED, _MANY_PARTS, ("mime_parts",)),
+    ("depth", ('Content-Type: multipart/mixed; boundary="b0"',), _nested_body(30), ("mime_depth",)),
+    ("both", _MIXED, _nested_body(30).replace("--b0", "--b") + _MANY_PARTS, None),
+    (
+        "boundary_too_long",
+        ('Content-Type: multipart/mixed; boundary="' + "b" * 100 + '"',),
+        "x",
+        ("mime_boundary",),
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    ("add", "body", "limits"),
+    [c[1:] for c in MIME_CAP_CASES],
+    ids=[c[0] for c in MIME_CAP_CASES],
+)
+def test_mime_cap_is_error_class(
+    add: tuple[str, ...], body: str, limits: tuple[str, ...] | None
+) -> None:
+    r = run(("Content-Type",), add, body=body)
+    found = codes(r)
+    if limits == ():
+        assert r.status != "error" and "MSG_PARSER_LIMIT" not in found
+        assert "MSG_MIME_TRUNCATED" not in found
+        return
+    assert r.status == "error"
+    assert "MSG_PARSER_LIMIT" in found and "MSG_MIME_TRUNCATED" in found
+    assert "parser" in r.unevaluated
+    text = " ".join(str(f.params) for f in r.findings if f.code == "MSG_PARSER_LIMIT")
+    if limits is None:
+        assert "mime_parts" in text or "mime_depth" in text
+    for label in limits or ():
+        assert label in text

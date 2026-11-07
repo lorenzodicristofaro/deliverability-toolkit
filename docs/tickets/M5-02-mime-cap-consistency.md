@@ -14,4 +14,4 @@ Acceptance criteria:
 - message_findings.py:71 comment and docs/HEADERS.md describe the single rule; grep shows no remaining text claiming a different rule.
 - Existing M4 acceptance tests still pass (byte-equal surfaces).
 New i18n keys: none (existing MSG_* texts may be edited in en + it)
-Status: todo
+Status: done

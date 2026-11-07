@@ -161,7 +161,9 @@ DEFECTS: dict[str, Any] = {
     "nul_byte": lambda a: a.status == "error" and a.findings[0].code == "MSG_PARSER_LIMIT",
     "line_too_long": lambda a: a.status == "error" and a.findings[0].code == "MSG_PARSER_LIMIT",
     "date_without_timezone": lambda a: "MSG_DATE_NO_TIMEZONE" in {f.code for f in a.findings},
-    "mime_depth": lambda a: "MSG_MIME_TRUNCATED" in {f.code for f in a.findings},
+    "mime_depth": lambda a: (
+        a.status == "error" and "MSG_MIME_TRUNCATED" in {f.code for f in a.findings}
+    ),
     "boundary_missing": lambda a: a.mime is not None and "missing_boundary" in a.mime.warnings,
     "bad_encoded_word": lambda a: "MSG_ENCODED_HEADER_BROKEN" in {f.code for f in a.findings},
 }
@@ -316,7 +318,7 @@ HOSTILE: dict[str, tuple[bytes, int, int, str | None, str]] = {
         "error",
         "MSG_PARSER_LIMIT",
     ),
-    "deep_mime": (_FROM + _DEEP + b"x", 200, 200, "warn", "MSG_MIME_TRUNCATED"),
+    "deep_mime": (_FROM + _DEEP + b"x", 200, 200, "error", "MSG_PARSER_LIMIT"),
     "received_10k": (_RECV * 10000 + b"\r\nbody", 200, 200, "error", "MSG_PARSER_LIMIT"),
     "received_200": (_FROM + _RECV * 200 + b"\r\nbody", 200, 200, "error", "MSG_PARSER_LIMIT"),
     "rfc2047_junk": (

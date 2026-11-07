@@ -106,7 +106,7 @@ Carried over from M0-07 QA:
 - Scope note (GM): custom checks cover DNS kinds only in M5; the HTTP-fetch kind moves to M7 (needs the guarded client). M5-22 updates this block and ARCHITECTURE.md.
 - Tickets (docs/tickets/):
   - [x] M5-01 CSRF form cap vs localized 413 (opus)
-  - [ ] M5-02 MIME cap consistency, any capped input is error-class
+  - [x] M5-02 MIME cap consistency, any capped input is error-class
   - [x] M5-03 ReDoS-safe regex runner with enforced timeout (opus)
   - [ ] M5-04 permissions content.analyze, rules.manage global/tenant (opus)
   - [ ] M5-05 content_rules model + migration + repository (opus)
@@ -164,7 +164,7 @@ Carried over from M0-07 QA:
 
 ## Follow-ups (post-M1)
 - [ ] tests/support/test_socket_guard.py: add a string-port case `getaddrinfo("db.test", "5432")` (psycopg passes the port as str) (QA nit).
-- [ ] MIME cap consistency (M4-14 QA): exceeding the part cap gives MSG_PARSER_LIMIT + status error, but exceeding the depth cap only gives MSG_MIME_TRUNCATED (low, warn); message_findings.py:71 says any capped input is error-class. Decide one rule, align code + HEADERS.md.
+- [x] MIME cap consistency (M4-14 QA): exceeding the part cap gives MSG_PARSER_LIMIT + status error, but exceeding the depth cap only gives MSG_MIME_TRUNCATED (low, warn); message_findings.py:71 says any capped input is error-class. Decide one rule, align code + HEADERS.md.
 - [ ] M4 i18n scanner nits (M4-14 QA): 1-2 letter text ("OK", "No") passes the 3+ letter rule; `data-*` and `label` attributes not scanned; any dotted string ending in "." passes as a key prefix. Fold-bomb corpus sample trips no cap (stress sample only).
 - [ ] CLI analyze (M4-13 QA): text output omits finding evidence (check and web UI show it; add the cli.check.evidence line); status label borrows message.arc.status (add cli.analyze.status); imports private `_fail` from app.cli.check (make a shared public helper); optional rename of key not_found to cannot_read.
 - [ ] Message UI nits (M4-12 QA): MIME table first column uses `message.col.hop`; needs a part/index key. (JS `data-max-bytes` part closed by M5-01.)
