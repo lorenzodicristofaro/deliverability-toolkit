@@ -129,6 +129,34 @@ def test_link_facts(href: str | None, expected: dict[str, object]) -> None:
 
 
 @pytest.mark.parametrize(
+    ("href", "host", "nonstandard"),
+    [
+        ("https://x.example/u", "x.example", False),
+        ("HTTPS://X.EXAMPLE", "x.example", False),
+        ("https://x.example", "x.example", False),
+        ("https://x.example?q=\\a", "x.example", False),
+        ("https://x.example/a\\b", "x.example", False),
+        ("//x.example/u", "x.example", False),
+        ("https:x.example/u", "x.example", True),
+        ("https:/x.example/u", "x.example", True),
+        ("https:///x.example/u", "x.example", True),
+        ("https:\\\\x.example\\u", "x.example", True),
+        ("https:/\\x.example/u", "x.example", True),
+        ("https:\\/x.example/u", "x.example", True),
+        ("https://x.example\\u", "x.example", True),
+        ("http:x.example", "x.example", True),
+        ("\\\\x.example/u", "x.example", True),
+        ("https:", None, True),
+        ("mailto:a@x.example", None, False),
+    ],
+)
+def test_nonstandard_authority(href: str, host: str | None, nonstandard: bool) -> None:
+    link = one(href)
+    assert link.host == host
+    assert link.nonstandard_authority is nonstandard
+
+
+@pytest.mark.parametrize(
     ("text", "href", "text_host", "masked"),
     [
         ("https://www.paypal.com/login", "https://evil.example/x", "www.paypal.com", True),
