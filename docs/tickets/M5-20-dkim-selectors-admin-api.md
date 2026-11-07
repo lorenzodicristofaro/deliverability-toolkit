@@ -13,4 +13,5 @@ Acceptance criteria:
 - A tenant's selectors never leak into another tenant's check results (two-tenant test).
 - Tenancy/permission tests per role and verb; routes in the coverage matrix.
 New i18n keys: api.dkim_selectors.error.invalid_selector, .too_long, .duplicate, .scope_forbidden, .not_found (en + it)
+GM notes (from M5-06 QA): `GlobalDkimSelectorRepository.update` does not set `locally_modified`; the admin service MUST pass `locally_modified=True` on every admin edit of a global row, or the next seed sync reverts it. Test this.
 Status: todo

@@ -13,4 +13,5 @@ Acceptance criteria:
 - Tests: schema negative cases, sync idempotency, admin edit preserved, removed row disabled.
 New i18n keys: CONTENT_RULE.<seed_key>.title / .advice for every seed rule (en + it), superseding the earlier "text in the seed" plan (GM decision 2026-11-07)
 GM notes (from M5-05): seeded rule text comes from i18n keys derived from seed_key (en+it, added by this ticket), not DB columns; `sources` is a JSON list (1-10 http(s) URLs); a tenant override row shares the global seed_key and must point at an existing global seed row. Define and test what sync does when a seed entry is removed: the global row is disabled, not deleted, so tenant overrides are never orphaned; skip rows with `locally_modified`.
+GM notes (from M5-06): this ticket wires seed sync (content_rules and dkim_selectors, `run_seed_sync`) at app startup in app/main.py lifespan. A sync failure (e.g. SelectorTaken, invalid seed) is logged and must NOT block startup; the previous DB state stays. Test both. Depends on M5-05b (content_rules index fix) because tenant-visible seed_key lookups hit the SQLite planner bug.
 Status: todo

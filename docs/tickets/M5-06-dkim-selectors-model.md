@@ -13,4 +13,4 @@ Acceptance criteria:
 - `seed_sync`: idempotent upsert of global rows from the YAML seed keyed by seed_key; rows edited by an admin (enabled flag, notes) are NOT overwritten on re-sync (store `locally_modified`); a seed row removed from the file is disabled, not deleted. Runs at app start and via CLI hook later; never touches tenant rows. Offline, no network.
 - Tests: first sync, re-sync no-op, seed change, admin-modified row kept, removed seed row disabled, tenant isolation, malformed YAML -> error (not partial sync).
 New i18n keys: none
-Status: todo
+Status: done
