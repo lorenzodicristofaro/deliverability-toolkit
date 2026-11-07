@@ -1,0 +1,56 @@
+# URL shortener domains for static link analysis (M5-09). Matching a link host against this list
+# is a fact for later findings (M5-14), not a verdict; nothing is ever fetched or resolved.
+# An entry is `verified` only when an official page of the operator states the domain is its
+# link-shortening domain; everything else is `unverified`, carries no operator, and needs the
+# maintainer to confirm it against official documentation before promotion.
+verified_on: 2026-11-07
+sources: []
+shorteners:
+  - domain: bit.ly
+    operator: bitly
+    notes: Bitly API reference states the default short domain for shortened links is bit.ly
+    status: verified
+    sources:
+      - https://dev.bitly.com/api-reference/
+  - domain: t.co
+    operator: x
+    notes: X help page "About X's link service (http://t.co)"; used for links posted on X only
+    status: verified
+    sources:
+      - https://help.x.com/en/using-x/url-shortener
+  - domain: goo.gl
+    operator: google
+    notes: Google URL Shortener links in the form https://goo.gl/*; turned down, active links kept (2025 update)
+    status: verified
+    sources:
+      - https://developers.googleblog.com/en/google-url-shortener-links-will-no-longer-be-available/
+  - domain: tinyurl.com
+    operator: null
+    notes: operator site titles itself a URL shortener but no page sentence names the domain; maintainer to confirm
+    status: unverified
+    sources: []
+  - domain: ow.ly
+    operator: null
+    notes: commonly seen shortener domain; provenance unverified
+    status: unverified
+    sources: []
+  - domain: buff.ly
+    operator: null
+    notes: commonly seen shortener domain; provenance unverified
+    status: unverified
+    sources: []
+  - domain: lnkd.in
+    operator: null
+    notes: commonly seen shortener domain; provenance unverified
+    status: unverified
+    sources: []
+  - domain: is.gd
+    operator: null
+    notes: commonly seen shortener domain; provenance unverified (official site refused the automated check)
+    status: unverified
+    sources: []
+  - domain: j.mp
+    operator: null
+    notes: commonly seen shortener domain; provenance unverified
+    status: unverified
+    sources: []
