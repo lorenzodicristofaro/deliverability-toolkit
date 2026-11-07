@@ -14,7 +14,7 @@ from typing import Any
 import pytest
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import Engine, inspect, select, text
+from sqlalchemy import Engine, and_, bindparam, inspect, or_, select, text
 from sqlalchemy.exc import DataError, IntegrityError
 from sqlalchemy.orm import Session
 
@@ -130,6 +130,81 @@ def test_single_alembic_head() -> None:
 
     # One head only; later migrations (0006+) build on 0005.
     assert len(ScriptDirectory.from_config(_cfg()).get_heads()) == 1
+
+
+def _index_shapes(engine: Engine) -> dict[str, tuple[tuple[str, ...], bool, bool]]:
+    """name -> (columns, unique, partial) for content_rules."""
+    shapes = {}
+    for idx in inspect(engine).get_indexes("content_rules"):
+        opts = idx.get("dialect_options", {})
+        partial = any(opts.get(k) is not None for k in ("sqlite_where", "postgresql_where"))
+        shapes[idx["name"]] = (tuple(idx["column_names"]), bool(idx["unique"]), partial)
+    return shapes
+
+
+INDEXES_0005 = {
+    "ix_content_rules_tenant_id": (("tenant_id",), False, False),
+    "uq_content_rules_global_seed_key": (("seed_key",), True, True),
+    "uq_content_rules_tenant_seed_key": (("tenant_id", "seed_key"), True, True),
+}
+INDEXES_0007 = {
+    "uq_content_rules_global_seed_key": (("seed_key",), True, True),
+    "uq_content_rules_tenant_seed_key": (("tenant_id", "seed_key"), True, False),
+}
+
+
+def test_migration_0007_reworks_indexes_and_downgrade_restores_0005(engine: Engine) -> None:
+    # M5-05b: no partial tenant index next to a tenant_id index (SQLite planner error).
+    assert _index_shapes(engine) == INDEXES_0007
+    command.downgrade(_cfg(), "-1")
+    assert _index_shapes(engine) == INDEXES_0005
+    command.upgrade(_cfg(), "head")
+    assert _index_shapes(engine) == INDEXES_0007
+
+
+# Tenant OR-filter + seed_key with bound parameters (the M5-12/M5-18 lookup shape). With 0005's
+# indexes SQLite 3.46-3.53 raised "internal query planner error" on the plain seed_key case.
+_VISIBLE = or_(
+    and_(ContentRule.scope == "global", ContentRule.tenant_id.is_(None)),
+    and_(ContentRule.scope == bindparam("scope"), ContentRule.tenant_id == bindparam("tid")),
+)
+PLANNER_CASES = [
+    ("seed_key", [], {}, ["g1", "a1"]),
+    ("seed_key + kind", [ContentRule.kind == bindparam("kind")], {"kind": "regex"}, ["g1", "a1"]),
+    (
+        "seed_key + enabled",
+        [ContentRule.enabled == bindparam("enabled")],
+        {"enabled": True},
+        ["g1"],
+    ),
+    (
+        "seed_key + kind + enabled",
+        [ContentRule.kind == bindparam("kind"), ContentRule.enabled == bindparam("enabled")],
+        {"kind": "regex", "enabled": False},
+        ["a1"],
+    ),
+    ("unknown seed_key", [], {"seed": "missing"}, []),
+]
+
+
+@pytest.mark.parametrize(
+    ("case", "extra", "params", "expected"), PLANNER_CASES, ids=[c[0] for c in PLANNER_CASES]
+)
+def test_tenant_or_filter_seed_key_lookup_runs(
+    world: World, case: str, extra: list[Any], params: dict[str, Any], expected: list[str]
+) -> None:
+    stmt = (
+        select(ContentRule.id)
+        .where(_VISIBLE, ContentRule.seed_key == bindparam("seed"), *extra)
+        .order_by(ContentRule.id)
+    )
+    bound = {"scope": "tenant", "tid": world.tenant_a, "seed": "g.one", **params}
+    assert list(world.session.execute(stmt, bound).scalars()) == sorted(
+        world.rules[k] for k in expected
+    )
+    # Tenant B sees at most the global row for the same key, never tenant A's.
+    bound["tid"] = world.tenant_b
+    assert world.rules["a1"] not in set(world.session.execute(stmt, bound).scalars())
 
 
 def test_flags_mask_matches_safe_regex_and_migration() -> None:
