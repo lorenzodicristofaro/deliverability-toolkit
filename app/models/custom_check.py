@@ -1,7 +1,8 @@
 """Custom checks (M5-07): global checks (`scope = 'global'`, `tenant_id` NULL, instance-managed)
 and tenant checks (`scope = 'tenant'`, `tenant_id` set). The database enforces the scope/tenant
 pairing, the enumerations, every string length (CHECK on `length()`, which counts characters on
-SQLite and PostgreSQL alike), a size cap on the JSON columns and exactly one remediation source.
+SQLite and PostgreSQL alike), a size cap on the JSON columns, exactly one remediation source and
+remediation_key on global rows only.
 
 `kind` deliberately excludes `http_fetch` (reserved, deferred to M7 with the guarded outbound
 client; see M5-22): the CHECK refuses it even for a raw insert.
@@ -101,6 +102,10 @@ class CustomCheck(Base):
         CheckConstraint(
             _json_object("remediation_text", MAX_REMEDIATION_JSON_LENGTH, nullable=True),
             name="remediation_text_size",
+        ),
+        # i18n keys are for global rows only: a tenant check cannot borrow another check's text.
+        CheckConstraint(
+            "remediation_key IS NULL OR scope = 'global'", name="remediation_key_global"
         ),
         # Exactly one remediation source: an i18n key, or admin-written text in every language.
         CheckConstraint(

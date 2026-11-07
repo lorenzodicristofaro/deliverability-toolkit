@@ -284,11 +284,20 @@ VIOLATIONS = [
     ("definition json null", _row(definition="'null'")),
     ("oversize definition", _row(definition=_json_literal(MAX_DEFINITION_LENGTH + 1))),
     ("no remediation", _row(remediation_text="NULL")),
-    ("both remediations", _row(remediation_key="'a.b'")),
-    ("empty remediation_key", _row(remediation_key="''", remediation_text="NULL")),
+    ("both remediations", _row(scope="'global'", tenant="NULL", remediation_key="'a.b'")),
+    ("tenant remediation_key", _row(remediation_key="'a.b'", remediation_text="NULL")),
+    (
+        "empty remediation_key",
+        _row(scope="'global'", tenant="NULL", remediation_key="''", remediation_text="NULL"),
+    ),
     (
         "remediation_key too long",
-        _row(remediation_key=f"'{'r' * 201}'", remediation_text="NULL"),
+        _row(
+            scope="'global'",
+            tenant="NULL",
+            remediation_key=f"'{'r' * 201}'",
+            remediation_text="NULL",
+        ),
     ),
     ("remediation_text not an object", _row(remediation_text="'\"text\"'")),
     (
@@ -303,7 +312,10 @@ ALLOWED = [
     ("same key in another tenant", _row(tenant="2", key="'dup'")),
     ("tenant row reusing a global key", _row(tenant="2", key="'g.only'")),
     ("definition at max size", _row(definition=_json_literal(MAX_DEFINITION_LENGTH))),
-    ("remediation_key only", _row(remediation_key="'a.b'", remediation_text="NULL")),
+    (
+        "global remediation_key only",
+        _row(scope="'global'", tenant="NULL", remediation_key="'a.b'", remediation_text="NULL"),
+    ),
     ("every allowed kind", _row(kind="'dns_value_range'")),
     ("description at max length", _row(description=f"'{'d' * 2000}'")),
 ]
@@ -642,26 +654,55 @@ REMEDIATION_KEY_INVALID = [
 @pytest.mark.parametrize(("value", "reason"), REMEDIATION_KEY_INVALID)
 def test_invalid_remediation_key_rejected(world: World, value: object, reason: str) -> None:
     with pytest.raises(CustomCheckInvalid) as err:
-        world.repo("a").create(
-            _check(check_key="a.new", remediation_text=None, remediation_key=value)
+        world.global_repo().create(
+            _check(check_key="g.new", remediation_text=None, remediation_key=value), actor=None
         )
     assert (err.value.field, err.value.reason) == ("remediation_key", reason)
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        {"remediation_key": "custom_check.g_one.remediation", "remediation_text": None},
+        {"remediation_key": "custom_check.g_one.remediation"},
+    ],
+)
+def test_tenant_cannot_set_remediation_key(world: World, values: dict[str, Any]) -> None:
+    repo = world.repo("a")
+    before = repo.count()
+    with pytest.raises(CustomCheckInvalid) as err:
+        repo.create(_new(**values))
+    assert (err.value.field, err.value.reason) == ("remediation_key", "global_only")
+    with pytest.raises(CustomCheckInvalid) as err:
+        repo.update(world.checks["a1"], values)
+    assert (err.value.field, err.value.reason) == ("remediation_key", "global_only")
+    world.session.rollback()
+    assert repo.count() == before
+    a1 = repo.get(world.checks["a1"])
+    assert a1 is not None and a1.remediation_key is None and a1.remediation_text is not None
+    # Clearing it explicitly (None) is fine on the tenant path.
+    assert repo.update(world.checks["a1"], {"remediation_key": None}) is not None
 
 
 @pytest.mark.parametrize(
     ("values", "reason"),
     [
         ({"remediation_text": None}, "required"),
-        ({"remediation_key": "a.b"}, "both"),
+        ({"remediation_key": "a.b", "remediation_text": dict(TEXT)}, "both"),
     ],
 )
 def test_exactly_one_remediation(world: World, values: dict[str, Any], reason: str) -> None:
+    g = world.global_repo()
     with pytest.raises(CustomCheckInvalid) as err:
-        world.repo("a").create(_check(check_key="a.new", **values))
+        g.create(_check(check_key="g.new", **values), actor=None)
     assert (err.value.field, err.value.reason) == ("remediation", reason)
     with pytest.raises(CustomCheckInvalid) as err:
-        world.repo("a").update(world.checks["a1"], values)
+        g.update(world.checks["g2"], values)
     assert err.value.reason == reason
+    if "remediation_key" not in values:  # tenant path: same rule for its own text
+        with pytest.raises(CustomCheckInvalid) as err:
+            world.repo("a").update(world.checks["a1"], values)
+        assert err.value.reason == reason
 
 
 @pytest.mark.parametrize("missing", ["check_key", "name", "kind", "definition", "severity"])

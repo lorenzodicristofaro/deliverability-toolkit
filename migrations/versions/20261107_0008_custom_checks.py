@@ -4,7 +4,8 @@ CHECK constraints enforce the scope/tenant pairing, the kind and severity enumer
 excludes the reserved `http_fetch`, deferred to M7), every string length (`length()` counts
 characters on SQLite and PostgreSQL alike), a lowercase check_key, a size cap on the JSON columns
 (`length(CAST(col AS TEXT))`: both backends keep the ASCII text SQLAlchemy sent) and exactly one of
-remediation_key / remediation_text. 48032 is `MAX_REMEDIATION_JSON_LENGTH` (pinned by a test).
+remediation_key / remediation_text (remediation_key on global rows only). 48032 is
+`MAX_REMEDIATION_JSON_LENGTH` (pinned by a test).
 check_key is unique among global rows (partial unique index) and per tenant (plain unique
 (tenant_id, check_key); NULL tenant_id never collides). No partial tenant index: SQLite's planner
 error with the tenant OR-filter (see 0007).
@@ -100,6 +101,10 @@ def upgrade() -> None:
         sa.CheckConstraint(
             _json_object("remediation_text", 48032, nullable=True),
             name=op.f("ck_custom_checks_remediation_text_size"),
+        ),
+        sa.CheckConstraint(
+            "remediation_key IS NULL OR scope = 'global'",
+            name=op.f("ck_custom_checks_remediation_key_global"),
         ),
         sa.CheckConstraint(
             "(remediation_key IS NOT NULL AND remediation_text IS NULL)"

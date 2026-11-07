@@ -22,6 +22,9 @@ most MAX_DEFINITION_LENGTH characters once serialized with `json.dumps` (what SQ
 SQLite and PostgreSQL, so the DB CHECK sees the same length), with no NUL, surrogate or control
 characters (tab and newline allowed) in any string or key, and no NaN/infinity.
 
+`remediation_key` (an i18n key) is global-only: a tenant check must carry its own
+`remediation_text`, so it cannot borrow another check's text (reason "global_only", DB CHECK too).
+
 `http_fetch` is a reserved kind (M7, guarded outbound client): refused here with reason
 "reserved" and by the DB CHECK. `CustomCheckInvalid` names the field and a stable reason, never
 the value.
@@ -374,6 +377,9 @@ for _attr in (CustomCheck.scope, CustomCheck.tenant_id):
 class _CustomCheckStore:
     __slots__ = ("_session",)
 
+    # Only global rows may reference an i18n key; tenants write their own text (DB CHECK too).
+    _remediation_key_allowed: bool = False
+
     def __init__(self, session: Session) -> None:
         if not isinstance(session, Session):
             raise TypeError("a Session is required")
@@ -385,6 +391,12 @@ class _CustomCheckStore:
 
     def _writable(self) -> ColumnElement[bool]:
         raise NotImplementedError
+
+    def _clean(self, values: Mapping[str, Any]) -> dict[str, Any]:
+        cleaned = _clean_values(values)
+        if not self._remediation_key_allowed and cleaned.get("remediation_key") is not None:
+            raise CustomCheckInvalid("remediation_key", "global_only")
+        return cleaned
 
     def _select(self, criterion: ColumnElement[bool]) -> Select[CustomCheck]:
         return select(CustomCheck).where(criterion)
@@ -443,7 +455,7 @@ class _CustomCheckStore:
             raise CheckKeyTaken from exc
 
     def _insert(self, values: Mapping[str, Any], fixed: Mapping[str, Any]) -> CustomCheckRecord:
-        cleaned = _clean_values(values)
+        cleaned = self._clean(values)
         missing = _REQUIRED - cleaned.keys()
         if missing:
             raise CustomCheckInvalid(sorted(missing)[0], "required")
@@ -457,7 +469,7 @@ class _CustomCheckStore:
 
     def update(self, id_: object, values: Mapping[str, Any]) -> CustomCheckRecord | None:
         """Change fields of a writable check; None if missing, not writable or malformed."""
-        cleaned = _clean_values(values)
+        cleaned = self._clean(values)
         for field in _REQUIRED & cleaned.keys():
             if cleaned[field] is None:
                 raise CustomCheckInvalid(field, "required")
@@ -523,6 +535,8 @@ class GlobalCustomCheckRepository(_CustomCheckStore):
     permission check). Not reachable through `repo_for`."""
 
     __slots__ = ()
+
+    _remediation_key_allowed = True
 
     def _writable(self) -> ColumnElement[bool]:
         return _global_criterion()
