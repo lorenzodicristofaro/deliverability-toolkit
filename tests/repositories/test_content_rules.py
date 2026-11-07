@@ -156,7 +156,7 @@ INDEXES_0007 = {
 def test_migration_0007_reworks_indexes_and_downgrade_restores_0005(engine: Engine) -> None:
     # M5-05b: no partial tenant index next to a tenant_id index (SQLite planner error).
     assert _index_shapes(engine) == INDEXES_0007
-    command.downgrade(_cfg(), "-1")
+    command.downgrade(_cfg(), "0006")  # pinned: later migrations stack on 0007
     assert _index_shapes(engine) == INDEXES_0005
     command.upgrade(_cfg(), "head")
     assert _index_shapes(engine) == INDEXES_0007
