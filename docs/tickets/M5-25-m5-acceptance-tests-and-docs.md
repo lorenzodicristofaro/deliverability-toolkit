@@ -14,4 +14,5 @@ Acceptance criteria:
 - docs/CONTENT.md documents: inputs and limits, every CONTENT_* code, static link analysis (no fetching), List-Unsubscribe/One-Click with the RFC 2369 / RFC 8058 section citations from M5-10, rule model (scope, weights, categories, language), seed provenance (`verified_on`, sources, which rules are `unverified`), ReDoS guard design and caps, custom check DNS kinds and the M7 deferral of http_fetch, and heuristic thresholds flagged as unverified.
 - Report lists the unverified seed items and shortener entries awaiting maintainer confirmation.
 New i18n keys: none
+GM notes (from M5-10): docs/CONTENT.md must carry the List-Unsubscribe citations from app/parsers/list_unsubscribe.py's docstring (RFC 2369 §2, §3, §3.2; RFC 8058 §3.1, §4, §5; RFC 5234 §2.3) and the documented heuristics: case-insensitive One-Click match (exact match exposed as post_value_exact), eligibility requires exactly one of each field, the one-space ABNF rule is not checked, and the parser limits are project choices.
 Status: todo
