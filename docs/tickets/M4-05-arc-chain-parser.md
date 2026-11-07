@@ -15,4 +15,4 @@ Acceptance criteria:
 - Fixtures: RFC 8617 appendix B example headers (cited) and synthetic ones on example.com.
 New i18n keys: none
 Follow-up: h= on ARC-Seal → cv fail (RFC 8617 4.1.3); i= 1*2DIGIT (3.9); algorithms verified (RFC 8617 4.1.3 → RFC 6376 3.5, RFC 8463) 2026-11-07
-Status: in-review
+Status: done

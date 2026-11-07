@@ -86,7 +86,7 @@ Carried over from M0-07 QA:
   - [x] M4-02 MIME structure + size (opus)
   - [x] M4-03 Received chain + hop delays (opus)
   - [x] M4-04 Authentication-Results parser (opus)
-  - [ ] M4-05 ARC chain parser (opus)
+  - [x] M4-05 ARC chain parser (opus)
   - [x] M4-06 `message.analyze` permission (opus)
   - [x] M4-07 sample corpus + MANIFEST (provider samples unverified until maintainer supplies them)
   - [ ] M4-08 alignment analysis
@@ -138,6 +138,7 @@ Carried over from M0-07 QA:
 ## Follow-ups (post-M1)
 - [ ] M4-01 QA nits: make `decode_rfc2047` private or give it a public signature, and make `_lookup_charset` and `_Warnings` public (imported privately by app/parsers/mime.py, M4-02 QA); warn mixed endings on the header-terminating blank line; document that MAX_HEADER_BYTES excludes the blank line
 - [ ] authres `_Issues` and the DKIM tag-list parser are private; arc.py has local copies — consider a shared public helper (M4-05)
+- [ ] ARC (M4-05 QA nits): store a has_h_tag flag on the seal, not a lookup in the capped issue list (arc.py:530); an empty `h=` on a seal should also count as cv fail (GM reading of RFC 8617 4.1.3: an h tag is found).
 - [ ] Extend the tests/dns network guard (loopback-only) to the DNS tests in tests/api and tests/web (M2-15 QA)
 - [ ] Import guard: forbid network calls via dns.resolver in app/dns/factory.py (it may only read resolv.conf) (M2-15 QA nit)
 - [ ] Use a translated label for the FCrDNS no_ptr case instead of omitting the line (M2-13 QA nit)
