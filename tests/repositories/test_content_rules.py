@@ -128,7 +128,8 @@ def test_migration_upgrade_downgrade(engine: Engine) -> None:
 def test_single_alembic_head() -> None:
     from alembic.script import ScriptDirectory
 
-    assert ScriptDirectory.from_config(_cfg()).get_heads() == ["0005"]
+    # One head only; later migrations (0006+) build on 0005.
+    assert len(ScriptDirectory.from_config(_cfg()).get_heads()) == 1
 
 
 def test_flags_mask_matches_safe_regex_and_migration() -> None:
