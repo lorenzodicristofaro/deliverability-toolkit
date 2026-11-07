@@ -139,7 +139,15 @@ def test_redact_received(raw: str, expect: str) -> None:
 
 
 @pytest.mark.parametrize(
-    "clause", [f"for<{SECRET}>", f"for(c)<{SECRET}>", f"(for<{SECRET}>)", f"FOR\t{SECRET}"]
+    "clause",
+    [
+        f"for<{SECRET}>",
+        f"for(c)<{SECRET}>",
+        f"(for<{SECRET}>)",
+        f"FOR\t{SECRET}",
+        f"f\u200bor <{SECRET}>",
+        f"fo\u202er <{SECRET}>",
+    ],
 )
 def test_for_clause_forms_absent_from_json(clause: str) -> None:
     raw = (

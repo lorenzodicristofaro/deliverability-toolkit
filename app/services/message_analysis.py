@@ -311,7 +311,9 @@ def redact_received(raw: str) -> str:
 def _hop(h: ReceivedHop) -> HopView:
     return HopView(
         index=h.index,
-        raw=excerpt(redact_received(h.raw)),
+        # Redact before AND after excerpt: excerpt strips tabs (joining "for" to the address)
+        # and ZWSP (hiding "for"), so either order alone can leak.
+        raw=redact_received(excerpt(redact_received(h.raw))),
         parsed=h.parsed,
         from_host=_x(h.from_host),
         from_ip=_x(h.from_ip),
