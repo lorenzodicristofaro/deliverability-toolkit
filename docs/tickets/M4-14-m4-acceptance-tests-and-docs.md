@@ -35,4 +35,4 @@ Notes for docs/HEADERS.md (from M4-03/M4-04 QA):
 - Add an acceptance row: pass despite an unknown sibling (spf=pass with aligned smtp.mailfrom, plus dkim=pass without header.d → computed pass) (M4-08 QA nit).
 - UI upload reads files via FileReader as UTF-8; non-UTF-8 .eml may be mangled (paste or API for exact bytes). Pasted text is never echoed back.
 - CLI `analyze`: JSON stdout = model_dump_json() + trailing newline (from typer.echo); document in docs/CHECKS.md together with the analyze exit codes (0 ok/info, 1 warn/fail, 2 error or bad input, 64 usage).
-Status: todo
+Status: done
