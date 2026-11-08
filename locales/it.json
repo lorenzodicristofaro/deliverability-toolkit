@@ -1,4 +1,10 @@
 {
+  "CONTENT_RULE.all_caps_run.advice": "Il testo contiene quattro o più parole consecutive in maiuscolo. È un controllo generico di stile, non un requisito pubblicato da un provider di posta. Verifica che le maiuscole siano volute.",
+  "CONTENT_RULE.all_caps_run.title": "Lunga sequenza di parole in maiuscolo",
+  "CONTENT_RULE.shouting_punctuation.advice": "Il testo contiene tre o più punti esclamativi o interrogativi di seguito. È un controllo generico di stile, non un requisito pubblicato da un provider di posta. Verifica che la punteggiatura sia voluta.",
+  "CONTENT_RULE.shouting_punctuation.title": "Punti esclamativi o interrogativi ripetuti",
+  "CONTENT_RULE.subject_fake_reply_forward_prefix.advice": "Le linee guida di Google per i mittenti di email indicano di non iniziare l'oggetto con Re: o Fwd: se il messaggio non è una vera risposta o un vero inoltro. Se questo messaggio non lo è, rimuovi il prefisso.",
+  "CONTENT_RULE.subject_fake_reply_forward_prefix.title": "L'oggetto inizia con Re: o Fwd:",
   "api.error.conflict": "Esiste già un elemento in conflitto.",
   "api.error.forbidden": "Non hai i permessi per questa operazione.",
   "api.error.invalid_request": "La richiesta non è valida.",

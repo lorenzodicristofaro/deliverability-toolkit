@@ -1,10 +1,12 @@
 """Content rules seed: global rules loaded from `seeds/content_rules.yaml` (M5-12).
 
 Follows the `app.dns.knowledge` / `app.checks.dkim_selectors` pattern: strict schema (unknown
-keys rejected), per-rule `verified_on` (never in the future) and `sources`. A rule is `verified`
-only with a `verified_on` date and 1..MAX_SOURCES distinct https sources; an `unverified` rule
-must ship `enabled: false`. Every regex pattern goes through `app.core.safe_regex.compile_checked`.
-The bounds are the `content_rules` column limits, so a parsed rule is also a valid global row.
+keys rejected), per-rule `verified_on` (always a date, never in the future: the day the rule's
+basis was last reviewed) and `sources`. A `verified` rule needs 1..MAX_SOURCES distinct https
+sources; an `unverified` rule may have none and must ship `enabled: false`. Every regex pattern
+goes through `app.core.safe_regex.compile_checked`. The bounds are the `content_rules` column
+limits, so a parsed rule is also a valid global row. Language codes get the repository's format
+check, not a lookup in a language registry.
 
 Rule text is not in the seed: it comes from the i18n keys `CONTENT_RULE.<key>.title` and
 `CONTENT_RULE.<key>.advice` (en + it), so seed keys are restricted to `[a-z0-9_]` (no dot that
@@ -18,6 +20,7 @@ import unicodedata
 from dataclasses import dataclass
 from datetime import date
 from typing import Final
+from urllib.parse import urlsplit
 
 from app.core.safe_regex import MAX_PATTERN_LENGTH, RegexRuleError, compile_checked
 from app.dns.knowledge import (
@@ -84,7 +87,7 @@ class SeedRule:
     language: str | None
     enabled: bool
     status: str
-    verified_on: date | None
+    verified_on: date
     sources: tuple[str, ...]
 
 
@@ -150,6 +153,12 @@ def _sources(value: object, where: str) -> tuple[str, ...]:
             c.isspace() or unicodedata.category(c) in ("Cc", "Cs") for c in url
         ):
             raise _fail(where, "invalid source URL")
+        try:
+            host = urlsplit(url).hostname
+        except ValueError:
+            host = None
+        if not host:
+            raise _fail(where, "invalid source URL")
     return urls
 
 
@@ -165,16 +174,21 @@ def _rule(raw: object, w: str, today: date) -> SeedRule:
         try:
             compile_checked(pattern, flags)
         except RegexRuleError as exc:
-            raise _fail(f"{w}.pattern", f"rejected by compile_checked: {exc.reason.value}") from None
+            raise _fail(
+                f"{w}.pattern", f"rejected by compile_checked: {exc.reason.value}"
+            ) from None
     else:
-        # A keyword is a literal: the column bounds, no NUL, no surrounding whitespace.
+        # A keyword is a literal: the column bounds, no control characters (NUL included), no
+        # surrounding whitespace. Regex flags would be silently meaningless on it.
         if (
             not pattern.strip()
             or pattern.strip() != pattern
             or len(pattern) > MAX_PATTERN_LENGTH
-            or "\x00" in pattern
+            or any(unicodedata.category(c) == "Cc" for c in pattern)
         ):
             raise _fail(f"{w}.pattern", "keyword must be 1..MAX_PATTERN_LENGTH trimmed chars")
+        if flags:
+            raise _fail(f"{w}.flags", "flags apply to regex rules only")
     category = _str(e["category"], f"{w}.category")
     if len(category) > MAX_CATEGORY_LENGTH or not _CATEGORY.fullmatch(category):
         raise _fail(f"{w}.category", "must be a lowercase slug")
@@ -182,11 +196,10 @@ def _rule(raw: object, w: str, today: date) -> SeedRule:
     if not isinstance(enabled, bool):
         raise _fail(f"{w}.enabled", "must be true or false")
     status = _status(e["status"], f"{w}.status")
-    raw_date = e["verified_on"]
-    verified_on = None if raw_date is None else _date(raw_date, f"{w}.verified_on", today)
+    verified_on = _date(e["verified_on"], f"{w}.verified_on", today)
     sources = _sources(e["sources"], f"{w}.sources")
-    if status == "verified" and (verified_on is None or not sources):
-        raise _fail(w, "verified rules need verified_on and a non-empty sources list")
+    if status == "verified" and not sources:
+        raise _fail(w, "verified rules need a non-empty sources list")
     if status == "unverified" and enabled:
         raise _fail(w, "unverified rules must ship enabled: false")
     return SeedRule(
