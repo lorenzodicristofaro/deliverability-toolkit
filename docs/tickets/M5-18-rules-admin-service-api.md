@@ -16,4 +16,5 @@ Acceptance criteria:
 - Tenancy/permission test per role and per verb (owner, admin, analyst, client viewer, foreign tenant, instance admin, anonymous); routes in the route-coverage matrix.
 - Audit: write operations log the actor, rule id and scope, never the pattern body in logs.
 New i18n keys: api.rules.error.invalid_pattern, .pattern_too_long, .invalid_weight, .invalid_language, .scope_forbidden, .not_found, .sample_too_large, .timed_out (en + it)
+GM note: `update` in app/repositories/content_rules.py does not set `locally_modified`, so the admin service must set it on every admin edit of a seeded rule. Otherwise the next seed sync reverts the edit (QA reproduced this with `all_caps_run`). Include a test: edit a seeded rule via the service, run the seed sync, assert the edit survives.
 Status: todo

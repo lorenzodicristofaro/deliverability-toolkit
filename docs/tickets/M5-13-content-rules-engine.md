@@ -14,4 +14,5 @@ Acceptance criteria:
 - Tenant merge: global rules + tenant rules; a tenant rule with the same `seed_key`/name may disable a global one for that tenant only (coder states the rule; tenant rules cannot affect other tenants). Tested with two tenants.
 - Table-driven tests: catastrophic pattern rule -> that rule `error`, others fine, wall time bounded; language filter; disabled rules; unicode folding; empty input; 1 MB input (capped).
 New i18n keys: none
+GM note: seed rule `subject_fake_reply_forward_prefix` is verified (Google support answer 81126) but ships `enabled: false`, because Google's text covers subject lines only and exempts real replies. The engine must support scoping a rule to the subject and must not flag real replies or bodies starting "Re:". Enabling the rule requires that scoping.
 Status: todo
