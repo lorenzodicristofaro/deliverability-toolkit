@@ -118,7 +118,7 @@ Carried over from M0-07 QA:
   - [x] M5-10 List-Unsubscribe / One-Click analysis (RFC 2369, RFC 8058)
   - [x] M5-11 subject analysis
   - [x] M5-12 content_rules seed + sync
-  - [ ] M5-13 content rules engine (opus)
+  - [x] M5-13 content rules engine (opus)
   - [ ] M5-14 content analysis service + CONTENT_* findings
   - [ ] M5-15 REST POST /api/v1/content/analyze
   - [ ] M5-16 web UI content analyzer
@@ -170,7 +170,11 @@ Carried over from M0-07 QA:
 - [ ] Seed loader (M5-12 QA): duplicate YAML keys inside an entry are last-wins in the shared loader (app/dns/knowledge.py:142, all seeds); detect them. Content rule `language` gets a format check only (`zz` passes); revisit with the first non-null language.
 - [ ] Seed sync tests nit (M5-12 QA): the non-SeedSyncError startup failure cases in tests/services/test_seed_sync.py are monkeypatched; add a real DB error case. Pattern nit: `\s*` in `subject_fake_reply_forward_prefix` also matches " re : x".
 - [ ] Dev setup (M5-12): no pre-commit hook is installed in .git/hooks, so plain commits do not run it; run `uv run pre-commit install` or document it.
-- [ ] MAINTAINER TO CONFIRM (M5-12): seeded content rules `shouting_punctuation` and `all_caps_run` have no primary source, so they are unverified and disabled.
+- [ ] MAINTAINER TO CONFIRM (M5-12): seeded content rules `shouting_punctuation` and `all_caps_run` have no primary source, so they are unverified and disabled. Maintainer decision 2026-11-08: all seeded content rules stay disabled for now; revisit after in-depth testing.
+- [ ] Rules engine (M5-13 QA): a regex match ending exactly at the cut of a capped part still counts as `matched` (`\bfree\b` on "freedom" cut after "free"; the part is in `capped_parts` and `complete` is False). Option: treat a match ending at the cut as unconfirmed unless another ended earlier (partial, lookaheads can depend on the unseen tail). Then fix the "score is a lower bound" wording at app/services/content_rules_engine.py:50 and :160, which is no longer strictly true.
+- [ ] Rules engine nits (M5-13 QA): `TOO_MANY_MATCHES` is reachable only for a truncated result with no spans, which the real runner does not produce (:426). Word-boundary default True misses unspaced CJK keywords; `word_boundary` is engine-wide because rows have no such column. Documented `ok` gaps: NFC/NFD, dotted İ, fullwidth and zero-width evasion.
+- [ ] safe_regex (M5-13 QA): a worker is orphaned if the parent is SIGKILLed; it kept running past the 5 s rule limit (app/core/safe_regex.py:192). Add RLIMIT_CPU or PDEATHSIG.
+- [ ] safe_regex capacity (M5-13 QA): the 4-slot worker pool is process-wide, so one tenant's slow rules can cause `busy`/`not_evaluated` for other tenants; consider per-tenant fairness alongside rate limiting.
 - [ ] tests/support/test_socket_guard.py: add a string-port case `getaddrinfo("db.test", "5432")` (psycopg passes the port as str) (QA nit).
 - [x] MIME cap consistency (M4-14 QA): exceeding the part cap gives MSG_PARSER_LIMIT + status error, but exceeding the depth cap only gives MSG_MIME_TRUNCATED (low, warn); message_findings.py:71 says any capped input is error-class. Decide one rule, align code + HEADERS.md.
 - [ ] M4 i18n scanner nits (M4-14 QA): 1-2 letter text ("OK", "No") passes the 3+ letter rule; `data-*` and `label` attributes not scanned; any dotted string ending in "." passes as a key prefix. Fold-bomb corpus sample trips no cap (stress sample only).

@@ -15,4 +15,4 @@ Acceptance criteria:
 - Table-driven tests: catastrophic pattern rule -> that rule `error`, others fine, wall time bounded; language filter; disabled rules; unicode folding; empty input; 1 MB input (capped).
 New i18n keys: none
 GM note: seed rule `subject_fake_reply_forward_prefix` is verified (Google support answer 81126) but ships `enabled: false`, because Google's text covers subject lines only and exempts real replies. Scoping is NOT part of this ticket: `content_rules` has no target column and the engine has no reply context, so it would need a migration outside this ticket's files (GM decision 2026-11-08, see the TODO.md follow-up). Keep this rule disabled; do not special-case it in the engine.
-Status: todo
+Status: done (merged c169e2a, QA APPROVE round 2)

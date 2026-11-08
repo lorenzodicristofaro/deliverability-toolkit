@@ -14,4 +14,12 @@ Acceptance criteria:
 - Tenant rules loaded via repository with the given TenantContext only.
 - Every code has title/detail/remediation en + it; a test enumerates codes against both locale files.
 New i18n keys: CONTENT_* codes as listed above, each .title/.detail/.remediation (en + it); coder lists the final set in the summary
+GM note (constraints from M5-13 QA):
+- Use one loader for the rules: all global and tenant rows, no `enabled_only`, page until a short page. `list()` defaults to limit 100 ordered by id, so a disabled override past page 1 would be silently lost. Include a test placing a disabled override past page 1.
+- Always call `merge_tenant_rules` before evaluating; never pass unmerged rows, because `evaluate_rules` does not filter by tenant.
+- From async code use `evaluate_rules_async`.
+- Rule evidence can be None on a match.
+- A seeded rule has a NULL title and takes its text from CONTENT_RULE.<seed_key>; a tenant rule whose seed_key's global row was removed can also have a NULL title, so handle that without a crash.
+- When `RuleResults.complete` is False, the result must show evaluation was incomplete, never `ok` by omission; `input_capped`, `no_input`, `busy` and `budget_exceeded` are `not_evaluated`.
+- All seeded rules are disabled today, so a clean result with zero rule matches is expected and must not imply that rules ran.
 Status: todo
