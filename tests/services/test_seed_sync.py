@@ -6,6 +6,7 @@ network.
 """
 
 import datetime as dt
+import logging
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,23 +16,36 @@ import pytest
 import yaml  # type: ignore[import-untyped]
 from alembic import command
 from alembic.config import Config
+from fastapi.testclient import TestClient
 from sqlalchemy import Engine, text
 from sqlalchemy.orm import Session, sessionmaker
 
+import app.main as app_main
 import app.services.seed_sync as seed_sync
+from app.checks.content_rules_seed import CONTENT_RULES_FILE, parse_content_rules
 from app.checks.dkim_selectors import list_selectors
+from app.core.config import Settings
 from app.core.db import create_db_engine, create_session_factory
 from app.core.tenancy import TenantContext
-from app.dns.knowledge import SEEDS_DIR
+from app.dns.knowledge import SEEDS_DIR, _load_yaml
 from app.models import Tenant
 from app.repositories import GlobalDkimSelectorRepository, repo_for
+from app.repositories.base import MAX_LIMIT
+from app.repositories.content_rules import (
+    ContentRuleInvalid,
+    ContentRuleRecord,
+    GlobalContentRuleRepository,
+)
 from app.repositories.dkim_selectors import DkimSelectorRecord, SelectorTaken
 from app.services.seed_sync import (
+    CONTENT_RULE_LOCAL_FIELDS,
     DKIM_LOCAL_FIELDS,
     SeedEntry,
     SeedSyncError,
+    load_content_rule_seed,
     load_dkim_selector_seed,
     run_seed_sync,
+    sync_content_rules,
     sync_dkim_selectors,
     sync_seed,
 )
@@ -146,7 +160,7 @@ def test_resync_is_a_noop(world: World) -> None:
 
 def test_run_seed_sync_commits_in_one_transaction(world: World) -> None:
     results = run_seed_sync(world.factory)
-    assert set(results) == {"dkim_selectors"}
+    assert set(results) == {"dkim_selectors", "content_rules"}
     assert len(results["dkim_selectors"].created) == len(list_selectors())
     world.session.expire_all()
     assert world.count() == len(list_selectors())
@@ -404,3 +418,357 @@ def test_generic_sync_rejects_reserved_fields(reserved: str) -> None:
 
 def test_dkim_local_fields() -> None:
     assert frozenset({"enabled", "notes"}) == DKIM_LOCAL_FIELDS
+
+
+def test_generic_sync_applies_the_entry_enabled_flag() -> None:
+    store = _FakeStore([_Rec(1, "on_now", True, False, "v")])
+    entries = [
+        SeedEntry("on_now", {"value": "v"}, enabled=False),
+        SeedEntry("fresh", {"value": "v"}, enabled=False),
+    ]
+    sync_seed(store, entries, local_fields=frozenset({"enabled"}))
+    assert store.calls == [
+        ("update", (1, {"enabled": False})),
+        ("create", {"value": "v", "enabled": False, "seed_key": "fresh"}),
+    ]
+
+
+# --- content rules (M5-12) -----------------------------------------------------------------------
+
+SHIPPED_RULES = parse_content_rules(_load_yaml(SEEDS_DIR / CONTENT_RULES_FILE))
+
+
+def _rule(key: str, **overrides: Any) -> dict[str, Any]:
+    rule: dict[str, Any] = {
+        "key": key,
+        "kind": "regex",
+        "pattern": "a+b",
+        "flags": ["ignorecase"],
+        "weight": 10,
+        "category": "formatting",
+        "severity": "low",
+        "language": None,
+        "enabled": True,
+        "status": "verified",
+        "verified_on": dt.date(2026, 11, 1),
+        "sources": ["https://acme.example/rules"],
+    }
+    rule.update(overrides)
+    return rule
+
+
+def _rules_seed(tmp_path: Path, rules: list[dict[str, Any]]) -> Path:
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    (tmp_path / CONTENT_RULES_FILE).write_text(yaml.safe_dump({"rules": rules}), encoding="utf-8")
+    return tmp_path
+
+
+def _sync_rules(world: World, seeds: Path = SEEDS_DIR) -> seed_sync.SeedSyncResult:
+    result = sync_content_rules(world.session, seeds, today=dt.date(2026, 11, 8))
+    world.session.commit()
+    return result
+
+
+def _global_rules(world: World) -> dict[str, ContentRuleRecord]:
+    return {
+        r.seed_key: r
+        for r in GlobalContentRuleRepository(world.session).list(limit=MAX_LIMIT)
+        if r.seed_key is not None
+    }
+
+
+def _rule_count(world: World) -> int:
+    return int(world.session.execute(text("SELECT COUNT(*) FROM content_rules")).scalar_one())
+
+
+def _tenant_rules(world: World) -> Any:
+    return repo_for(TenantContext(world.tenant, None), world.session).content_rules
+
+
+def _override(key: str, **overrides: Any) -> dict[str, Any]:
+    return {
+        "name": "tenant copy",
+        "kind": "keyword",
+        "pattern": "tenant",
+        "weight": 1,
+        "category": "tenant_cat",
+        "severity": "info",
+        "seed_key": key,
+        **overrides,
+    }
+
+
+def test_first_rule_sync_creates_the_shipped_seed(world: World) -> None:
+    result = _sync_rules(world)
+    assert sorted(result.created) == sorted(r.key for r in SHIPPED_RULES)
+    rows = _global_rules(world)
+    for rule in SHIPPED_RULES:
+        row = rows[rule.key]
+        assert (row.scope, row.tenant_id, row.name) == ("global", None, rule.key)
+        assert (row.kind, row.pattern, row.flags) == (rule.kind, rule.pattern, rule.flags)
+        assert (row.weight, row.category, row.severity) == (
+            rule.weight,
+            rule.category,
+            rule.severity,
+        )
+        assert (row.language, row.enabled, row.status) == (rule.language, rule.enabled, rule.status)
+        assert (row.verified_on, row.sources) == (rule.verified_on, rule.sources or None)
+        # Text comes from the i18n keys, never from the row.
+        assert (row.title, row.advice) == (None, None)
+        assert not row.locally_modified and row.created_by is None
+
+
+def test_unverified_shipped_rules_stay_disabled_after_sync(world: World) -> None:
+    _sync_rules(world)
+    assert all(not r.enabled for r in _global_rules(world).values() if r.status == "unverified")
+
+
+def test_rule_resync_is_a_noop(world: World) -> None:
+    _sync_rules(world)
+    before = _global_rules(world)
+    result = _sync_rules(world)
+    assert not result.changed and sorted(result.unchanged) == sorted(before)
+    assert result.created == result.updated == result.disabled == result.kept_local == ()
+    assert _global_rules(world) == before
+
+
+def test_run_seed_sync_is_idempotent_for_content_rules(world: World) -> None:
+    results = run_seed_sync(world.factory)
+    assert len(results["content_rules"].created) == len(SHIPPED_RULES)
+    world.session.expire_all()
+    assert _rule_count(world) == len(SHIPPED_RULES)
+    assert not run_seed_sync(world.factory)["content_rules"].changed
+
+
+def test_rule_seed_change_updates_and_follows_enabled(world: World, tmp_path: Path) -> None:
+    _sync_rules(world, _rules_seed(tmp_path / "v1", [_rule("aa"), _rule("bb")]))
+    ids = {k: r.id for k, r in _global_rules(world).items()}
+    v2 = [
+        _rule("aa", pattern="c+d", flags=[], weight=30, language="it", severity="high"),
+        _rule("bb", status="unverified", enabled=False, sources=[]),
+    ]
+    result = _sync_rules(world, _rules_seed(tmp_path / "v2", v2))
+    assert sorted(result.updated) == ["aa", "bb"]
+    rows = _global_rules(world)
+    assert rows["aa"].id == ids["aa"] and rows["bb"].id == ids["bb"]
+    assert (rows["aa"].pattern, rows["aa"].flags, rows["aa"].weight) == ("c+d", 0, 30)
+    assert (rows["aa"].language, rows["aa"].severity) == ("it", "high")
+    assert (rows["bb"].enabled, rows["bb"].status, rows["bb"].sources) == (
+        False,
+        "unverified",
+        None,
+    )
+
+
+def test_removed_rule_is_disabled_not_deleted_and_can_return(world: World, tmp_path: Path) -> None:
+    _sync_rules(world, _rules_seed(tmp_path / "v1", [_rule("aa"), _rule("bb")]))
+    bb_id = _global_rules(world)["bb"].id
+    result = _sync_rules(world, _rules_seed(tmp_path / "v2", [_rule("aa")]))
+    assert result.disabled == ("bb",)
+    row = _global_rules(world)["bb"]
+    assert row.id == bb_id and row.enabled is False
+    again = _sync_rules(world, _rules_seed(tmp_path / "v2b", [_rule("aa")]))
+    assert not again.changed
+    back = _sync_rules(world, _rules_seed(tmp_path / "v3", [_rule("aa"), _rule("bb")]))
+    assert back.updated == ("bb",) and _global_rules(world)["bb"].enabled is True
+
+
+def test_admin_modified_rule_is_left_alone(world: World, tmp_path: Path) -> None:
+    _sync_rules(world, _rules_seed(tmp_path / "v1", [_rule("aa"), _rule("bb")]))
+    GlobalContentRuleRepository(world.session).update(
+        _global_rules(world)["aa"].id,
+        {"pattern": "admin", "weight": 77, "enabled": False, "locally_modified": True},
+    )
+    world.session.commit()
+    before = _global_rules(world)["aa"]
+    v2 = [
+        _rule("aa", pattern="seed", weight=1, severity="high", sources=["https://acme.example/2"]),
+        _rule("bb"),
+    ]
+    result = _sync_rules(world, _rules_seed(tmp_path / "v2", v2))
+    assert result.updated == () and result.kept_local == ("aa",)
+    assert _global_rules(world)["aa"] == before
+
+
+def test_admin_modified_rule_removed_from_seed_keeps_enabled(world: World, tmp_path: Path) -> None:
+    _sync_rules(world, _rules_seed(tmp_path / "v1", [_rule("aa"), _rule("bb")]))
+    GlobalContentRuleRepository(world.session).update(
+        _global_rules(world)["bb"].id, {"locally_modified": True}
+    )
+    world.session.commit()
+    result = _sync_rules(world, _rules_seed(tmp_path / "v2", [_rule("aa")]))
+    assert result.disabled == () and result.kept_local == ("bb",)
+    assert _global_rules(world)["bb"].enabled is True
+
+
+def test_rule_sync_never_touches_tenant_or_unseeded_rows(world: World, tmp_path: Path) -> None:
+    _sync_rules(world, _rules_seed(tmp_path / "v1", [_rule("aa"), _rule("bb")]))
+    tenant = _tenant_rules(world)
+    override = tenant.create(_override("aa", enabled=False))
+    admin = GlobalContentRuleRepository(world.session).create(
+        {
+            "name": "admin rule",
+            "title": "Admin title",
+            "kind": "keyword",
+            "pattern": "x",
+            "weight": 1,
+            "category": "c",
+            "severity": "low",
+        },
+        actor=None,
+    )
+    world.session.commit()
+    _sync_rules(world, _rules_seed(tmp_path / "v2", [_rule("aa", weight=50)]))
+    _sync_rules(world, _rules_seed(tmp_path / "v3", [_rule("bb")]))
+    assert tenant.get(override.id) == override
+    assert GlobalContentRuleRepository(world.session).get(admin.id) == admin
+    assert set(_global_rules(world)) == {"aa", "bb"}
+
+
+def test_tenant_override_needs_an_existing_seed_key_and_survives_removal(
+    world: World, tmp_path: Path
+) -> None:
+    _sync_rules(world, _rules_seed(tmp_path / "v1", [_rule("aa")]))
+    tenant = _tenant_rules(world)
+    with pytest.raises(ContentRuleInvalid):
+        tenant.create(_override("not_in_seed"))
+    override = tenant.create(_override("aa"))
+    world.session.commit()
+    # The global row is only disabled, so the override still points at a row.
+    _sync_rules(world, _rules_seed(tmp_path / "v2", [_rule("bb")]))
+    assert _global_rules(world)["aa"].enabled is False
+    assert tenant.get(override.id) == override
+
+
+RULE_FILES_MALFORMED: list[tuple[str, str]] = [
+    ("unparsable yaml", "rules: [\n  - key: x\n"),
+    ("not a mapping", "- a\n- b\n"),
+    ("empty file", ""),
+    ("missing rules", "other: 1\n"),
+    ("empty rules", "rules: []\n"),
+    ("impossible date", "rules:\n  - key: a\n    verified_on: 2026-13-45\n"),
+]
+
+RULE_ENTRIES_MALFORMED: list[tuple[str, list[dict[str, Any]]]] = [
+    ("unknown key", [{**_rule("aa"), "title": "x"}]),
+    ("invalid regex", [_rule("aa", pattern="(")]),
+    ("nul in regex", [_rule("aa", pattern="a\x00")]),
+    ("nul in keyword", [_rule("aa", kind="keyword", pattern="a\x00", flags=[])]),
+    ("future date", [_rule("aa", verified_on=dt.date(2027, 1, 1))]),
+    ("no sources", [_rule("aa", sources=[])]),
+    ("unverified enabled", [_rule("aa", status="unverified")]),
+    ("duplicate key", [_rule("aa"), _rule("aa")]),
+    ("bad language", [_rule("aa", language="EN")]),
+    ("source without host", [_rule("aa", sources=["https://"])]),
+    ("valid then invalid", [_rule("aa"), _rule("bb", weight=500)]),
+]
+
+
+def _assert_rules_unchanged(world: World, seeds: Path, before: dict[str, Any]) -> None:
+    with pytest.raises(SeedSyncError):
+        sync_content_rules(world.session, seeds, today=dt.date(2026, 11, 8))
+    world.session.rollback()
+    assert _global_rules(world) == before
+
+
+@pytest.mark.parametrize(
+    ("case", "raw"), RULE_FILES_MALFORMED, ids=[c for c, _ in RULE_FILES_MALFORMED]
+)
+def test_malformed_rule_file_is_an_error(world: World, tmp_path: Path, case: str, raw: str) -> None:
+    _sync_rules(world, _rules_seed(tmp_path / "ok", [_rule("zz")]))
+    before = _global_rules(world)
+    (tmp_path / "bad").mkdir()
+    (tmp_path / "bad" / CONTENT_RULES_FILE).write_text(raw, encoding="utf-8")
+    _assert_rules_unchanged(world, tmp_path / "bad", before)
+
+
+@pytest.mark.parametrize(
+    ("case", "entries"), RULE_ENTRIES_MALFORMED, ids=[c for c, _ in RULE_ENTRIES_MALFORMED]
+)
+def test_malformed_rule_entries_are_an_error(
+    world: World, tmp_path: Path, case: str, entries: list[dict[str, Any]]
+) -> None:
+    _sync_rules(world, _rules_seed(tmp_path / "ok", [_rule("zz")]))
+    before = _global_rules(world)
+    _assert_rules_unchanged(world, _rules_seed(tmp_path / "bad", entries), before)
+
+
+def test_missing_rule_file_is_an_error(world: World, tmp_path: Path) -> None:
+    _assert_rules_unchanged(world, tmp_path, {})
+
+
+def test_loader_marks_unverified_entries_disabled_and_drops_empty_sources(tmp_path: Path) -> None:
+    seeds = _rules_seed(tmp_path, [_rule("aa", status="unverified", enabled=False, sources=[])])
+    (entry,) = load_content_rule_seed(seeds, today=dt.date(2026, 11, 8))
+    assert entry.enabled is False and entry.values["sources"] is None
+
+
+def test_content_rule_local_fields_cover_everything_the_seed_sets(tmp_path: Path) -> None:
+    (entry,) = load_content_rule_seed(_rules_seed(tmp_path, [_rule("aa")]), dt.date(2026, 11, 8))
+    assert {*entry.values, "enabled"} == CONTENT_RULE_LOCAL_FIELDS
+
+
+# --- startup wiring ------------------------------------------------------------------------------
+
+
+def _start(world: World, db_url: str) -> int:
+    settings = Settings(database_url=db_url, secret_key=KEY, encryption_key=KEY)  # type: ignore[call-arg]
+    with TestClient(app_main.create_app(settings)) as client:
+        return client.get("/healthz").status_code
+
+
+def test_startup_runs_the_seed_sync(
+    world: World, db_url: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.INFO)
+    assert _start(world, db_url) == 200
+    world.session.expire_all()
+    assert _rule_count(world) == len(SHIPPED_RULES)
+    assert world.count() == len(list_selectors())
+    assert any(getattr(r, "event", None) == "seed_sync.done" for r in caplog.records)
+
+
+def test_startup_survives_an_invalid_seed_and_keeps_the_previous_state(
+    world: World,
+    db_url: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    run_seed_sync(world.factory)
+    world.session.expire_all()
+    rules, selectors = _global_rules(world), world.by_key()
+    bad = tmp_path / "bad"
+    bad.mkdir()
+    for name in ("dkim_selectors.yaml", CONTENT_RULES_FILE):
+        (bad / name).write_text((SEEDS_DIR / name).read_text(encoding="utf-8"), encoding="utf-8")
+    (bad / CONTENT_RULES_FILE).write_text("rules: []\n", encoding="utf-8")
+    monkeypatch.setattr(app_main, "run_seed_sync", lambda factory: run_seed_sync(factory, bad))
+    assert _start(world, db_url) == 200
+    world.session.expire_all()
+    assert _global_rules(world) == rules and world.by_key() == selectors
+    failed = [r for r in caplog.records if getattr(r, "event", None) == "seed_sync.failed"]
+    assert len(failed) == 1 and failed[0].levelno == logging.ERROR
+    assert CONTENT_RULES_FILE in failed[0].getMessage()
+
+
+@pytest.mark.parametrize(
+    "error",
+    [SeedSyncError("bad seed"), SelectorTaken(), RuntimeError("secret query detail")],
+    ids=["seed", "conflict", "unexpected"],
+)
+def test_startup_survives_any_sync_failure(
+    world: World,
+    db_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    error: Exception,
+) -> None:
+    def fail(factory: object) -> None:
+        raise error
+
+    monkeypatch.setattr(app_main, "run_seed_sync", fail)
+    assert _start(world, db_url) == 200
+    failed = [r for r in caplog.records if getattr(r, "event", None) == "seed_sync.failed"]
+    assert len(failed) == 1
+    assert "secret query detail" not in failed[0].getMessage()

@@ -1,4 +1,10 @@
 {
+  "CONTENT_RULE.all_caps_run.advice": "The text has four or more consecutive words in capitals. This is a generic style check, not a requirement published by a mailbox provider. Check that the capitals are intended.",
+  "CONTENT_RULE.all_caps_run.title": "Long run of words in capitals",
+  "CONTENT_RULE.shouting_punctuation.advice": "The text has three or more exclamation or question marks in a row. This is a generic style check, not a requirement published by a mailbox provider. Check that the punctuation is intended.",
+  "CONTENT_RULE.shouting_punctuation.title": "Repeated exclamation or question marks",
+  "CONTENT_RULE.subject_fake_reply_forward_prefix.advice": "Google's email sender guidelines say not to start a subject line with Re: or Fwd: unless the message is an actual reply or forward. If this message is neither, remove the prefix.",
+  "CONTENT_RULE.subject_fake_reply_forward_prefix.title": "Subject starts with Re: or Fwd:",
   "api.error.conflict": "This conflicts with an existing item.",
   "api.error.forbidden": "You do not have permission to do this.",
   "api.error.invalid_request": "The request is not valid.",

@@ -3,11 +3,13 @@
 `sync_seed` is the generic helper (reused by M5-12 for content rules). It works on any global
 store that lists its seeded rows and creates/updates global rows; it never sees tenant rows
 because the global repositories cannot reach them. Rules, keyed by `seed_key`:
-- a seed entry without a row is created (enabled, `locally_modified` false, no actor);
-- a row that is not `locally_modified` gets every seed-owned field from the seed, and is
-  re-enabled if it had been disabled because its entry was removed;
+- a seed entry without a row is created (with the entry's `enabled`, `locally_modified` false,
+  no actor);
+- a row that is not `locally_modified` gets every seed-owned field from the seed, including the
+  entry's `enabled`, so a row disabled because its entry was removed comes back;
 - a `locally_modified` row (an instance admin edited it) keeps its `local_fields` (for DKIM
-  selectors: enabled and notes); the other seed-owned fields still follow the seed;
+  selectors: enabled and notes; for content rules: every field the seed sets, so the row is
+  skipped); the other seed-owned fields still follow the seed;
 - a row whose entry left the seed is disabled, never deleted; a locally modified row keeps its
   enabled flag (the admin's choice) and is reported in `kept_local`.
 
@@ -27,8 +29,17 @@ from typing import Any, Final, Protocol
 
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.checks.content_rules_seed import CONTENT_RULES_FILE, parse_content_rules
 from app.checks.dkim_selectors import SELECTORS_FILE, parse_selectors
 from app.dns.knowledge import SEEDS_DIR, KnowledgeError, _load_yaml
+from app.repositories.base import MAX_LIMIT
+from app.repositories.content_rules import (
+    GLOBAL_FIELDS,
+    ContentRuleInvalid,
+    ContentRuleRecord,
+    GlobalContentRuleRepository,
+    _clean_values,
+)
 from app.repositories.dkim_selectors import (
     DkimSelectorInvalid,
     GlobalDkimSelectorRepository,
@@ -39,6 +50,23 @@ from app.repositories.dkim_selectors import (
 _RESERVED: Final = frozenset({"seed_key", "enabled", "locally_modified"})
 # Fields an instance admin may edit on a seeded DKIM selector without the sync undoing it.
 DKIM_LOCAL_FIELDS: Final = frozenset({"enabled", "notes"})
+# A locally modified seeded content rule is skipped entirely: everything the seed sets is local.
+CONTENT_RULE_LOCAL_FIELDS: Final = frozenset(
+    {
+        "name",
+        "kind",
+        "pattern",
+        "flags",
+        "weight",
+        "category",
+        "severity",
+        "language",
+        "enabled",
+        "status",
+        "sources",
+        "verified_on",
+    }
+)
 
 
 class SeedSyncError(Exception):
@@ -49,6 +77,7 @@ class SeedSyncError(Exception):
 class SeedEntry:
     key: str
     values: Mapping[str, Any]
+    enabled: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -118,7 +147,7 @@ def sync_seed(
     existing = {r.seed_key: r for r in store.list_seeded() if r.seed_key is not None}
     tally = _Tally()
     for entry in entries:
-        desired = {**entry.values, "enabled": True}
+        desired = {**entry.values, "enabled": entry.enabled}
         row = existing.get(entry.key)
         if row is None:
             store.create({**desired, "seed_key": entry.key}, actor=None)
@@ -192,8 +221,69 @@ def sync_dkim_selectors(
     return sync_seed(GlobalDkimSelectorRepository(session), entries, local_fields=DKIM_LOCAL_FIELDS)
 
 
+# --- content rules -------------------------------------------------------------------------------
+
+
+class _SeededContentRules(GlobalContentRuleRepository):
+    """The global repository as a `SeedStore`: seeded rows, read through its public paged list."""
+
+    __slots__ = ()
+
+    def list_seeded(self) -> Sequence[ContentRuleRecord]:
+        """Every global row with a seed_key, enabled or not."""
+        rows: list[ContentRuleRecord] = []
+        offset = 0
+        while True:
+            page = self.list(limit=MAX_LIMIT, offset=offset)
+            rows.extend(r for r in page if r.seed_key is not None)
+            if len(page) < MAX_LIMIT:
+                return rows
+            offset += len(page)
+
+
+def load_content_rule_seed(
+    seeds_dir: Path = SEEDS_DIR, today: date | None = None
+) -> tuple[SeedEntry, ...]:
+    """Parse and fully validate `content_rules.yaml` (the M5-12 schema plus the repository rules).
+    The name is the seed key: display text comes from the i18n keys derived from it."""
+    try:
+        rules = parse_content_rules(_load_yaml(seeds_dir / CONTENT_RULES_FILE), today)
+    except ValueError as exc:  # KnowledgeError, or PyYAML on an impossible date (2026-13-45)
+        raise SeedSyncError(f"{CONTENT_RULES_FILE}: {exc}") from None
+    entries: list[SeedEntry] = []
+    for r in rules:
+        values = {
+            "name": r.key,
+            "kind": r.kind,
+            "pattern": r.pattern,
+            "flags": r.flags,
+            "weight": r.weight,
+            "category": r.category,
+            "severity": r.severity,
+            "language": r.language,
+            "status": r.status,
+            "sources": list(r.sources) or None,
+            "verified_on": r.verified_on,
+        }
+        try:
+            _clean_values({**values, "seed_key": r.key, "enabled": r.enabled}, GLOBAL_FIELDS)
+        except ContentRuleInvalid as exc:
+            raise SeedSyncError(f"{CONTENT_RULES_FILE}: {r.key}: {exc}") from None
+        entries.append(SeedEntry(r.key, values, enabled=r.enabled))
+    return tuple(entries)
+
+
+def sync_content_rules(
+    session: Session, seeds_dir: Path = SEEDS_DIR, today: date | None = None
+) -> SeedSyncResult:
+    """Sync global content rules from the seed on `session` (flushed, not committed)."""
+    entries = load_content_rule_seed(seeds_dir, today)
+    return sync_seed(_SeededContentRules(session), entries, local_fields=CONTENT_RULE_LOCAL_FIELDS)
+
+
 _SYNCS: Final[Mapping[str, Callable[[Session, Path], SeedSyncResult]]] = {
     "dkim_selectors": lambda session, seeds_dir: sync_dkim_selectors(session, seeds_dir),
+    "content_rules": lambda session, seeds_dir: sync_content_rules(session, seeds_dir),
 }
 
 

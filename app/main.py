@@ -1,3 +1,4 @@
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -16,9 +17,11 @@ from app.core.csrf import CSRFMiddleware
 from app.core.i18n import validate_catalogues
 from app.core.logging import RequestLoggingMiddleware, configure_logging
 from app.core.security_headers import SecurityHeadersMiddleware
+from app.services.seed_sync import SeedSyncError, run_seed_sync
 from app.web.auth import router as auth_router
 from app.web.authentication import router as authentication_router
 from app.web.checks_stream import router as checks_stream_router
+from app.web.deps import _session_factory
 from app.web.dns_tools import router as dns_tools_router
 from app.web.domains import router as domains_router
 from app.web.health import router as health_router
@@ -28,6 +31,8 @@ from app.web.setup import SetupGateMiddleware, prepare_setup
 from app.web.setup import router as setup_router
 from app.web.templating import STATIC_DIR, render
 from app.web.templating import router as language_router
+
+logger = logging.getLogger("app.seed_sync")
 
 _MIN_MASKED_LEN = 8  # same threshold as app.core.logging: shorter values are not masked
 
@@ -44,6 +49,28 @@ def log_secrets(cfg: Settings) -> list[str]:
     return secrets
 
 
+def sync_seeds_at_startup(app: FastAPI) -> None:
+    """Startup hook: sync the global knowledge rows. Any failure (invalid seed, database error) is
+    logged and startup goes on with the previous database state. Only a seed validation message
+    is logged verbatim; other exceptions are named by type, their text can carry query details."""
+    try:
+        results = run_seed_sync(_session_factory(Request({"type": "http", "app": app})))
+    except Exception as exc:
+        logger.error(
+            "seed sync failed, keeping the previous database state (%s)",
+            exc if isinstance(exc, SeedSyncError) else type(exc).__name__,
+            extra={"event": "seed_sync.failed"},
+        )
+        return
+    logger.info(
+        "seed sync done (%s)",
+        ", ".join(
+            f"{name}: {'changed' if r.changed else 'unchanged'}" for name, r in results.items()
+        ),
+        extra={"event": "seed_sync.done"},
+    )
+
+
 def create_app(settings: Settings | None = None) -> FastAPI:
     """Build the app. With explicit settings (tests) they are used as given; otherwise they are
     loaded from the environment at startup (lifespan), so a missing or invalid configuration
@@ -58,6 +85,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         cfg.log_resolver_config()
         # First-run setup: logs the one-time setup token (WARNING) while no user exists.
         await run_in_threadpool(prepare_setup, app)
+        await run_in_threadpool(sync_seeds_at_startup, app)
         yield
 
     # Interactive docs and the OpenAPI schema are disabled: they would be served unauthenticated.
