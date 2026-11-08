@@ -941,19 +941,35 @@ def test_no_request_content_in_logs(
     assert MARKER not in logged
 
 
-def test_no_dns_or_sockets_are_used(world: World, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Links are never resolved or fetched: any attempt fails the test."""
+def _connect(address: tuple[str, int]) -> None:
+    with socket.socket() as probe:
+        probe.connect(address)
 
-    def refuse(*_a: object, **_k: object) -> Any:
-        raise AssertionError("network access")
 
+@pytest.mark.parametrize(
+    "attempt",
+    [
+        lambda: socket.getaddrinfo("example.org", 443),
+        lambda: socket.gethostbyname("example.org"),
+        lambda: socket.create_connection(("example.org", 443), timeout=1),
+        lambda: _connect(("192.0.2.1", 443)),
+        lambda: _connect(("127.0.0.1", 53)),
+    ],
+    ids=["getaddrinfo", "gethostbyname", "create_connection", "connect", "loopback-dns"],
+)
+def test_the_module_guard_refuses_real_network_access(attempt: Any) -> None:
+    with pytest.raises(AssertionError, match="network access"):
+        attempt()
+
+
+def test_no_dns_or_sockets_are_used(world: World) -> None:
+    """Links are never resolved or fetched.
+
+    The autouse guard allows only the TEST_DATABASE_URL endpoint, which the `world` fixture also
+    needs at teardown. The analysis catches section failures, so a refused attempt shows up as
+    status `error`, which is what the assertion below rejects.
+    """
     world.tenant_rules.create(rule("r1", kind="regex", pattern="win+er"))
-    rows = ca.load_tenant_rules(world.ctx, world.session)  # the only step that may use the DB
-    monkeypatch.setattr(ca, "load_tenant_rules", lambda *_a, **_k: rows)
-    monkeypatch.setattr(socket, "getaddrinfo", refuse)
-    monkeypatch.setattr(socket, "gethostbyname", refuse)
-    monkeypatch.setattr(socket, "create_connection", refuse)
-    monkeypatch.setattr(socket.socket, "connect", refuse)
     result = world.analyze(eml=full_message())
     assert result.status != "error"
     assert result.rules.facts is not None
