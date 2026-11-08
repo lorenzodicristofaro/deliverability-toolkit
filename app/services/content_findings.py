@@ -299,7 +299,11 @@ def link_findings(facts: LinkAnalysis) -> SectionFindings:
             {"count": len(facts.other_domains), "threshold": MANY_LINK_DOMAINS_THRESHOLD},
             evidence=facts.other_domains,
         )
-    return acc.result(("links_malformed",) if facts.malformed_count else ())
+    partial: list[str] = ["links_malformed"] if facts.malformed_count else []
+    # No sender domain to compare with, although a link has a host to compare.
+    if facts.unaligned_count is None and any(ln.registrable_domain for ln in links):
+        partial.append("alignment_not_evaluated")
+    return acc.result(tuple(partial))
 
 
 def subject_findings(facts: SubjectFacts) -> SectionFindings:

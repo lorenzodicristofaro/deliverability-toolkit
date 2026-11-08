@@ -482,6 +482,57 @@ def test_link_alignment_uses_from_and_dkim_domains(world: World) -> None:
     assert result.links.facts.alignment_evaluated is True
 
 
+LINK = '<a href="https://example.com/a">go</a>'
+BAD_LINK = '<a href="https://[bad/">go</a>'
+ALIGN_REASON = "alignment_not_evaluated"
+
+
+@pytest.mark.parametrize(
+    ("from_header", "links", "expected_reasons", "status", "complete", "aligned"),
+    [
+        ("", LINK, (ALIGN_REASON,), "ok", False, False),
+        ("From: a@-bad-\r\n", LINK, (ALIGN_REASON,), "ok", False, False),
+        ("", LINK + BAD_LINK, ("links_malformed", ALIGN_REASON), "warn", False, False),
+        ("", '<a href="/relative">go</a>', (), "ok", True, False),
+        ("", '<a href="mailto:a@example.net">go</a>', (), "ok", True, False),
+        ("", "", (), "ok", True, False),
+        ("From: a@example.com\r\n", LINK, (), "ok", True, True),
+    ],
+    ids=[
+        "no-from",
+        "invalid-from",
+        "no-from-and-unreadable-link",
+        "relative-link-has-no-host",
+        "mailto-has-no-host",
+        "no-links",
+        "known-sender",
+    ],
+)
+def test_links_with_no_sender_to_compare_are_not_complete(
+    world: World,
+    from_header: str,
+    links: str,
+    expected_reasons: tuple[str, ...],
+    status: str,
+    complete: bool,
+    aligned: bool,
+) -> None:
+    world.tenant_rules.create(rule("r1", pattern="absent"))
+    head = (
+        f"{from_header}Subject: Hello there\r\n"
+        "List-Unsubscribe: <https://example.com/u>\r\n"
+        "List-Unsubscribe-Post: List-Unsubscribe=One-Click\r\n"
+        "DKIM-Signature: v=1; h=from:list-unsubscribe:list-unsubscribe-post; b=x\r\n"
+    )
+    result = world.analyze(html=HTML + links, text="hello", eml=eml("hello", head=head))
+    assert result.links.status == status
+    assert result.links.reasons == expected_reasons
+    assert result.status == status
+    assert result.complete is complete
+    assert result.links.facts is not None
+    assert result.links.facts.alignment_evaluated is aligned
+
+
 def test_alignment_not_evaluated_without_a_sender(world: World) -> None:
     result = world.analyze(html='<a href="https://other.example/">x</a>' + HTML, text="hi")
     assert result.links.facts is not None

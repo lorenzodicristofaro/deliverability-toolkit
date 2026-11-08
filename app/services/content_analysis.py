@@ -38,8 +38,9 @@ Status mapping:
   is `not_evaluated` only when every section is; `complete` is False and
   `not_evaluated_sections` names them whenever one was skipped.
 - `complete` is also False, with the status unchanged and a reason on the section, when part of
-  a section was skipped: an unreadable link (a low finding, so `warn`) or, with no language hint,
-  enabled rules left out because they have a language. A hint that excludes other languages is
+  a section was skipped: an unreadable link (a low finding, so `warn`), links with no sender
+  domain to compare them with, or, with no language hint, enabled rules left out because they
+  have a language. A hint that excludes other languages is
   a choice and stays complete. A too-long DKIM signature list only affects link alignment.
 
 Reading an `.eml`: `parse_mime` reports offsets and never decodes, so the transfer encoding and
@@ -163,8 +164,8 @@ class BodyFacts(_Model):
     hidden_candidates: int
     malformed: tuple[str, ...]
     charset: str | None
-    gmail_clip_threshold_bytes: int
-    exceeds_gmail_clip_threshold: bool
+    clip_risk_threshold_bytes: int
+    exceeds_clip_risk_threshold: bool
     capped: bool
     cap_reason: str | None
 
@@ -500,8 +501,8 @@ def _body_view(s: ContentStructure) -> BodyFacts:
         hidden_candidates=len(s.hidden_candidates),
         malformed=s.malformed,
         charset=None if s.charset is None else excerpt(s.charset),
-        gmail_clip_threshold_bytes=s.gmail_clip_threshold_bytes,
-        exceeds_gmail_clip_threshold=s.exceeds_gmail_clip_threshold,
+        clip_risk_threshold_bytes=s.gmail_clip_threshold_bytes,
+        exceeds_clip_risk_threshold=s.exceeds_gmail_clip_threshold,
         capped=s.capped,
         cap_reason=s.cap_reason,
     )
