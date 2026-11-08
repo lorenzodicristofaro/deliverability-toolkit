@@ -202,7 +202,10 @@ def test_unaligned_is_reported_even_when_another_link_is_unevaluated() -> None:
     assert facts.all_aligned is None
     found = cf.link_findings(facts)
     assert codes(found) == {"CONTENT_UNALIGNED_LINK_DOMAIN", "CONTENT_LINK_UNEVALUATED"}
-    assert found.unevaluated == ("links_malformed",)
+    assert found.unevaluated == ()
+    assert found.partial == ("links_malformed",)
+    unevaluated = next(f for f in found.findings if f.code == "CONTENT_LINK_UNEVALUATED")
+    assert unevaluated.params["count"] == 1
     rendered(found)
 
 
@@ -246,6 +249,7 @@ def test_link_evidence_never_holds_the_path_or_query() -> None:
         ("Re: hi", False, {"CONTENT_SUBJECT_REPLY_PREFIX"}),
         ("Re: hi", True, set()),
         ("Re: hi", None, set()),  # unknown headers: no verdict
+        ("Fwd: hi", False, set()),  # a real forward has no In-Reply-To
         ("a\x01b", None, {"CONTENT_SUBJECT_CONTROL_CHARS"}),
         ("a‮b", None, {"CONTENT_SUBJECT_BIDI_OVERRIDE"}),
         ("pаypal", None, {"CONTENT_SUBJECT_MIXED_SCRIPT"}),
@@ -321,7 +325,7 @@ def lup(value: str = POST) -> tuple[str, str]:
         ),
         ((lu(HTTPS), lup()), [], {"CONTENT_UNSIGNED_UNSUBSCRIBE_HEADER"}, None),
         ((lu(HTTPS), lup()), [["from"]], {"CONTENT_UNSIGNED_UNSUBSCRIBE_HEADER"}, None),
-        ((lu(HTTPS), lup()), None, set(), None),  # coverage unknown: no verdict
+        ((lu("<mailto:u@x.example>"),), [], {"CONTENT_NO_ONE_CLICK"}, "detail"),  # no Post
     ],
 )
 def test_unsubscribe_findings(
@@ -338,6 +342,21 @@ def test_unsubscribe_findings(
         one_click = next(f for f in found.findings if f.code == "CONTENT_NO_ONE_CLICK")
         assert one_click.detail_key == f"finding.CONTENT_NO_ONE_CLICK.{detail}"
     rendered(found)
+
+
+def test_unknown_dkim_coverage_is_error_class_when_one_click_is_attempted() -> None:
+    facts = analyze_list_unsubscribe(block(lu(HTTPS), lup()), dkim_signed_headers=None)
+    found = cf.unsubscribe_findings(facts)
+    assert found.unevaluated == ("dkim_signed_headers_unknown",)
+    assert codes(found) == {"CONTENT_INPUT_CAPPED"}
+    rendered(found)
+
+
+def test_unknown_dkim_coverage_does_not_matter_without_one_click() -> None:
+    facts = analyze_list_unsubscribe(block(lu(HTTPS)), dkim_signed_headers=None)
+    found = cf.unsubscribe_findings(facts)
+    assert found.unevaluated == ()
+    assert codes(found) == {"CONTENT_NO_ONE_CLICK"}
 
 
 @pytest.mark.parametrize(

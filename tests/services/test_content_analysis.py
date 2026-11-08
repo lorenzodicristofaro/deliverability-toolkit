@@ -404,21 +404,31 @@ def test_eml_without_subject_is_a_finding(world: World) -> None:
 def test_reply_prefix_uses_the_message_headers(world: World) -> None:
     head = "From: a@example.com\r\nSubject: Re: hello\r\n"
     assert "CONTENT_SUBJECT_REPLY_PREFIX" in codes(world.analyze(eml=eml("x", head=head)))
-    replied = head + "In-Reply-To: <1@example.com>\r\n"
-    assert "CONTENT_SUBJECT_REPLY_PREFIX" not in codes(world.analyze(eml=eml("x", head=replied)))
+    for header in ("In-Reply-To", "References"):
+        replied = head + f"{header}: <1@example.com>\r\n"
+        assert "CONTENT_SUBJECT_REPLY_PREFIX" not in codes(
+            world.analyze(eml=eml("x", head=replied))
+        )
+    forward = "From: a@example.com\r\nSubject: Fwd: hello\r\n"
+    assert "CONTENT_SUBJECT_REPLY_PREFIX" not in codes(world.analyze(eml=eml("x", head=forward)))
 
 
 @pytest.mark.parametrize(
-    ("signature", "signed", "code"),
+    ("signature", "signed", "code", "status"),
     [
-        (None, False, True),  # no signature at all
-        ("v=1; d=example.com; h=from; b=x", False, True),
-        ("v=1; d=example.com; h=from:list-unsubscribe:list-unsubscribe-post; b=x", True, False),
-        ("v=1; d=example.com; b=x", None, False),  # h= unreadable: unknown, never "unsigned"
+        (None, False, True, "warn"),  # no signature at all
+        ("v=1; d=example.com; h=from; b=x", False, True, "warn"),
+        (
+            "v=1; d=example.com; h=from:list-unsubscribe:list-unsubscribe-post; b=x",
+            True,
+            False,
+            "ok",
+        ),
+        ("v=1; d=example.com; b=x", None, False, "error"),  # h= unreadable: unknown, never ok
     ],
 )
 def test_unsigned_header_comes_from_h_lists(
-    world: World, signature: str | None, signed: bool | None, code: bool
+    world: World, signature: str | None, signed: bool | None, code: bool, status: str
 ) -> None:
     head = (
         "From: a@example.com\r\nSubject: Hello there\r\n"
@@ -431,6 +441,35 @@ def test_unsigned_header_comes_from_h_lists(
     assert result.unsubscribe.facts is not None
     assert result.unsubscribe.facts.one_click_signed is signed
     assert ("CONTENT_UNSIGNED_UNSUBSCRIBE_HEADER" in codes(result)) is code
+    assert result.unsubscribe.status == status
+    if status == "error":
+        assert result.status == "error"
+        assert result.unsubscribe.reasons == ("dkim_signed_headers_unknown",)
+
+
+def test_mailto_only_unsubscribe_is_not_held_to_rfc_8058(world: World) -> None:
+    head = "From: a@example.com\r\nSubject: Hello there\r\n"
+    head += "List-Unsubscribe: <mailto:u@example.com>\r\n"
+    for signature in ("", "DKIM-Signature: v=1; d=example.com; b=x\r\n"):
+        result = world.analyze(eml=eml("hello", head=head + signature))
+        assert "CONTENT_UNSIGNED_UNSUBSCRIBE_HEADER" not in codes(result)
+        assert result.unsubscribe.status == "warn"  # CONTENT_NO_ONE_CLICK only
+
+
+def test_truncated_dkim_signatures_only_affect_alignment(world: World) -> None:
+    head = "From: a@example.com\r\nSubject: Hello there\r\n" + "".join(
+        f"DKIM-Signature: v=1; d=d{i}.example; h=from; b=x\r\n" for i in range(51)
+    )
+    html = '<a href="https://example.com/">x</a>' + HTML
+    result = world.analyze(eml=eml(html, "text/html", head=head))
+    assert result.status == "error"
+    assert result.message is not None
+    assert result.message.status == "error"
+    assert result.message.reasons == ("dkim_signatures_truncated",)
+    assert {result.body.status, result.links.status} <= {"ok", "info", "warn", "fail"}
+    assert result.rules.status == "not_evaluated"  # no rule is enabled; not an error
+    assert result.links.facts is not None
+    assert result.links.facts.alignment_evaluated is False
 
 
 def test_link_alignment_uses_from_and_dkim_domains(world: World) -> None:
@@ -451,12 +490,18 @@ def test_alignment_not_evaluated_without_a_sender(world: World) -> None:
     assert "CONTENT_UNALIGNED_LINK_DOMAIN" not in codes(result)
 
 
-def test_unreadable_link_makes_links_error_and_alignment_incomplete(world: World) -> None:
-    html = '<a href="https://example.com/">x</a><a href="https://[bad/">y</a>' + HTML
+@pytest.mark.parametrize("href", ["https://[bad/", "https://{{domain}}/x"])
+def test_unreadable_link_is_a_warning_and_alignment_stays_incomplete(
+    world: World, href: str
+) -> None:
+    html = f'<a href="https://example.com/">x</a><a href="{href}">y</a>' + HTML
     raw = multipart(("text/plain", "", "hello"), ("text/html", "", html))
+    world.tenant_rules.create(rule("r1", pattern="absent"))
     result = world.analyze(eml=raw)
-    assert result.status == "error"
-    assert result.links.status == "error"
+    assert result.status == "warn"
+    assert result.complete is False
+    assert result.links.status == "warn"
+    assert result.links.reasons == ("links_malformed",)
     assert result.links.facts is not None
     assert result.links.facts.unaligned_count == 0
     assert result.links.facts.alignment_evaluated is False
@@ -513,6 +558,41 @@ def test_language_rules_need_the_hint(world: World) -> None:
     used = world.analyze(text="winner", language_hint="it")
     assert used.rules.facts is not None
     assert used.rules.facts.matched_rules == 1
+
+
+def full_clean_message() -> bytes:
+    return multipart(("text/plain", "", "hello"), ("text/html", "", HTML))
+
+
+@pytest.mark.parametrize(
+    ("hint", "status", "reasons_expected", "complete", "skipped", "evaluated"),
+    [
+        (None, "ok", ("language_rules_skipped",), False, 1, 1),
+        ("  ", "ok", ("language_rules_skipped",), False, 1, 1),
+        ("it", "ok", (), True, 0, 2),
+        ("en", "ok", (), True, 1, 1),  # the hint chose: other languages are out of scope
+    ],
+    ids=["no-hint", "blank-hint", "matching-hint", "other-hint"],
+)
+def test_rules_left_out_for_lack_of_a_hint_are_not_complete(
+    world: World,
+    hint: str | None,
+    status: str,
+    reasons_expected: tuple[str, ...],
+    complete: bool,
+    skipped: int,
+    evaluated: int,
+) -> None:
+    world.tenant_rules.create(rule("null-language", pattern="absent"))
+    world.tenant_rules.create(rule("italian", pattern="absent", language="it"))
+    result = world.analyze(eml=full_clean_message(), language_hint=hint)
+    assert result.status == "ok"
+    assert result.rules.status == status
+    assert result.rules.reasons == reasons_expected
+    assert result.complete is complete
+    assert result.rules.facts is not None
+    assert result.rules.facts.skipped_by_language == skipped
+    assert result.rules.facts.evaluated_rules == evaluated
 
 
 @pytest.mark.parametrize(

@@ -28,14 +28,19 @@ Status mapping:
 
 - Per-rule results keep the engine's values.
 - A section is `error` when it could not be fully evaluated: a parser cap, an undecodable `.eml`,
-  an unreadable link, or for the rules a capped body, `input_capped`, `busy`, `budget_exceeded`,
-  `too_many_rules` or any rule `error`. Any such section makes the overall status `error`.
+  unknown DKIM coverage of One-Click headers, or for the rules a capped body, `input_capped`,
+  `busy`, `budget_exceeded`, `too_many_rules` or any rule `error`. Any such section makes the
+  overall status `error`.
 - A section is `not_evaluated` when it had no input (no headers, no HTML, no subject, no content
   for the rules) or, for the rules, when no enabled rule applied: `RulesFacts` then shows zero
   rules evaluated, so "no match" cannot be read as "the rules ran and passed".
 - Otherwise a section's status derives from its own findings. The overall status does too, and
   is `not_evaluated` only when every section is; `complete` is False and
   `not_evaluated_sections` names them whenever one was skipped.
+- `complete` is also False, with the status unchanged and a reason on the section, when part of
+  a section was skipped: an unreadable link (a low finding, so `warn`) or, with no language hint,
+  enabled rules left out because they have a language. A hint that excludes other languages is
+  a choice and stays complete. A too-long DKIM signature list only affects link alignment.
 
 Reading an `.eml`: `parse_mime` reports offsets and never decodes, so the transfer encoding and
 charset of the body parts are decoded here. Every non-attachment text/plain and text/html part
@@ -60,7 +65,7 @@ import contextlib
 import quopri
 import re
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from typing import Literal
 
@@ -251,7 +256,7 @@ class RulesFacts(_Model):
 
 class _Section(_Model):
     status: SectionStatus
-    reasons: tuple[str, ...]  # why it is `error` or `not_evaluated`
+    reasons: tuple[str, ...]  # why it is `error`, `not_evaluated` or partly skipped
     facts: BaseModel | None = None
 
 
@@ -283,7 +288,7 @@ class ContentAnalysis(_Model):
     """Result of :func:`analyze_content`; `model_dump_json()` is the wire format."""
 
     status: SectionStatus
-    complete: bool  # every section was fully evaluated
+    complete: bool  # every section was fully evaluated; `status` alone does not say so
     not_evaluated_sections: tuple[str, ...]
     message: MessageSection | None  # None when no .eml was given
     body: BodySection
@@ -300,12 +305,13 @@ class _Eml:
     html: str | None = None
     text: str | None = None
     subject: str | None = None
-    has_in_reply_to: bool | None = None
+    has_reply_headers: bool | None = None  # In-Reply-To or References
     from_domains: tuple[str, ...] = ()
     dkim_domains: tuple[str, ...] = ()
     body_parts: int = 0
     # Stable reason codes. All of them mean the body may be incomplete.
     problems: list[str] = field(default_factory=list)
+    dkim_truncated: bool = False  # sender domains may be missing some DKIM d= values
 
     def problem(self, reason: str) -> None:
         if reason not in self.problems:
@@ -384,8 +390,7 @@ def _read_identities(block: HeaderBlock, eml: _Eml) -> None:
             if pair.identifier_source == "dkim_signature" and pair.identifier_domain
         )
     )
-    if report.truncated:
-        eml.problem("dkim_signatures_truncated")
+    eml.dkim_truncated = report.truncated
 
 
 def _read_eml(raw: object) -> _Eml:
@@ -409,7 +414,7 @@ def _read_eml(raw: object) -> _Eml:
     subject = block.get_all("Subject")
     if subject:
         eml.subject = subject[0].decoded_value
-    eml.has_in_reply_to = bool(block.get_all("In-Reply-To"))
+    eml.has_reply_headers = bool(block.get_all("In-Reply-To") or block.get_all("References"))
     steps: tuple[tuple[str, Callable[[], None]], ...] = (
         ("identities", lambda: _read_identities(block, eml)),
         ("mime", lambda: _read_body(data, eml)),
@@ -502,7 +507,7 @@ def _body_view(s: ContentStructure) -> BodyFacts:
     )
 
 
-def _link_view(a: LinkAnalysis) -> LinkFacts:
+def _link_view(a: LinkAnalysis, senders_complete: bool) -> LinkFacts:
     links = a.links
     return LinkFacts(
         total_anchors=a.total_anchors,
@@ -515,7 +520,9 @@ def _link_view(a: LinkAnalysis) -> LinkFacts:
         sender_domains=a.sender_domains,
         unaligned_count=a.unaligned_count,
         unevaluated_count=a.unevaluated_count,
-        alignment_evaluated=a.unaligned_count is not None and a.unevaluated_count == 0,
+        alignment_evaluated=(
+            senders_complete and a.unaligned_count is not None and a.unevaluated_count == 0
+        ),
         other_domains=tuple(excerpt(d) for d in a.other_domains[:_LISTED_DOMAINS]),
         capped=a.capped,
         cap_reason=a.cap_reason,
@@ -612,6 +619,7 @@ class _Outcome:
     not_evaluated: list[str] = field(default_factory=list)
     errors: int = 0
     evaluated: int = 0
+    partial: bool = False
 
     def section[S: _Section](
         self,
@@ -625,15 +633,16 @@ class _Outcome:
     ) -> S:
         """Record one section. `extra_reasons` make it `error`; else `idle_reason` skips it."""
         self.findings.extend(found.findings)
+        self.partial = self.partial or bool(found.partial)
         reasons = tuple(dict.fromkeys((*found.unevaluated, *extra_reasons)))
         if reasons:
             self.errors += 1
-            return kind(status="error", reasons=reasons, facts=facts)
+            return kind(status="error", reasons=(*reasons, *found.partial), facts=facts)
         if idle_reason is not None:
             self.not_evaluated.append(name)
             return kind(status="not_evaluated", reasons=(idle_reason,), facts=facts)
         self.evaluated += 1
-        return kind(status=_section_status(found), reasons=(), facts=facts)
+        return kind(status=_section_status(found), reasons=found.partial, facts=facts)
 
 
 def _rules_section(
@@ -679,6 +688,8 @@ def _rules_section(
         idle = "no_enabled_rules"
     elif not results.results:
         idle = "no_applicable_rules"
+    elif not (language or "").strip() and len(results.results) < enabled:
+        found = replace(found, partial=("language_rules_skipped",))
     return outcome.section(
         RulesSection,
         "rules",
@@ -720,7 +731,9 @@ def analyze_content(ctx: TenantContext, session: Session, content: ContentInput)
         message = outcome.section(
             MessageSection,
             "message",
-            cf.input_findings([*eml.problems]),
+            cf.input_findings(
+                [*eml.problems, *(["dkim_signatures_truncated"] if eml.dkim_truncated else [])]
+            ),
             MessageFacts(
                 from_domains=tuple(excerpt(d) for d in eml.from_domains),
                 dkim_domains=tuple(excerpt(d) for d in eml.dkim_domains),
@@ -765,7 +778,7 @@ def analyze_content(ctx: TenantContext, session: Session, content: ContentInput)
     facts_subject = _attempt(
         "subject_parser_failed",
         lambda: analyze_subject(
-            subject, has_in_reply_to=eml.has_in_reply_to if eml is not None else None
+            subject, has_in_reply_to=eml.has_reply_headers if eml is not None else None
         ),
     )
     if isinstance(facts_subject, SectionFindings):
@@ -826,7 +839,7 @@ def _links_section(
         LinksSection,
         "links",
         cf.link_findings(facts),
-        _link_view(facts),
+        _link_view(facts, senders_complete=eml is None or not eml.dkim_truncated),
         extra_reasons=incomplete_body,
     )
 
@@ -877,7 +890,7 @@ def _finish(
         status = "not_evaluated"
     return ContentAnalysis(
         status=status,
-        complete=outcome.errors == 0 and not outcome.not_evaluated,
+        complete=outcome.errors == 0 and not outcome.not_evaluated and not outcome.partial,
         not_evaluated_sections=tuple(outcome.not_evaluated),
         message=message,
         body=body,

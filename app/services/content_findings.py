@@ -21,14 +21,14 @@ Code                                Severity Meaning
 CONTENT_INPUT_CAPPED                medium   input capped, rejected or undecodable (error-class)
 CONTENT_RULE_ERROR                  medium   rules failed or left unevaluated (error-class)
 CONTENT_RULE_MATCH                  rule's   one finding per matched rule
-CONTENT_LINK_UNEVALUATED            low      link address unreadable (error-class)
+CONTENT_LINK_UNEVALUATED            low      link address unreadable (partial)
 CONTENT_MASKED_LINK                 high     link text names another domain
 CONTENT_IP_LITERAL_LINK             high     link host is an IP address
 CONTENT_URL_SHORTENER               medium   link host is on the shortener list
 CONTENT_HIDDEN_TEXT                 medium   inline styles that may hide content
 CONTENT_SUBJECT_BIDI_OVERRIDE       medium   bidi override characters in the Subject
 CONTENT_SUBJECT_CONTROL_CHARS       medium   control characters in the Subject
-CONTENT_UNSIGNED_UNSUBSCRIBE_HEADER medium   unsubscribe fields in no DKIM h= list
+CONTENT_UNSIGNED_UNSUBSCRIBE_HEADER medium   One-Click fields in no single DKIM h= list
 CONTENT_NON_HTTPS_LINK              low      link uses http
 CONTENT_UNALIGNED_LINK_DOMAIN       low      link domain differs from the sender domains
 CONTENT_MANY_LINK_DOMAINS           low      many distinct link domains (advisory)
@@ -42,7 +42,7 @@ CONTENT_SUBJECT_EMPTY               low      Subject absent or blank
 CONTENT_SUBJECT_ALL_CAPS            low      mostly capitals (advisory)
 CONTENT_SUBJECT_PUNCTUATION         low      runs of ! or ? (advisory)
 CONTENT_SUBJECT_LONG                low      long Subject (advisory)
-CONTENT_SUBJECT_REPLY_PREFIX        low      Re:/Fwd: without In-Reply-To
+CONTENT_SUBJECT_REPLY_PREFIX        low      Re: without In-Reply-To or References
 CONTENT_SUBJECT_MIXED_SCRIPT        low      one word mixes scripts
 CONTENT_NO_LIST_UNSUBSCRIBE         low      no List-Unsubscribe header
 CONTENT_NO_ONE_CLICK                low      RFC 8058 one-click not offered
@@ -134,6 +134,7 @@ RULE_MATCH_CUSTOM_ADVICE: Final = "remediation_custom"
 class SectionFindings:
     findings: tuple[Finding, ...] = ()
     unevaluated: tuple[str, ...] = ()  # stable reasons; any makes the section `error`
+    partial: tuple[str, ...] = ()  # part was skipped: status unchanged, overall `complete` False
 
 
 class _Acc:
@@ -163,8 +164,8 @@ class _Acc:
             self.unevaluated.append(reason)
             self.add("CONTENT_INPUT_CAPPED", "medium", {"reason": excerpt(reason)})
 
-    def result(self) -> SectionFindings:
-        return SectionFindings(tuple(self.items), tuple(self.unevaluated))
+    def result(self, partial: tuple[str, ...] = ()) -> SectionFindings:
+        return SectionFindings(tuple(self.items), tuple(self.unevaluated), partial)
 
 
 def input_findings(reasons: Iterable[str]) -> SectionFindings:
@@ -252,8 +253,9 @@ def link_findings(facts: LinkAnalysis) -> SectionFindings:
     if facts.capped:
         acc.capped(f"links_{facts.cap_reason or 'unknown'}")
     if facts.malformed_count:
-        acc.add("CONTENT_LINK_UNEVALUATED", "low", {"count": facts.unevaluated_count})
-        acc.unevaluated.append("links_malformed")
+        # Not error-class: one unreadable href (a template placeholder, say) leaves the rest
+        # evaluated. Over-long and over-cap links are the `capped` case above.
+        acc.add("CONTENT_LINK_UNEVALUATED", "low", {"count": facts.malformed_count})
 
     def simple(code: str, severity: Severity, hosts: list[str]) -> None:
         if hosts:
@@ -297,7 +299,7 @@ def link_findings(facts: LinkAnalysis) -> SectionFindings:
             {"count": len(facts.other_domains), "threshold": MANY_LINK_DOMAINS_THRESHOLD},
             evidence=facts.other_domains,
         )
-    return acc.result()
+    return acc.result(("links_malformed",) if facts.malformed_count else ())
 
 
 def subject_findings(facts: SubjectFacts) -> SectionFindings:
@@ -314,7 +316,8 @@ def subject_findings(facts: SubjectFacts) -> SectionFindings:
         acc.add("CONTENT_SUBJECT_PUNCTUATION", "low", {"run": facts.max_punct_run or 0})
     if facts.is_long:
         acc.add("CONTENT_SUBJECT_LONG", "low", {"length": facts.length_graphemes or 0})
-    if facts.reply_prefix_without_in_reply_to:
+    # A real forward has no In-Reply-To, so only "re" says anything here.
+    if facts.reply_prefix == "re" and facts.reply_prefix_without_in_reply_to:
         acc.add("CONTENT_SUBJECT_REPLY_PREFIX", "low", {"prefix": facts.reply_prefix or ""})
     if facts.control_chars:
         acc.add("CONTENT_SUBJECT_CONTROL_CHARS", "medium", {"count": facts.control_chars})
@@ -364,9 +367,12 @@ def unsubscribe_findings(facts: ListUnsubscribeFacts) -> SectionFindings:
             acc.add("CONTENT_NO_ONE_CLICK", "low", detail_variant=variant)
         if facts.https_uri_present is False and facts.http_uri_present is True:
             acc.add("CONTENT_HTTP_ONLY_UNSUBSCRIBE", "low")
-    signed = (facts.list_unsubscribe_signed, facts.post_signed, facts.one_click_signed)
-    if False in signed:
-        acc.add("CONTENT_UNSIGNED_UNSUBSCRIBE_HEADER", "medium")
+    # DKIM coverage is an RFC 8058 requirement: it only applies to a message attempting One-Click.
+    if facts.post_present:
+        if facts.one_click_signed is None:
+            acc.capped("dkim_signed_headers_unknown")
+        elif not facts.one_click_signed:
+            acc.add("CONTENT_UNSIGNED_UNSUBSCRIBE_HEADER", "medium")
     return acc.result()
 
 
