@@ -7,7 +7,14 @@ Async use: `evaluate_rules` is synchronous and can block for up to its total bud
 `safe_regex.MAX_BATCH_S`, about 15 s). Async code must call `evaluate_rules_async`, which runs it
 in a thread pool. A cancelled await does not stop the thread; the budget bounds it.
 
-Tenant merge (`merge_tenant_rules`, run it before `evaluate_rules`):
+Budget: the deadline is checked before each keyword search of each part and before each regex
+compilation, so in-process work overruns it by at most one such step (one compile, or one case
+fold plus search of a part). Rules left over are `not_evaluated`/`budget_exceeded`.
+
+Contract for callers (M5-14): pass all rows for the tenant (no `enabled_only`, every page) and
+always call `merge_tenant_rules` before `evaluate_rules`, which does not filter by tenant.
+
+Tenant merge (`merge_tenant_rules`):
 - Only global rows and rows of the given tenant are kept; another tenant's row is always dropped,
   so tenant rules cannot affect other tenants.
 - A tenant rule overrides a global rule only through `seed_key`, never through `name`. The tenant
@@ -16,8 +23,7 @@ Tenant merge (`merge_tenant_rules`, run it before `evaluate_rules`):
 - GM decision: an override references an existing global seed_key, which the repository enforces
   on write. A tenant row whose seed_key no longer names a global row overrides nothing and stays
   an ordinary tenant rule.
-- Pass every visible row, disabled ones included (not `enabled_only=True`, and all pages), or a
-  disabled override cannot suppress its global rule.
+- A disabled override can only suppress its global rule if it is among the rows passed in.
 
 Evaluation:
 - Only enabled rules whose `language` is NULL or equals the hint (exact match after trim and
@@ -25,23 +31,28 @@ Evaluation:
 - Rules have no target field (see the M5-13 GM note), so each rule is searched in the subject,
   the text and the visible HTML text separately, in that order, and stops at its first match.
   Separate searches keep anchors meaningful and prevent matches across parts.
-- Keywords run in-process first, so a slow regex cannot starve them: case-folded substring search
-  with no Unicode normalization. With `word_boundary` (engine-wide, since rows have no such
-  column) an edge of the keyword made of a word character must not touch another word character.
+- Keywords run in-process first, before any regex is compiled, so a slow regex cannot starve
+  them: case-folded substring search with no Unicode normalization. With `word_boundary`
+  (engine-wide, since rows have no such column) an edge of the keyword made of a word character
+  must not touch another word character. An occurrence ending exactly at the cut of a capped part
+  cannot be confirmed (the next character is unseen), so it does not count as a match.
 - Regexes are built with `compile_checked` and run through `search_many`, highest weight first.
+  A regex match ending at the cut does count: what a generic pattern requires of the text after
+  it cannot be told from outside.
 
 Statuses (`RuleStatus`):
-- `matched`: found; `ok`: searched everything and found nothing.
-- `error`: the rule is invalid or failed (timeout, worker failure, more matches than
-  `max_matches`, which `safe_regex` reports as incomplete).
+- `matched`: found, including a regex rule that reached `max_matches` (the rule did match).
+- `ok`: searched everything and found nothing.
+- `error`: the rule is invalid or its search failed or timed out with no match established.
 - `not_evaluated`: no verdict for this rule: total budget used up, busy worker pool, beyond
   `max_rules`, no content at all, or no match in a part that was capped (the tail is unseen).
 
 Only `matched` rules score. When `RuleResults.complete` is False the score is a lower bound, and
 `error_count`, `not_evaluated_count` and `capped_parts` say why.
 
-Results are ordered by weight (descending), then rule id. Evidence is a snippet of at most
-`max_evidence_chars`, without control or format characters, never the full body.
+Results are ordered by weight (descending), then rule id. Evidence is a non-empty snippet of at
+most `max_evidence_chars`, without control or format characters, never the full body; it is None
+on a match whose surroundings hold nothing printable.
 """
 
 from __future__ import annotations
@@ -166,6 +177,7 @@ class _Outcome:
 class _Part:
     name: ContentPart
     text: str
+    capped: bool
 
 
 _NOT_EVALUATED: Final = frozenset(
@@ -257,7 +269,7 @@ def _prepare_parts(
         if value == "":
             continue
         kept, was_cut = _cap_utf8(value, max_bytes)
-        parts.append(_Part(name, kept))
+        parts.append(_Part(name, kept, was_cut))
         if was_cut:
             capped.append(name)
     return parts, tuple(capped)
@@ -323,8 +335,12 @@ def _fold(text: str) -> tuple[str, list[int] | None]:
     return folded, offsets
 
 
-def _find_keyword(haystack: str, needle: str, word_boundary: bool) -> int | None:
-    """Offset of the first acceptable occurrence of the case-folded `needle`."""
+def _find_keyword(haystack: str, needle: str, word_boundary: bool, capped: bool) -> int | None:
+    """Offset of the first acceptable occurrence of the case-folded `needle`.
+
+    In a `capped` haystack the end is a cut, not the end of the text: the character after an
+    occurrence ending there is unknown, so its right boundary cannot be confirmed.
+    """
     if not word_boundary:
         found = haystack.find(needle)
         return None if found < 0 else found
@@ -334,15 +350,19 @@ def _find_keyword(haystack: str, needle: str, word_boundary: bool) -> int | None
     while (found := haystack.find(needle, start)) >= 0:
         end = found + len(needle)
         left_ok = not check_left or found == 0 or not _is_word(haystack[found - 1])
-        right_ok = not check_right or end == len(haystack) or not _is_word(haystack[end])
+        at_end = end == len(haystack)
+        right_ok = not check_right or (not capped if at_end else not _is_word(haystack[end]))
         if left_ok and right_ok:
             return found
         start = found + 1
     return None
 
 
-def _evidence(text: str, start: int, max_chars: int) -> str:
-    """Bounded, single-line snippet around `start`. The raw window is bounded before cleaning."""
+def _evidence(text: str, start: int, max_chars: int) -> str | None:
+    """Bounded, single-line snippet around `start`; None when nothing printable is in it.
+
+    The raw window is bounded before cleaning.
+    """
     context = min(_EVIDENCE_CONTEXT, max_chars // 4)
     window = text[max(0, start - context) : start + max_chars]
     cleaned: list[str] = []
@@ -352,7 +372,7 @@ def _evidence(text: str, start: int, max_chars: int) -> str:
             cleaned.append(" ")
         elif not category.startswith("C"):
             cleaned.append(char)
-    return "".join(cleaned)[:max_chars]
+    return "".join(cleaned).strip()[:max_chars] or None
 
 
 def _matched(part: _Part, start: int, limits: RuleLimits) -> _Outcome:
@@ -368,20 +388,32 @@ def _run_keywords(
     deadline: float,
     word_boundary: bool,
 ) -> None:
-    if not jobs:
-        return
-    folded = [_fold(part.text) for part in parts]
+    folded: dict[ContentPart, tuple[str, list[int] | None]] = {}
     for index, keyword in jobs:
-        if time.monotonic() >= deadline:
-            outcomes[index] = _not_evaluated(RuleIssue.BUDGET_EXCEEDED)
-            continue
         needle = keyword.casefold()
-        for part, (haystack, offsets) in zip(parts, folded, strict=True):
-            found = _find_keyword(haystack, needle, word_boundary)
+        for part in parts:
+            if time.monotonic() >= deadline:
+                outcomes[index] = _not_evaluated(RuleIssue.BUDGET_EXCEEDED)
+                break
+            if part.name not in folded:  # lazily, so that the deadline also covers folding
+                folded[part.name] = _fold(part.text)
+            haystack, offsets = folded[part.name]
+            found = _find_keyword(haystack, needle, word_boundary, part.capped)
             if found is not None:
                 start = found if offsets is None else offsets[found]
                 outcomes[index] = _matched(part, start, limits)
                 break
+
+
+def _match_established(result: MatchResult) -> bool:
+    """True when the search proves that the rule matched, even if the list of matches is cut.
+
+    Deliberately narrower than safe_regex's "not complete means error" mapping (GM decision).
+    That mapping protects callers that need every match; this engine only asks whether one
+    exists, and a real match answers that even when `max_matches` cut the list. Treating it as
+    an error would make a flood of matches lower the score.
+    """
+    return bool(result.matches) and result.failure is None and not result.timed_out
 
 
 def _incomplete(result: MatchResult) -> _Outcome:
@@ -425,13 +457,31 @@ def _run_regexes(
             return
         still_pending: list[tuple[int, CompiledRule]] = []
         for job, result in zip(pending, results, strict=True):
-            if not result.complete:
-                outcomes[job[0]] = _incomplete(result)
-            elif result.matches:
+            if _match_established(result):
                 outcomes[job[0]] = _matched(part, result.matches[0].start, limits)
+            elif not result.complete:
+                outcomes[job[0]] = _incomplete(result)
             else:
                 still_pending.append(job)
         pending = still_pending
+
+
+def _compile_regexes(
+    candidates: list[tuple[int, ContentRuleRecord]],
+    outcomes: list[_Outcome | None],
+    deadline: float,
+) -> list[tuple[int, CompiledRule]]:
+    """Compile in-process: a long legal pattern can take most of a second, so check the deadline."""
+    jobs: list[tuple[int, CompiledRule]] = []
+    for index, rule in candidates:
+        if time.monotonic() >= deadline:
+            outcomes[index] = _not_evaluated(RuleIssue.BUDGET_EXCEEDED)
+            continue
+        try:
+            jobs.append((index, compile_checked(rule.pattern, rule.flags)))
+        except RegexRuleError:
+            outcomes[index] = _error(RuleIssue.INVALID_PATTERN)
+    return jobs
 
 
 def _build_results(
@@ -501,7 +551,7 @@ def evaluate_rules(
 
     outcomes: list[_Outcome | None] = [None] * len(selected)
     keyword_jobs: list[tuple[int, str]] = []
-    regex_jobs: list[tuple[int, CompiledRule]] = []
+    regex_candidates: list[tuple[int, ContentRuleRecord]] = []
     for index, rule in enumerate(selected):
         if index >= bounds.max_rules:
             outcomes[index] = _not_evaluated(RuleIssue.TOO_MANY_RULES)
@@ -513,15 +563,14 @@ def evaluate_rules(
             else:
                 outcomes[index] = _error(RuleIssue.INVALID_PATTERN)
         elif rule.kind == "regex":
-            try:
-                regex_jobs.append((index, compile_checked(rule.pattern, rule.flags)))
-            except RegexRuleError:
-                outcomes[index] = _error(RuleIssue.INVALID_PATTERN)
+            regex_candidates.append((index, rule))
         else:
             outcomes[index] = _error(RuleIssue.INVALID_RULE)
 
     if parts:
         _run_keywords(keyword_jobs, parts, outcomes, bounds, deadline, word_boundary)
+    regex_jobs = _compile_regexes(regex_candidates, outcomes, deadline)
+    if parts:
         _run_regexes(regex_jobs, parts, outcomes, bounds, deadline)
         unfinished = _not_evaluated(RuleIssue.INPUT_CAPPED) if capped_parts else None
     else:

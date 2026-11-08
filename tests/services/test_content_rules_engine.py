@@ -1,6 +1,7 @@
 """M5-13 content rules engine. Regex workers are local subprocesses; no network."""
 
 import ast
+import asyncio
 import dataclasses
 import re
 import socket
@@ -35,6 +36,7 @@ NOW = datetime(2026, 11, 8, tzinfo=UTC)
 FAST = RuleLimits(per_rule_timeout_s=0.3, total_budget_s=5.0)
 CATASTROPHIC_PATTERN = "(a+)+$"
 CATASTROPHIC_TEXT = "a" * 40 + "!"
+FIRST_MATCH = (safe_regex.Match(0, 1, "f"),)
 # Far above every timeout used here, far below what the pattern would take unattended.
 WALL_LIMIT_S = 4.0
 
@@ -310,6 +312,57 @@ def test_budget_exhausted_before_keywords(monkeypatch: pytest.MonkeyPatch) -> No
     assert not results.complete
 
 
+def test_budget_checked_between_parts_of_one_keyword(monkeypatch: pytest.MonkeyPatch) -> None:
+    ticks = iter([100.0, 101.0, 500.0])
+    folded_texts: list[str] = []
+    real_fold = engine._fold
+
+    def fold_spy(value: str) -> tuple[str, list[int] | None]:
+        folded_texts.append(value)
+        return real_fold(value)
+
+    monkeypatch.setattr(engine, "time", SimpleNamespace(monotonic=lambda: next(ticks)))
+    monkeypatch.setattr(engine, "_fold", fold_spy)
+    results = evaluate_rules(
+        [rule()], subject="nothing here", text="free", limits=RuleLimits(total_budget_s=10.0)
+    )
+    assert results.results[0].status is RuleStatus.NOT_EVALUATED
+    assert results.results[0].issue is RuleIssue.BUDGET_EXCEEDED
+    assert folded_texts == ["nothing here"]  # the deadline also spares the next part's fold
+
+
+def test_budget_bounds_regex_compilation_and_keywords_still_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = [100.0]
+    compiled: list[str] = []
+    real_compile = safe_regex.compile_checked
+
+    def slow_compile(pattern: str, flags: int = 0) -> safe_regex.CompiledRule:
+        clock[0] += 0.7  # what a long legal IGNORECASE character class costs for real
+        compiled.append(pattern)
+        return real_compile(pattern, flags)
+
+    def no_search(*_args: object, **_kwargs: object) -> list[MatchResult]:
+        raise AssertionError("no budget is left for a search")
+
+    monkeypatch.setattr(engine, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+    monkeypatch.setattr(engine, "compile_checked", slow_compile)
+    monkeypatch.setattr(engine, "search_many", no_search)
+    # The regexes outrank the keyword, so they would come first if compilation were not last.
+    rules = [regex(i, pattern=f"p{i}", weight=50) for i in range(1, 11)]
+    results = evaluate_rules(
+        [*rules, rule(99, weight=5)], text="free", limits=RuleLimits(total_budget_s=1.0)
+    )
+    found = by_id(results)
+    assert len(compiled) == 2  # checked at 0.0 and 0.7; the check at 1.4 stops the loop
+    assert found[99].status is RuleStatus.MATCHED
+    assert all(found[i].status is RuleStatus.NOT_EVALUATED for i in range(1, 11))
+    assert all(found[i].issue is RuleIssue.BUDGET_EXCEEDED for i in range(1, 11))
+    assert results.score == 5
+    assert not results.complete
+
+
 def test_busy_pool_is_not_evaluated_real_semaphore() -> None:
     held = 0
     try:
@@ -367,7 +420,7 @@ def test_busy_pool_is_not_evaluated_real_semaphore() -> None:
             RuleIssue.TOO_MANY_RULES,
         ),
         (
-            MatchResult((safe_regex.Match(0, 1, "f"),), timed_out=False, truncated=True),
+            MatchResult((), timed_out=False, truncated=True),
             RuleStatus.ERROR,
             RuleIssue.TOO_MANY_MATCHES,
         ),
@@ -375,6 +428,18 @@ def test_busy_pool_is_not_evaluated_real_semaphore() -> None:
             MatchResult((), timed_out=True, truncated=False),
             RuleStatus.ERROR,
             RuleIssue.TIMEOUT,
+        ),
+        (
+            MatchResult(FIRST_MATCH, timed_out=True, truncated=False),
+            RuleStatus.ERROR,
+            RuleIssue.TIMEOUT,
+        ),
+        (
+            MatchResult(
+                FIRST_MATCH, timed_out=False, truncated=True, failure=SearchFailure.WORKER_FAILED
+            ),
+            RuleStatus.ERROR,
+            RuleIssue.WORKER_FAILED,
         ),
     ],
 )
@@ -402,13 +467,24 @@ def test_worker_spawn_failure_is_an_error(monkeypatch: pytest.MonkeyPatch) -> No
     assert found[2].status is RuleStatus.MATCHED
 
 
-def test_max_matches_exceeded_is_an_error_real_worker() -> None:
+def test_max_matches_reached_is_a_match_real_worker() -> None:
     results = evaluate_rules(
         [regex(pattern="a")], text="a" * 20, limits=replace(FAST, max_matches=5)
     )
-    assert results.results[0].status is RuleStatus.ERROR
-    assert results.results[0].issue is RuleIssue.TOO_MANY_MATCHES
-    assert results.score == 0
+    assert results.results[0].status is RuleStatus.MATCHED
+    assert results.results[0].issue is None
+    assert results.results[0].evidence
+    assert results.score == 10
+    assert results.complete
+
+
+def test_flood_of_matches_scores_like_the_identical_keyword_real_worker() -> None:
+    flood = "free " * 1100  # beyond the default max_matches of 1000
+    keyword = evaluate_rules([rule(1)], text=flood, limits=FAST)
+    pattern = evaluate_rules([regex(1)], text=flood, limits=FAST)
+    assert pattern.results[0].status is keyword.results[0].status is RuleStatus.MATCHED
+    assert pattern.score == keyword.score == 10
+    assert pattern.complete
 
 
 def test_rules_beyond_max_rules_are_not_evaluated() -> None:
@@ -560,6 +636,45 @@ def test_match_beyond_the_cap_is_not_seen() -> None:
 
 
 @pytest.mark.parametrize(
+    ("keyword", "body", "cap", "word_boundary", "expected"),
+    [
+        ("free", "freedom", 4, True, RuleStatus.NOT_EVALUATED),  # would be a false match
+        ("free", "free dom", 4, True, RuleStatus.NOT_EVALUATED),  # next character unseen
+        ("free", "freedom", 4, False, RuleStatus.MATCHED),  # no boundary asked for
+        ("free", "free dom", 5, True, RuleStatus.MATCHED),  # the boundary is inside the kept text
+        ("free", "free free", 8, True, RuleStatus.MATCHED),  # an earlier occurrence is confirmed
+        ("$$$", "$$$$", 3, True, RuleStatus.MATCHED),  # a non-word edge needs no boundary
+        ("free", "free", 4, True, RuleStatus.MATCHED),  # not capped: the end is the real end
+    ],
+)
+def test_keyword_ending_at_the_cut(
+    keyword: str, body: str, cap: int, word_boundary: bool, expected: RuleStatus
+) -> None:
+    results = evaluate_rules(
+        [rule(pattern=keyword)],
+        text=body,
+        limits=replace(FAST, max_text_bytes=cap),
+        word_boundary=word_boundary,
+    )
+    assert results.results[0].status is expected
+    if expected is RuleStatus.NOT_EVALUATED:
+        assert results.results[0].issue is RuleIssue.INPUT_CAPPED
+        assert results.score == 0
+
+
+def test_unconfirmed_keyword_at_the_cut_can_still_match_in_a_later_part() -> None:
+    results = evaluate_rules(
+        [rule()],
+        text="freedom",
+        html_visible_text="free",
+        limits=replace(FAST, max_text_bytes=4),
+    )
+    assert results.results[0].status is RuleStatus.MATCHED
+    assert results.results[0].part is ContentPart.HTML_VISIBLE_TEXT
+    assert not results.complete  # the text part was still capped
+
+
+@pytest.mark.parametrize(
     ("value", "limit", "kept", "was_cut"),
     [
         ("abc", 3, "abc", False),
@@ -609,6 +724,23 @@ def test_evidence_of_a_huge_match_is_bounded() -> None:
     evidence = results.results[0].evidence
     assert evidence is not None
     assert len(evidence) <= engine.DEFAULT_EVIDENCE_CHARS
+
+
+@pytest.mark.parametrize(
+    ("pattern", "body"),
+    [
+        (r"[\x00-\x1f]+", "\x01" * 500),
+        (r"\s+", " \n\t "),
+        ("‮+", "‮‮"),
+        (r"\x00", "\x00\x07​"),
+    ],
+)
+def test_nothing_printable_gives_no_evidence_rather_than_an_empty_one(
+    pattern: str, body: str
+) -> None:
+    result = evaluate_rules([regex(pattern=pattern)], text=body, limits=FAST).results[0]
+    assert result.status is RuleStatus.MATCHED
+    assert result.evidence is None
 
 
 # --- scoring and ordering ------------------------------------------------------------------------
@@ -767,3 +899,45 @@ async def test_async_entry_point_runs_off_the_event_loop_thread(
     assert results.results[0].status is RuleStatus.MATCHED
     assert threads
     assert threading.get_ident() not in threads
+
+
+async def test_cancelled_await_returns_at_once_and_the_worker_is_released(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    started = threading.Event()
+    release = threading.Event()
+    finished = threading.Event()
+
+    def gated(rules: Any, text: str, **kwargs: Any) -> list[MatchResult]:
+        started.set()
+        release.wait(10)
+        try:
+            return safe_regex.search_many(rules, text, **kwargs)
+        finally:
+            finished.set()
+
+    monkeypatch.setattr(engine, "search_many", gated)
+    task = asyncio.create_task(
+        evaluate_rules_async(
+            [regex(1, pattern=CATASTROPHIC_PATTERN)], text=CATASTROPHIC_TEXT, limits=FAST
+        )
+    )
+    try:
+        assert await asyncio.to_thread(started.wait, 10)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        # The await is over while the blocking evaluation is still held at the gate.
+        assert not finished.is_set()
+    finally:
+        release.set()
+    assert await asyncio.to_thread(finished.wait, 10)
+    # The thread ran to completion within its budget and left every worker slot free.
+    held = 0
+    try:
+        for _ in range(MAX_LIVE_WORKERS):
+            assert await asyncio.to_thread(safe_regex._WORKER_SLOTS.acquire, True, 5)
+            held += 1
+    finally:
+        for _ in range(held):
+            safe_regex._WORKER_SLOTS.release()
