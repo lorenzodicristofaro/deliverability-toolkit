@@ -54,7 +54,7 @@ from app.repositories import principal_from_models, repo_for
 from app.services import setup as setup_service
 from app.services.auth import SessionPolicy, create_session
 from app.services.domains import DomainService
-from tests.conftest import _reset_postgres
+from tests.conftest import PG_SKIP_REASON, _reset_postgres
 from tests.support.dns_backend import fake_backend
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -248,7 +248,7 @@ def _b_secrets(db: Session, tenant_b: int) -> tuple[str, ...]:
         pytest.param(
             "postgresql",
             marks=pytest.mark.skipif(
-                not os.environ.get("TEST_DATABASE_URL"), reason="TEST_DATABASE_URL not set"
+                not os.environ.get("TEST_DATABASE_URL"), reason=PG_SKIP_REASON
             ),
         ),
     ],
