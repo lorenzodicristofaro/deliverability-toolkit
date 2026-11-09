@@ -149,6 +149,7 @@ class Entry:
     # The case is marked xfail(strict=True), so it fails again once the bug is fixed.
     xfail: Mapping[tuple[str, str], str] = field(default_factory=dict)
     not_found: str = "api.error.not_found"  # i18n key of the route's 404 body
+    b_session: Mapping[str, int] = field(default_factory=dict)  # role -> status if not 404
 
 
 def _by_role(writers: int, readers: int) -> dict[str, int]:
@@ -229,6 +230,16 @@ def _rule_sample(_w: World, _role: str) -> dict[str, Any]:
     return {"kind": "keyword", "pattern": "probe", "sample": "probe text"}
 
 
+def _rule_form(_w: World, _role: str) -> dict[str, Any]:
+    return {
+        "name": "probe"
+    }  # incomplete on purpose: a permitted role gets a 422, nothing is stored
+
+
+def _toggle(_w: World, _role: str) -> dict[str, Any]:
+    return {"enabled": "0"}
+
+
 MATRIX: dict[tuple[str, str], Entry] = {
     # session / tenant switch (app.web.auth)
     ("POST", "/logout"): Entry(Kind.SESSION),
@@ -299,6 +310,19 @@ MATRIX: dict[tuple[str, str], Entry] = {
     ("DELETE", "/api/v1/rules/{rule_id}"): Entry(
         Kind.RULE, own=_RULE_WRITE_ON_B, not_found=_RULES_404
     ),
+    # content rules UI (app.web.rules). Reads need `rules.read`, every other route `rules.manage`
+    # on the tenant path; the global tab is covered by tests/web/test_rules_ui.py. `POST /rules`
+    # (create) and `/rules/test` take no rule id; the permitted roles stop at 422 / 200.
+    # With no usable tenant, an instance admin lands on the global tab (no tenant B data).
+    ("GET", "/rules"): Entry(Kind.COLLECTION, own=_RULES_READ, b_session={"instance_admin": 200}),
+    ("GET", "/rules/new"): Entry(Kind.COLLECTION, own=_by_role(200, 403)),
+    ("POST", "/rules"): Entry(Kind.DNS, body=_rule_form, own=_by_role(422, 403)),
+    ("POST", "/rules/{rule_id}/edit"): Entry(Kind.RULE, body=_rule_form, own=_RULE_WRITE_ON_B),
+    ("GET", "/rules/test"): Entry(Kind.DNS, own=_by_role(200, 403)),
+    ("POST", "/rules/test"): Entry(Kind.DNS, body=_rule_sample, own=_by_role(200, 403)),
+    ("GET", "/rules/{rule_id}/edit"): Entry(Kind.RULE, own=_RULE_WRITE_ON_B),
+    ("POST", "/rules/{rule_id}/toggle"): Entry(Kind.RULE, body=_toggle, own=_RULE_WRITE_ON_B),
+    ("POST", "/rules/{rule_id}/delete"): Entry(Kind.RULE, own=_RULE_WRITE_ON_B),
     # DKIM SSE streams (app.web.checks_stream): check.run on the domain / dns.tools (free).
     # The free route needs `?name=`; without it permitted roles get 422 (decided before streaming).
     ("GET", "/domains/{domain_id}/authentication"): Entry(Kind.DOMAIN),
@@ -509,7 +533,7 @@ def _expected(case: Case) -> int:
         return 404  # every role, every verb, every cross-tenant or unassigned target
     if entry.kind is Kind.COLLECTION:
         if case.target == "b_session":
-            return 404
+            return entry.b_session.get(case.role, 404)
         table = entry.own if case.target == "own" else entry.smuggle
         return table[case.role]
     if entry.kind in (Kind.DNS, Kind.RULE):
@@ -587,7 +611,7 @@ def _check_case(world: World, logs: pytest.LogCaptureFixture, case: Case) -> Non
     entry = case.entry
     assert entry is not None
     before_a, before_b = world.state("a"), world.state("b")
-    rule_before = b_rule(world) if case.leaf.path.startswith("/api/v1/rules") else None
+    rule_before = b_rule(world) if case.leaf.path.startswith(("/api/v1/rules", "/rules")) else None
     tenant = "b" if case.target.startswith("b_session") else "a"
     fresh = entry.kind in (Kind.SESSION, Kind.SWITCH)  # these consume/rotate the session
     body = entry.body(world, case.role) if entry.body is not None else None

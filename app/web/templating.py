@@ -138,6 +138,29 @@ def content_tools_nav(request: Request) -> bool:
         return False
 
 
+def rules_tools_nav(request: Request) -> bool:
+    """Like `dns_tools_nav` for `rules.read`; with no active tenant, for `rules.manage` on the
+    global scope, the only tab such a session can open (fail closed, no DB access)."""
+    from app.core.permissions import (  # lazy: deps imports this module
+        Action,
+        RuleScope,
+        RuleScopeResource,
+        TenantResource,
+        can,
+    )
+
+    try:
+        auth = getattr(request.state, "auth_session", None)
+        if auth is None:
+            return False
+        if auth.active_tenant_id is None:
+            resource = RuleScopeResource(RuleScope.GLOBAL, None)
+            return bool(can(auth.principal, Action.RULES_MANAGE, resource))
+        return bool(can(auth.principal, Action.RULES_READ, TenantResource(auth.active_tenant_id)))
+    except Exception:
+        return False
+
+
 def render(request: Request, template: str, status_code: int = 200, **context: Any) -> HTMLResponse:
     """Render `template` for `request` (language, CSRF token and current path in the context)."""
     lang = request_language(request.scope)
@@ -159,6 +182,7 @@ def render(request: Request, template: str, status_code: int = 200, **context: A
         show_dns_tools=dns_tools_nav(request),
         show_message_tools=message_tools_nav(request),
         show_content_tools=content_tools_nav(request),
+        show_rules_tools=rules_tools_nav(request),
         **context,
     )
     response = HTMLResponse(html, status_code=status_code)
