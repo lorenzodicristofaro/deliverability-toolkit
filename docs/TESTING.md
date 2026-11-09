@@ -1,8 +1,11 @@
 # Testing
 
 Commands are in `CLAUDE.md`. DB tests run on SQLite and, when `TEST_DATABASE_URL` is set, on
-PostgreSQL (shared `db_url` fixture in `tests/conftest.py`; the tenancy suite has its own
-module-scoped `world` fixture in `tests/tenancy/conftest.py` with the same two parameters).
+PostgreSQL. In `tests/conftest.py`, `migrated_db_url` gives each test an empty migrated schema
+(SQLite copies a migrated session template; PostgreSQL TRUNCATEs the project tables per test).
+`db_url` stays truly empty and is for tests that run real migrations through
+`real_migrations_engine`. The tenancy suite keeps its own module-scoped `world` fixture in
+`tests/tenancy/conftest.py` with the same two parameters.
 
 ## Tenancy matrix (M1-20)
 

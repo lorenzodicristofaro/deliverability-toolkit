@@ -17,4 +17,5 @@ Acceptance criteria:
 - The local suite is measured before and after, with times reported in the coder's summary. The PostgreSQL path cannot run locally (no server), so the code must be reviewed for it and CI on dev is its first real run.
 - Target: the CI pytest step at least 50% faster than the 948 s baseline, measured on the dev CI run after merge. pytest-xdist is optional and only if it is safe with the chosen isolation and worth it on the CI runner's actual CPU count.
 New i18n keys: none
-Status: todo
+Result (CI run 42590173500 on 7a9e17d, all 5 jobs green incl. PostgreSQL): pytest 948 s -> 622 s (34% faster, with 257 more tests). The 50% target was not met by this ticket alone; M5-15c and M5-15d continue it. CI runner has 2 CPUs.
+Status: done
