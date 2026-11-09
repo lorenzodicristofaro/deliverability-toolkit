@@ -17,7 +17,6 @@ from sqlalchemy.orm import Session
 
 from app.core.db import create_db_engine, create_session_factory
 from app.core.tenancy import TenantContext
-from app.models import Base
 from app.models.content_rule import ContentRule
 from app.models.tenant import Tenant
 from app.parsers.message import MAX_RAW_BYTES
@@ -72,9 +71,8 @@ class World:
 
 
 @pytest.fixture
-def engine(db_url: str) -> Iterator[Engine]:
-    eng = create_db_engine(db_url)
-    Base.metadata.create_all(eng)
+def engine(migrated_db_url: str) -> Iterator[Engine]:
+    eng = create_db_engine(migrated_db_url)
     try:
         yield eng
     finally:

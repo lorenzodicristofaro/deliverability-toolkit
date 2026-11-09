@@ -13,8 +13,6 @@ from typing import Any
 from urllib.parse import urlencode
 
 import pytest
-from alembic import command
-from alembic.config import Config
 from fastapi.testclient import TestClient
 
 from app.core import csrf, i18n
@@ -27,7 +25,7 @@ from app.services import message_analysis
 from app.web import message as message_web
 from app.web.message import MAX_BODY_BYTES
 from tests.support.socket_guard import db_endpoint, install
-from tests.web.test_domains_ui import CSRF_HEADER, KEY, ROOT, World, _login, _seed, get, post
+from tests.web.test_domains_ui import CSRF_HEADER, KEY, World, _login, _seed, get, post
 
 PATH = "/tools/message"
 MESSAGE = (
@@ -60,15 +58,14 @@ def _no_sockets(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture
-def world(db_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[World]:
-    monkeypatch.setenv("DATABASE_URL", db_url)
+def world(migrated_db_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[World]:
+    monkeypatch.setenv("DATABASE_URL", migrated_db_url)
     monkeypatch.setenv("SECRET_KEY", KEY)
     monkeypatch.setenv("ENCRYPTION_KEY", KEY)
-    command.upgrade(Config(str(ROOT / "alembic.ini")), "head")
-    engine = create_db_engine(db_url)
+    engine = create_db_engine(migrated_db_url)
     db = create_session_factory(engine)()
     tenant_a, tenant_b, users, domains = _seed(db)
-    settings = Settings(database_url=db_url, secret_key=KEY, encryption_key=KEY)  # type: ignore[call-arg]
+    settings = Settings(database_url=migrated_db_url, secret_key=KEY, encryption_key=KEY)  # type: ignore[call-arg]
     application = create_app(settings)
     try:
         with TestClient(application, raise_server_exceptions=True) as client:

@@ -14,8 +14,6 @@ from collections.abc import AsyncIterator, Iterator
 from typing import Any
 
 import pytest
-from alembic import command
-from alembic.config import Config
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select
@@ -34,7 +32,7 @@ from app.models.base import Base
 from app.parsers.message import MAX_RAW_BYTES
 from app.repositories import repo_for
 from app.services.content_analysis import ContentAnalysis, ContentInput, analyze_content
-from tests.api.test_domains import KEY, ROOT, World, _cookie, _seed, call
+from tests.api.test_domains import KEY, World, _cookie, _seed, call
 from tests.support.dns_backend import fake_backend
 from tests.support.dns_zones import FakeServerSet
 from tests.support.socket_guard import db_endpoint, install
@@ -64,15 +62,16 @@ def _no_network(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture
-def world(db_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[World, FakeServerSet]]:
-    monkeypatch.setenv("DATABASE_URL", db_url)
+def world(
+    migrated_db_url: str, monkeypatch: pytest.MonkeyPatch
+) -> Iterator[tuple[World, FakeServerSet]]:
+    monkeypatch.setenv("DATABASE_URL", migrated_db_url)
     monkeypatch.setenv("SECRET_KEY", KEY)
     monkeypatch.setenv("ENCRYPTION_KEY", KEY)
-    command.upgrade(Config(str(ROOT / "alembic.ini")), "head")
-    engine = create_db_engine(db_url)
+    engine = create_db_engine(migrated_db_url)
     db = create_session_factory(engine)()
     tenant_a, tenant_b, users, domains = _seed(db)
-    settings = Settings(database_url=db_url, secret_key=KEY, encryption_key=KEY)  # type: ignore[call-arg]
+    settings = Settings(database_url=migrated_db_url, secret_key=KEY, encryption_key=KEY)  # type: ignore[call-arg]
     application = create_app(settings)
     backend, servers = fake_backend()
     application.dependency_overrides[dns_backend] = lambda: backend

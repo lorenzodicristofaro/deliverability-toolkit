@@ -21,8 +21,6 @@ from typing import Any
 
 import pytest
 import yaml
-from alembic import command
-from alembic.config import Config
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 from typer.testing import CliRunner
@@ -44,7 +42,7 @@ from app.dns.types import DnsQuestion, DnsResult, ResultState
 from app.main import create_app
 from app.models import Membership
 from app.services.checks import default_registry, run_check, run_checks
-from tests.api.test_domains import KEY, ROOT, World, _seed, call
+from tests.api.test_domains import KEY, World, _seed, call
 from tests.dns.conftest import _no_network_in_dns_tests  # noqa: F401
 from tests.support.dns_zones import parse_zones
 from tests.tenancy.test_matrix import LEAVES, MATRIX
@@ -186,15 +184,14 @@ def _strict_mode() -> Iterator[None]:
 
 
 @pytest.fixture
-def rig(db_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[Rig]:
-    monkeypatch.setenv("DATABASE_URL", db_url)
+def rig(migrated_db_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[Rig]:
+    monkeypatch.setenv("DATABASE_URL", migrated_db_url)
     monkeypatch.setenv("SECRET_KEY", KEY)
     monkeypatch.setenv("ENCRYPTION_KEY", KEY)
-    command.upgrade(Config(str(ROOT / "alembic.ini")), "head")
-    engine = create_db_engine(db_url)
+    engine = create_db_engine(migrated_db_url)
     db = create_session_factory(engine)()
     tenant_a, tenant_b, users, domains = _seed(db)
-    settings = Settings(database_url=db_url, secret_key=KEY, encryption_key=KEY)  # type: ignore[call-arg]
+    settings = Settings(database_url=migrated_db_url, secret_key=KEY, encryption_key=KEY)  # type: ignore[call-arg]
     application = create_app(settings)
     holder: list[Rig] = []
     application.dependency_overrides[api_checks._resolver] = lambda: holder[0].resolver()
