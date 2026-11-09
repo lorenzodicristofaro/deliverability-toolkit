@@ -22,4 +22,4 @@ GM note (constraints from M5-13 QA):
 - A seeded rule has a NULL title and takes its text from CONTENT_RULE.<seed_key>; a tenant rule whose seed_key's global row was removed can also have a NULL title, so handle that without a crash.
 - When `RuleResults.complete` is False, the result must show evaluation was incomplete, never `ok` by omission; `input_capped`, `no_input`, `busy` and `budget_exceeded` are `not_evaluated`.
 - All seeded rules are disabled today, so a clean result with zero rule matches is expected and must not imply that rules ran.
-Status: todo
+Status: done

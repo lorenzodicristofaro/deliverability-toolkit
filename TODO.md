@@ -119,7 +119,7 @@ Carried over from M0-07 QA:
   - [x] M5-11 subject analysis
   - [x] M5-12 content_rules seed + sync
   - [x] M5-13 content rules engine (opus)
-  - [ ] M5-14 content analysis service + CONTENT_* findings
+  - [x] M5-14 content analysis service + CONTENT_* findings
   - [ ] M5-15 REST POST /api/v1/content/analyze
   - [ ] M5-16 web UI content analyzer
   - [ ] M5-17 CLI `content`
@@ -189,6 +189,11 @@ Carried over from M0-07 QA:
 - [ ] custom_checks nits (M5-07 QA): DB does not check remediation_text has exactly en+it keys (repo does; document in docstring); ints over 4300 digits raise a bare ValueError from json.dumps instead of a typed `too_large` reason; if `definition` ever becomes jsonb the length CHECK no longer matches json.dumps.
 - [ ] Seed loaders (M5-09 QA): make the private helpers public (app.dns.knowledge _check_keys/_url_list…, app.core.org_domain _psl) and move seed tests to tests/knowledge.
 - [ ] MAINTAINER TO CONFIRM (M5-09): URL shorteners unverified against official pages: t.co (help.x.com returned 403), tinyurl.com, ow.ly, buff.ly, lnkd.in, is.gd, j.mp (seeds/url_shorteners.yaml). Nit: all_aligned is None (not False) when a link is known unaligned and another is unevaluated; M5-14 should use unaligned_count.
+- [ ] Content findings (M5-14 QA): internal parser failure surfaces as CONTENT_INPUT_CAPPED, whose remediation tells the user to fix the input (pairs with the MSG_SECTION_FAILED follow-up); raw reason codes appear in localized text; `{prefix}` shows the normalised "re".
+- [ ] Content parsers (M5-14 QA): add a public visible-text API from M5-08, replacing `_VisibleText` subclassing private `_Collector`; `_lookup_charset` is private.
+- [ ] tests/services/test_content_analysis.py (M5-14 QA): the socket guard does not detect an attempt whose exception is caught and ignored; a guard recording attempts, asserted empty, would close it.
+- [ ] Content visible text (M5-14 QA): text runs are joined by a space, so a word split across inline tags is not matched by rules.
+- [ ] app/parsers/content_html.py (M5-14 QA): ContentStructure `gmail_*` field names (internal, not on the wire) should be renamed to match the clip-risk wording.
 - [ ] Subject lookalikes (M5-11 QA nits): fullwidth Latin mixed with ASCII Latin (`ｐaypal`) is not flagged (FULLWIDTH prefix stripped); Letterlike Symbols excluded so `ℎello` is not flagged. Add a width-mixing / confusable fact (consider Unicode confusables data).
 - [ ] tests/tenancy World.send: add a raw-body option so the matrix can show 200 for permitted roles on raw-body routes (M4-11 QA nit).
 - [ ] Received redaction (done in M4-10: all `@` tokens masked). Remaining: `<local>` with no domain and fullwidth ＠ stay visible; Message-ID-style hop ids become None. Also a dedicated MSG_SECTION_FAILED code (en+it) instead of reusing MSG_PARSER_LIMIT, whose "exceeded limits" text misleads for internal failures.
