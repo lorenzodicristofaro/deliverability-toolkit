@@ -11,6 +11,7 @@ from app.api.v1.content import router as content_router
 from app.api.v1.dns_tools import router as dns_tools_router
 from app.api.v1.domains import router as domains_router
 from app.api.v1.message import router as message_router
+from app.api.v1.rules import router as rules_router
 
 api_router = APIRouter(prefix="/api/v1")
 api_router.include_router(domains_router)
@@ -18,5 +19,6 @@ api_router.include_router(dns_tools_router)
 api_router.include_router(checks_router)
 api_router.include_router(message_router)
 api_router.include_router(content_router)
+api_router.include_router(rules_router)
 
 __all__ = ["api_router"]
