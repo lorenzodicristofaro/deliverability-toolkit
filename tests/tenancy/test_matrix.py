@@ -47,6 +47,7 @@ from app.main import create_app
 from app.repositories import repo_for
 from app.repositories.base import MAX_LIMIT
 from app.repositories.content_rules import ContentRuleRecord
+from app.repositories.dkim_selectors import DkimSelectorRecord
 from app.web import deps
 from tests.tenancy.conftest import (
     B_TENANT_NAME,
@@ -133,7 +134,7 @@ class Kind(Enum):
     SESSION = "session"  # session only, no tenant data (logout)
     SWITCH = "switch"  # changes the active tenant
     DNS = "dns"  # raw DNS tools: tenant-level `dns.tools`, no tenant data (M2-12)
-    RULE = "rule"  # addresses one content rule by id (M5-18); `own` is the status on tenant B's
+    RULE = "rule"  # one content rule or DKIM selector by id; `own` is the status on tenant B's
 
 
 Body = Callable[[World, str], Any]
@@ -220,6 +221,7 @@ _MSG_OWN = {**_by_role(415, 415), "viewer": 403}  # client viewers never analyse
 _CONTENT_OWN = {**_by_role(422, 422), "viewer": 403}  # client viewers never analyse content
 
 _RULES_404 = "api.rules.error.not_found"
+_SELECTORS_404 = "api.dkim_selectors.error.not_found"
 _RULES_READ = {**_by_role(200, 200), "viewer": 403}  # client viewers never see rule configuration
 # Addressing a rule of tenant B: permission first (403), then the row is simply not there (404).
 _RULE_READ_ON_B = {**_by_role(404, 404), "viewer": 403}
@@ -309,6 +311,23 @@ MATRIX: dict[tuple[str, str], Entry] = {
     ),
     ("DELETE", "/api/v1/rules/{rule_id}"): Entry(
         Kind.RULE, own=_RULE_WRITE_ON_B, not_found=_RULES_404
+    ),
+    # DKIM selectors API (app.api.v1.dkim_selectors), tenant path. The global path needs no
+    # tenant, so it is covered per role and verb by tests/api/test_dkim_selectors_api.py.
+    ("GET", "/api/v1/dkim-selectors"): Entry(
+        Kind.COLLECTION, own=_RULES_READ, not_found=_SELECTORS_404
+    ),
+    ("POST", "/api/v1/dkim-selectors"): Entry(
+        Kind.COLLECTION, body=_smuggle_json, smuggle=_by_role(422, 403), not_found=_SELECTORS_404
+    ),
+    ("GET", "/api/v1/dkim-selectors/{selector_id}"): Entry(
+        Kind.RULE, own=_RULE_READ_ON_B, not_found=_SELECTORS_404
+    ),
+    ("PATCH", "/api/v1/dkim-selectors/{selector_id}"): Entry(
+        Kind.RULE, body=_rename, own=_RULE_WRITE_ON_B, not_found=_SELECTORS_404
+    ),
+    ("DELETE", "/api/v1/dkim-selectors/{selector_id}"): Entry(
+        Kind.RULE, own=_RULE_WRITE_ON_B, not_found=_SELECTORS_404
     ),
     # content rules UI (app.web.rules). Reads need `rules.read`, every other route `rules.manage`
     # on the tenant path; the global tab is covered by tests/web/test_rules_ui.py. `POST /rules`
@@ -568,9 +587,26 @@ def b_rule(w: World) -> ContentRuleRecord:
     return created
 
 
+def b_selector(w: World) -> DkimSelectorRecord:
+    """Tenant B's private DKIM selector, created on first use. Its notes hold a tenant B secret, so
+    `leaks` catches it in any response or log line. The world baseline does not cover selectors."""
+    w.db.expire_all()
+    repository = repo_for(TenantContext(w.tenants["b"], w.users["b_owner"]), w.db).dkim_selectors
+    for existing in repository.list(limit=MAX_LIMIT):
+        if existing.scope == "tenant":
+            return existing
+    created = repository.create(
+        {"selector": "b-private", "notes": f"{B_TENANT_NAME} private selector"}
+    )
+    w.db.commit()
+    return created
+
+
 def _path(w: World, case: Case) -> str:
     if "{rule_id}" in case.leaf.path:
         return case.leaf.path.replace("{rule_id}", str(b_rule(w).id))
+    if "{selector_id}" in case.leaf.path:
+        return case.leaf.path.replace("{selector_id}", str(b_selector(w).id))
     target_domain = {
         "b_domain": "secret",
         "b_session": "secret",
@@ -612,6 +648,9 @@ def _check_case(world: World, logs: pytest.LogCaptureFixture, case: Case) -> Non
     assert entry is not None
     before_a, before_b = world.state("a"), world.state("b")
     rule_before = b_rule(world) if case.leaf.path.startswith(("/api/v1/rules", "/rules")) else None
+    selector_before = (
+        b_selector(world) if case.leaf.path.startswith("/api/v1/dkim-selectors") else None
+    )
     tenant = "b" if case.target.startswith("b_session") else "a"
     fresh = entry.kind in (Kind.SESSION, Kind.SWITCH)  # these consume/rotate the session
     body = entry.body(world, case.role) if entry.body is not None else None
@@ -637,6 +676,8 @@ def _check_case(world: World, logs: pytest.LogCaptureFixture, case: Case) -> Non
     assert after_b == before_b, "tenant B changed"
     if rule_before is not None:
         assert b_rule(world) == rule_before, "tenant B's rule changed"
+    if selector_before is not None:
+        assert b_selector(world) == selector_before, "tenant B's selector changed"
     after_a = world.state("a")
     if case.target == "smuggle" and response.status_code == 303:
         # The UI create ignores the smuggled tenant_id: the domain lands in tenant A only.

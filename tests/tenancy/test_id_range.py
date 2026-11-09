@@ -46,7 +46,7 @@ from app.repositories.base import MAX_ID, coerce_id, parse_id
 from app.services.auth import revoke_all_sessions, revoke_session
 from app.web.domains import _domain_id as web_domain_id
 from tests.tenancy.conftest import World, assert_pristine, leaks
-from tests.tenancy.test_matrix import LEAVES, Leaf, b_rule, leaf_routes
+from tests.tenancy.test_matrix import LEAVES, Leaf, b_rule, b_selector, leaf_routes
 
 ROOT = Path(__file__).resolve().parents[2]
 UNKNOWN_ID = 999_999_999  # in range, and no seeded row has it
@@ -195,6 +195,44 @@ def test_out_of_range_rule_id_is_an_unknown_rule(
         assert not [hint for hint in LIMIT_HINTS if hint in response.text.casefold()]
     assert not leaks(world, response, logs)
     assert b_rule(world) == foreign
+    assert_pristine(world)
+
+
+# DKIM selector routes (M5-20): same permissions as the content rules, so the same two answers.
+SELECTOR_ID_ROUTES: dict[tuple[str, str], Any] = {
+    ("GET", "/api/v1/dkim-selectors/{selector_id}"): None,
+    ("PATCH", "/api/v1/dkim-selectors/{selector_id}"): {"notes": "probe"},
+    ("DELETE", "/api/v1/dkim-selectors/{selector_id}"): None,
+}
+
+
+@BOUNDARY_PARAMS
+@pytest.mark.parametrize(("who", "status"), [("owner", 404), ("viewer", 403)])
+@pytest.mark.parametrize("key", list(SELECTOR_ID_ROUTES), ids=" ".join)
+def test_out_of_range_selector_id_is_an_unknown_selector(
+    world: World,
+    logs: pytest.LogCaptureFixture,
+    key: tuple[str, str],
+    who: str,
+    status: int,
+    value: int,
+) -> None:
+    method, template = key
+
+    def send(selector_id: int) -> Any:
+        path = template.replace("{selector_id}", str(selector_id))
+        return world.send(who, method, path, json=SELECTOR_ID_ROUTES[key])
+
+    foreign = b_selector(world)
+    unknown_outcome = _outcome(send(UNKNOWN_ID))
+    foreign_outcome = _outcome(send(foreign.id))
+    response = send(value)
+    assert _outcome(response) == unknown_outcome == foreign_outcome
+    assert response.status_code == status
+    if value > MAX_ID:
+        assert not [hint for hint in LIMIT_HINTS if hint in response.text.casefold()]
+    assert not leaks(world, response, logs)
+    assert b_selector(world) == foreign
     assert_pristine(world)
 
 
@@ -477,7 +515,9 @@ def test_every_path_parameter_goes_through_the_shared_parser() -> None:
 
 
 def test_every_numeric_id_route_has_a_behaviour_row() -> None:
-    assert numeric_id_routes(LEAVES) == set(ID_ROUTES) | set(RULE_ID_ROUTES)
+    assert numeric_id_routes(LEAVES) == set(ID_ROUTES) | set(RULE_ID_ROUTES) | set(
+        SELECTOR_ID_ROUTES
+    )
 
 
 def test_every_integer_id_field_of_a_json_body_is_registered() -> None:
