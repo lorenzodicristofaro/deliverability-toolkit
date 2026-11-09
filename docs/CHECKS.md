@@ -43,6 +43,17 @@ A check is a class with a string `id` and `async run(ctx: CheckContext, target: 
   claims DKIM is absent. Failed selectors are always listed in `DKIM_PROBE_ERRORS`. If at least
   one selector is found, the status follows the findings. If none is found and any failed, the
   status is `error`. `DKIM_NO_SELECTOR_FOUND` appears only when every selector was `not_found`.
+  An empty list (every selector disabled) probes nothing: status `error` with
+  `DKIM_NO_SELECTORS_PROBED`, never a verdict about the domain. A list cut by the probe cap is
+  incomplete: status `error` with `DKIM_SELECTORS_CAPPED`, and `data["dropped"]` gives the number.
+- **DKIM selector list.** Domain checks (REST and the SSE stream) probe the enabled global rows of
+  `dkim_selectors` plus the active tenant's enabled rows, deduplicated and sorted by name, at most
+  250 per run (`app/services/dkim_probe_selectors.py`). With only the synced seed that is exactly
+  the seed list. If the global table has no rows at all (a seed sync that failed or never ran),
+  the seed file replaces the global rows. Free checks (`/api/v1/checks/free`, `/tools/dkim/stream`)
+  and the CLI `check` have no tenant and always use the seed file. The list is resolved before any
+  DNS query, and the database connection is released first. Admins may keep at most 50 rows per
+  tenant and 200 global rows.
   A probe cut short by the stream deadline is `error`.
 - `data["report_destinations"]` (DMARC) lists each report URI with its authorization state.
   `data["selectors"]` (DKIM) lists each probed selector with state `found`, `not_found` or `error`.
@@ -124,6 +135,8 @@ module's `CODES`; `tests/checks/test_acceptance_m3.py` requires en and it text f
 | `DKIM_CNAME_LOOP` | medium | none |
 | `DKIM_CNAME_CHAIN_LONG` | low | none (we follow at most 8 hops) |
 | `DKIM_PROBE_ERRORS` | low | none |
+| `DKIM_NO_SELECTORS_PROBED` | low | none |
+| `DKIM_SELECTORS_CAPPED` | low | none |
 
 For DKIM the finding texts cite the RFCs without section numbers, so none are given here
 (`unverified`: the maintainer should add the sections after checking the RFC text).

@@ -15,6 +15,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.exc import StaleDataError
 
+from app.checks.dkim_selectors import MAX_SELECTORS
 from app.core.db import create_db_engine, create_session_factory
 from app.core.permissions import MembershipGrant, Principal, RuleScope
 from app.core.tenancy import TenantContext
@@ -482,3 +483,65 @@ def test_repository_path_stays_tenant_scoped(world: World) -> None:
     record = world.service("owner").create(TENANT, {"selector": "mine"})
     other = repo_for(TenantContext(world.tenant_b, world.users["b_owner"]), world.db).dkim_selectors
     assert other.get(record.id) is None
+
+
+# --- caps ----------------------------------------------------------------------------------------
+
+
+def _fill_tenant(world: World, count: int, *, enabled: bool = True) -> None:
+    store = repo_for(TenantContext(world.tenant_a, world.users["owner"]), world.db).dkim_selectors
+    for n in range(count):
+        store.create({"selector": f"t{n:03d}", "enabled": enabled})
+    world.db.commit()
+
+
+def _fill_global(world: World) -> None:
+    store = GlobalDkimSelectorRepository(world.db)
+    for n in range(MAX_SELECTORS - store.count()):
+        store.create({"selector": f"g{n:03d}"}, actor=None)
+    world.db.commit()
+
+
+@pytest.mark.parametrize("enabled", [True, False], ids=["enabled", "disabled_rows_count"])
+def test_tenant_row_beyond_the_cap_is_refused(world: World, enabled: bool) -> None:
+    _fill_tenant(world, admin.MAX_TENANT_SELECTORS, enabled=enabled)
+    before = world.rows()
+    with pytest.raises(SelectorFieldInvalid) as exc:
+        world.service("owner").create(TENANT, {"selector": "one-more"})
+    assert (exc.value.field, exc.value.reason) == ("selector", "too_many")
+    assert exc.value.key == "api.dkim_selectors.error.too_many"
+    assert world.rows() == before
+
+
+def test_tenant_row_at_the_last_slot_is_accepted(world: World) -> None:
+    _fill_tenant(world, admin.MAX_TENANT_SELECTORS - 1)
+    assert world.service("owner").create(TENANT, {"selector": "last"}).selector == "last"
+
+
+def test_another_tenants_rows_do_not_use_up_the_cap(world: World) -> None:
+    _fill_tenant(world, admin.MAX_TENANT_SELECTORS)
+    assert world.b_service().create(TENANT, {"selector": "theirs"}).selector == "theirs"
+
+
+def test_global_rows_do_not_use_up_a_tenants_cap(world: World) -> None:
+    _fill_global(world)
+    assert world.service("owner").create(TENANT, {"selector": "mine"}).selector == "mine"
+
+
+def test_global_row_beyond_the_cap_is_refused(world: World) -> None:
+    _fill_global(world)
+    before = world.rows()
+    with pytest.raises(SelectorFieldInvalid) as exc:
+        world.service("root").create(GLOBAL, {"selector": "one-more"})
+    assert (exc.value.field, exc.value.reason) == ("selector", "too_many")
+    assert world.rows() == before
+
+
+def test_a_full_scope_can_still_edit_and_delete(world: World) -> None:
+    _fill_tenant(world, admin.MAX_TENANT_SELECTORS)
+    service = world.service("owner")
+    row = service.list_selectors(TENANT, limit=1000)
+    mine = next(r for r in row if r.scope == "tenant")
+    assert service.update(TENANT, mine.id, {"enabled": False}).enabled is False
+    service.delete(TENANT, mine.id)
+    assert service.create(TENANT, {"selector": "replacement"}).selector == "replacement"

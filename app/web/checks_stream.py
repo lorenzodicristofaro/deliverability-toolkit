@@ -13,7 +13,9 @@ Events: one `selector` event per selector in completion order (data = an escaped
 `checks/_dkim_row.html`), then one `done` event with the summary and findings. A failed selector
 is a row in the `error` state, never an empty or "not found" row. The whole stream has an overall
 deadline (`STREAM_DEADLINE_S`); when it expires the probe is stopped and `done` says the result is
-incomplete (status `error`, no aggregate findings). A client disconnect cancels the response task;
+incomplete (status `error`, no aggregate findings). The selector list of a domain stream is resolved
+and the database connection released before the stream starts, so no transaction is held during
+the probe; the free route stays on the seed list. A client disconnect cancels the response task;
 the `finally`
 closes the probe generator, which cancels its in-flight lookups.
 
@@ -38,6 +40,7 @@ from app.core.domain_names import InvalidDomainName, to_ascii_domain, to_dns_nam
 from app.core.i18n import t
 from app.core.permissions import Action, DomainResource, TenantResource, can
 from app.dns.types import Resolver
+from app.services.dkim_probe_selectors import ProbeSelectors, resolve_and_release
 from app.services.domains import DomainService, DomainServiceError
 from app.web.deps import CurrentSession, DbDep, tenant_ctx
 from app.web.dns_tools import visible  # noqa: F401  (registers the `visible` Jinja filter)
@@ -56,12 +59,15 @@ HEADERS: Final = {"Cache-Control": "no-store", "X-Accel-Buffering": "no"}
 
 
 class _Target:
-    __slots__ = ("domain", "domain_id", "tenant_id")
+    __slots__ = ("domain", "domain_id", "probe", "tenant_id")
 
-    def __init__(self, domain: str, tenant_id: int | None, domain_id: int | None) -> None:
+    def __init__(
+        self, domain: str, tenant_id: int | None, domain_id: int | None, probe: ProbeSelectors
+    ) -> None:
         self.domain = domain
         self.tenant_id = tenant_id
         self.domain_id = domain_id
+        self.probe = probe
 
 
 def _forbidden(request: Request) -> HTTPException:
@@ -77,12 +83,13 @@ def _domain_target(request: Request, auth: CurrentSession, db: DbDep, domain_id:
         raise HTTPException(exc.status, t(exc.key, request_language(request.scope))) from None
     if not can(auth.principal, Action.CHECK_RUN, DomainResource(ctx.tenant_id, view.id)):
         raise _forbidden(request)
-    return _Target(view.name, ctx.tenant_id, view.id)
+    return _Target(view.name, ctx.tenant_id, view.id, resolve_and_release(ctx, db))
 
 
 def _free_target(
     request: Request,
     auth: CurrentSession,
+    db: DbDep,
     name: Annotated[str, Query(max_length=MAX_NAME_LEN)] = "",
 ) -> _Target:
     """401 anonymous, 404 no tenant, 403 without `dns.tools`, 422 invalid name."""
@@ -91,11 +98,13 @@ def _free_target(
         raise _forbidden(request)
     try:
         to_dns_name(name, allow_underscore=False)
-        return _Target(to_ascii_domain(name), None, None)
+        target = _Target(to_ascii_domain(name), None, None, ProbeSelectors(None))
     except InvalidDomainName:
         raise HTTPException(
             422, t("tools.dns.invalid_name", request_language(request.scope))
         ) from None
+    db.rollback()  # no tenant rows to read: just hold no transaction during the probe
+    return target
 
 
 DomainTarget = Annotated[_Target, Depends(_domain_target)]
@@ -135,6 +144,7 @@ async def dkim_events(
     lang: str,
     *,
     selectors: Sequence[str] | None = None,
+    dropped: int = 0,
     deadline_s: float = STREAM_DEADLINE_S,
     on_result: Callable[[CheckResult], None] | None = None,
 ) -> AsyncIterator[str]:
@@ -169,6 +179,7 @@ async def dkim_events(
             started_at=started,
             duration_ms=int((time.monotonic() - t0) * 1000),
             complete=complete,
+            dropped=dropped,
         )
         if on_result is not None:
             on_result(result)
@@ -186,7 +197,8 @@ async def dkim_events(
                 kind="done",
                 summary=summary,
                 findings=result.findings,
-                complete=complete,
+                complete=complete and not dropped,
+                deadline=not complete,
                 status=result.status,
             ),
         )
@@ -200,7 +212,13 @@ def _response(request: Request, resolver: Resolver, target: _Target) -> Streamin
         tenant_id=None if target.tenant_id is None else str(target.tenant_id),
         domain_id=None if target.domain_id is None else str(target.domain_id),
     )
-    events = dkim_events(ctx, target.domain, request_language(request.scope))
+    events = dkim_events(
+        ctx,
+        target.domain,
+        request_language(request.scope),
+        selectors=target.probe.names,
+        dropped=target.probe.dropped,
+    )
     return StreamingResponse(events, media_type="text/event-stream", headers=HEADERS)
 
 

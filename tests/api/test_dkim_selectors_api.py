@@ -25,6 +25,7 @@ from app.main import create_app
 from app.models import User
 from app.models.dkim_selector import DkimSelector
 from app.repositories import GlobalDkimSelectorRepository
+from app.services.dkim_selectors_admin import MAX_TENANT_SELECTORS
 from tests.api.test_domains import KEY, World, _seed, call
 from tests.support.socket_guard import db_endpoint, install
 
@@ -514,3 +515,21 @@ def test_root_manages_an_unseeded_global_row(world: World) -> None:
     assert call(world, "root", "PATCH", item, json={"notes": "n"}).json()["notes"] == "n"
     assert call(world, "root", "DELETE", item).status_code == 204
     assert call(world, "root", "GET", item).status_code == 404
+
+
+# --- caps ----------------------------------------------------------------------------------------
+
+
+def test_tenant_cap_is_a_422_too_many(world: World) -> None:
+    for n in range(MAX_TENANT_SELECTORS):
+        make(world, selector=f"t{n:03d}")
+    before = rows(world.db)
+    response = call(world, "owner", "POST", URL, json={"selector": "one-more"})
+    assert_problem(response, 422, "api.dkim_selectors.error.too_many", "selector", "too_many")
+    assert rows(world.db) == before
+
+
+@pytest.mark.parametrize("lang", ["en", "it"])
+def test_too_many_exists_in_both_languages(lang: str) -> None:
+    key = "api.dkim_selectors.error.too_many"
+    assert t(key, lang) != key

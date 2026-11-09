@@ -23,7 +23,10 @@ Deliberate seed semantics:
 - A seeded global row cannot be deleted (`SeededSelectorNotDeletable`, 409): the seed sync would
   recreate it. Disabling it is the supported way to turn it off.
 
-The rows are not yet read by the DKIM check, which still probes the seed file.
+Caps, so the DNS use of a probe stays bounded: a create is refused (422, `too_many`) when the
+scope already holds `MAX_TENANT_SELECTORS` rows of that tenant, or `MAX_SELECTORS` global rows.
+Disabled rows count, so re-enabling one can never exceed the cap. Concurrent creates can overshoot
+by a few rows; the probe has its own cap (`app.services.dkim_probe_selectors`).
 
 Audit: writes log the actor, selector id and scope only. Field checks are the repository's own, so
 its limits and reasons are not restated here.
@@ -38,6 +41,7 @@ from typing import Any, Final
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.exc import StaleDataError
 
+from app.checks.dkim_selectors import MAX_SELECTORS
 from app.core.permissions import (
     Action,
     Principal,
@@ -56,11 +60,13 @@ from app.repositories.dkim_selectors import (
     DkimSelectorRepository,
     SelectorTaken,
 )
+from app.services.dkim_probe_selectors import all_visible
 
 logger = logging.getLogger("app.dkim_selectors")
 
 # Seed-owned on a seeded row: everything the API may set except `DKIM_LOCAL_FIELDS`.
 SEED_MANAGED_FIELDS: Final = frozenset({"selector", "provider", "record_type"})
+MAX_TENANT_SELECTORS: Final = 50
 
 INVALID_SELECTOR_KEY: Final = "api.dkim_selectors.error.invalid_selector"
 TOO_LONG_KEY: Final = "api.dkim_selectors.error.too_long"
@@ -69,12 +75,15 @@ SCOPE_FORBIDDEN_KEY: Final = "api.dkim_selectors.error.scope_forbidden"
 NOT_FOUND_KEY: Final = "api.dkim_selectors.error.not_found"
 INVALID_FIELD_KEY: Final = "api.dkim_selectors.error.invalid_field"
 SEEDED_DELETE_KEY: Final = "api.dkim_selectors.error.seeded_delete"
+TOO_MANY_KEY: Final = "api.dkim_selectors.error.too_many"
 
 
 def field_key(field: str, reason: str) -> str:
     """The i18n key of a rejected field."""
     if reason == "too_long":
         return TOO_LONG_KEY
+    if reason == "too_many":
+        return TOO_MANY_KEY
     return INVALID_SELECTOR_KEY if field == "selector" else INVALID_FIELD_KEY
 
 
@@ -179,6 +188,15 @@ class DkimSelectorsAdminService:
             raise SelectorFieldInvalid("body", "unknown_field")
         return dict(data)
 
+    def _check_capacity(self, scope: RuleScope) -> None:
+        if scope is RuleScope.GLOBAL:
+            full = GlobalDkimSelectorRepository(self._db).count() >= MAX_SELECTORS
+        else:
+            own = [r for r in all_visible(self._tenant_store()) if r.scope == scope.value]
+            full = len(own) >= MAX_TENANT_SELECTORS
+        if full:
+            raise SelectorFieldInvalid("selector", "too_many")
+
     def _audit(self, event: str, selector_id: int, scope: RuleScope) -> None:
         logger.info(
             "dkim selector changed",
@@ -210,6 +228,7 @@ class DkimSelectorsAdminService:
     def create(self, scope: RuleScope, data: Mapping[str, Any]) -> DkimSelectorRecord:
         self.check_manage(scope)
         values = self._payload(data)
+        self._check_capacity(scope)
         try:
             if scope is RuleScope.GLOBAL:
                 record = GlobalDkimSelectorRepository(self._db).create(
