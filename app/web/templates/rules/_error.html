@@ -1,0 +1,4 @@
+{#- A refused form: `plain_error` is an i18n key; `error` is {key, field_label} (a rejected field,
+    never its value). Both are keys chosen by the server, so nothing here comes from the user. -#}
+{% if plain_error %}<p class="form-error" role="alert" data-testid="rules-error">{{ t(plain_error) }}</p>{% endif %}
+{% if error %}<p class="form-error" role="alert" data-testid="rules-error">{% if error.field_label %}{{ t(error.field_label) }}: {% endif %}{{ t(error.key) }}</p>{% endif %}

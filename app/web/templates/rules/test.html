@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% set kind_text = {"regex": t("web.rules.kind.regex"), "keyword": t("web.rules.kind.keyword")} %}
+{% set flag_text = {"i": t("web.rules.flag.i"), "m": t("web.rules.flag.m"), "s": t("web.rules.flag.s"), "x": t("web.rules.flag.x"), "a": t("web.rules.flag.a")} %}
+{% block title %}{{ t("web.rules.test.title") }} · {{ app_name }}{% endblock %}
+{% block content %}
+<h1>{{ t("web.rules.test.title") }}</h1>
+<p>{{ t("web.rules.test.intro") }}</p>
+<p data-testid="rules-test-language-note">{{ t("web.rules.test.language_note") }}</p>
+{% include "rules/_error.html" %}
+<form class="dns-form" method="post" action="/rules/test?scope={{ scope }}" data-testid="rules-test-form">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <p>
+    <label for="test-kind">{{ t("web.rules.field.kind") }}</label>
+    <select id="test-kind" name="kind">
+      {% for k in kinds %}<option value="{{ k }}"{% if form.kind == k %} selected{% endif %}>{{ kind_text[k] }}</option>{% endfor %}
+    </select>
+  </p>
+  <p>
+    <label for="test-pattern">{{ t("web.rules.field.pattern") }}</label><br>
+    <textarea id="test-pattern" name="pattern" rows="3" cols="80" maxlength="1024" spellcheck="false" autocomplete="off" wrap="off">{{ form.pattern }}</textarea>
+  </p>
+  <fieldset>
+    <legend>{{ t("web.rules.field.flags") }}</legend>
+    {% for f in flag_letters %}
+    <label><input type="checkbox" name="flags" value="{{ f }}"{% if f in form.flags %} checked{% endif %}> {{ flag_text[f] }}</label>
+    {% endfor %}
+  </fieldset>
+  <p>
+    <label for="test-sample">{{ t("web.rules.field.sample") }}</label><br>
+    <textarea id="test-sample" name="sample" rows="8" cols="100" spellcheck="false" autocomplete="off" wrap="off">{{ form.sample }}</textarea>
+  </p>
+  <button type="submit">{{ t("web.rules.test.run") }}</button>
+  <a href="/rules?scope={{ scope }}">{{ t("web.rules.action.back") }}</a>
+</form>
+
+{% if outcome is not none %}
+<section data-testid="rules-test-result" data-outcome="{{ outcome.status.value }}">
+  <h2>{{ t("web.rules.test.result") }}</h2>
+  {#- Each outcome has its own text. busy, error and timed_out never read as "no match". -#}
+  <p class="dns-state {{ "dns-state-ok" if outcome.status.value in ("matched", "no_match") else "dns-state-failure" }}" role="status" data-testid="rules-test-status">
+    <strong>{{ t(status_key) }}</strong>
+    {% if outcome.status.value == "invalid" and outcome.key %}<br>{{ t(outcome.key) }}{% endif %}
+  </p>
+  {% if outcome.status.value == "matched" %}
+  {% if outcome.truncated %}<p data-testid="rules-test-truncated">{{ t("web.rules.test.truncated", count=outcome.matches|length) }}</p>{% endif %}
+  <table>
+    <thead><tr>
+      <th scope="col">{{ t("web.rules.test.col.start") }}</th>
+      <th scope="col">{{ t("web.rules.test.col.end") }}</th>
+      <th scope="col">{{ t("web.rules.test.col.snippet") }}</th>
+    </tr></thead>
+    <tbody>
+    {% for m in outcome.matches %}
+      <tr>
+        <td>{{ m.start }}</td>
+        <td>{{ m.end if m.end is not none else "" }}</td>
+        <td class="dns-wrap">{% if m.snippet %}<code>{{ m.snippet|visible }}</code>{% endif %}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</section>
+{% endif %}
+{% endblock %}

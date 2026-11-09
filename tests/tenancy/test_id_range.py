@@ -158,6 +158,10 @@ RULE_ID_ROUTES: dict[tuple[str, str], Any] = {
     ("GET", "/api/v1/rules/{rule_id}"): None,
     ("PATCH", "/api/v1/rules/{rule_id}"): {"name": "probe"},
     ("DELETE", "/api/v1/rules/{rule_id}"): None,
+    ("GET", "/rules/{rule_id}/edit"): None,
+    ("POST", "/rules/{rule_id}/edit"): {"name": "probe"},
+    ("POST", "/rules/{rule_id}/toggle"): {"enabled": "0"},
+    ("POST", "/rules/{rule_id}/delete"): None,
 }
 
 
@@ -176,7 +180,10 @@ def test_out_of_range_rule_id_is_an_unknown_rule(
 
     def send(rule_id: int) -> Any:
         path = template.replace("{rule_id}", str(rule_id))
-        return world.send(who, method, path, json=RULE_ID_ROUTES[key])
+        payload = RULE_ID_ROUTES[key]
+        if path.startswith("/api/"):
+            return world.send(who, method, path, json=payload)
+        return world.send(who, method, path, form=payload)
 
     foreign = b_rule(world)
     unknown_outcome = _outcome(send(UNKNOWN_ID))
@@ -343,6 +350,8 @@ KNOWN_INT_CALLS = {
     ("app/web/checks_stream.py", "dkim_events"),  # duration in ms
     ("app/web/content.py", "_read_capped"),  # Content-Length
     ("app/web/message.py", "_read_capped"),  # Content-Length
+    ("app/web/rules.py", "_read_capped"),  # Content-Length
+    ("app/web/rules.py", "_weight"),  # rule weight, 0 to 100
 }
 
 

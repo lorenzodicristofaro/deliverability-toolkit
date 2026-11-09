@@ -229,6 +229,16 @@ def _rule_sample(_w: World, _role: str) -> dict[str, Any]:
     return {"kind": "keyword", "pattern": "probe", "sample": "probe text"}
 
 
+def _rule_form(_w: World, _role: str) -> dict[str, Any]:
+    return {
+        "name": "probe"
+    }  # incomplete on purpose: a permitted role gets a 422, nothing is stored
+
+
+def _toggle(_w: World, _role: str) -> dict[str, Any]:
+    return {"enabled": "0"}
+
+
 MATRIX: dict[tuple[str, str], Entry] = {
     # session / tenant switch (app.web.auth)
     ("POST", "/logout"): Entry(Kind.SESSION),
@@ -299,6 +309,18 @@ MATRIX: dict[tuple[str, str], Entry] = {
     ("DELETE", "/api/v1/rules/{rule_id}"): Entry(
         Kind.RULE, own=_RULE_WRITE_ON_B, not_found=_RULES_404
     ),
+    # content rules UI (app.web.rules). Reads need `rules.read`, every other route `rules.manage`
+    # on the tenant path; the global tab is covered by tests/web/test_rules_ui.py. `POST /rules`
+    # (create) and `/rules/test` take no rule id; the permitted roles stop at 422 / 200.
+    ("GET", "/rules"): Entry(Kind.COLLECTION, own=_RULES_READ),
+    ("GET", "/rules/new"): Entry(Kind.COLLECTION, own=_by_role(200, 403)),
+    ("POST", "/rules"): Entry(Kind.DNS, body=_rule_form, own=_by_role(422, 403)),
+    ("POST", "/rules/{rule_id}/edit"): Entry(Kind.RULE, body=_rule_form, own=_RULE_WRITE_ON_B),
+    ("GET", "/rules/test"): Entry(Kind.DNS, own=_by_role(200, 403)),
+    ("POST", "/rules/test"): Entry(Kind.DNS, body=_rule_sample, own=_by_role(200, 403)),
+    ("GET", "/rules/{rule_id}/edit"): Entry(Kind.RULE, own=_RULE_WRITE_ON_B),
+    ("POST", "/rules/{rule_id}/toggle"): Entry(Kind.RULE, body=_toggle, own=_RULE_WRITE_ON_B),
+    ("POST", "/rules/{rule_id}/delete"): Entry(Kind.RULE, own=_RULE_WRITE_ON_B),
     # DKIM SSE streams (app.web.checks_stream): check.run on the domain / dns.tools (free).
     # The free route needs `?name=`; without it permitted roles get 422 (decided before streaming).
     ("GET", "/domains/{domain_id}/authentication"): Entry(Kind.DOMAIN),
@@ -587,7 +609,7 @@ def _check_case(world: World, logs: pytest.LogCaptureFixture, case: Case) -> Non
     entry = case.entry
     assert entry is not None
     before_a, before_b = world.state("a"), world.state("b")
-    rule_before = b_rule(world) if case.leaf.path.startswith("/api/v1/rules") else None
+    rule_before = b_rule(world) if case.leaf.path.startswith(("/api/v1/rules", "/rules")) else None
     tenant = "b" if case.target.startswith("b_session") else "a"
     fresh = entry.kind in (Kind.SESSION, Kind.SWITCH)  # these consume/rotate the session
     body = entry.body(world, case.role) if entry.body is not None else None

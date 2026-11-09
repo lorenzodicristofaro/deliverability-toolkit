@@ -25,6 +25,9 @@
         {% if show_content_tools is defined and show_content_tools %}
         <li><a href="/tools/content" data-testid="nav-content">{{ t("nav.tools.content") }}</a></li>
         {% endif %}
+        {% if show_rules_tools is defined and show_rules_tools %}
+        <li><a href="/rules" data-testid="nav-rules">{{ t("nav.tools.rules") }}</a></li>
+        {% endif %}
         {% if logged_in is defined and logged_in and csrf_token is not none %}
         <li>
           <form class="logout" method="post" action="/logout">

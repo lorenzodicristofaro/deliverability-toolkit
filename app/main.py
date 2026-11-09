@@ -28,6 +28,7 @@ from app.web.domains import router as domains_router
 from app.web.health import router as health_router
 from app.web.landing import router as landing_router
 from app.web.message import router as message_router
+from app.web.rules import router as rules_router
 from app.web.setup import SetupGateMiddleware, prepare_setup
 from app.web.setup import router as setup_router
 from app.web.templating import STATIC_DIR, render
@@ -109,6 +110,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     web_app.include_router(dns_tools_router)
     web_app.include_router(message_router)
     web_app.include_router(content_router)
+    web_app.include_router(rules_router)
     web_app.include_router(checks_stream_router)
     web_app.include_router(api_router)
     web_app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
