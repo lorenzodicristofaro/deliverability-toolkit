@@ -94,7 +94,10 @@ Isolation strategy (defense in depth):
    that injects `tenant_id` into every query. Routers and services never receive
    a raw session for tenant data.
 3. A permission layer (`can(user, action, resource)`) evaluates role, domain
-   access and per-user feature toggles; used by web, API and CLI alike.
+   access and per-user feature toggles; used by web, API and CLI alike. CLI commands
+   that use tenant data go through `app/cli/tenant_scope.py` (`--tenant-id`, `--user-id`):
+   these options select who the command acts as and are not authentication, so the CLI's
+   trust boundary remains shell access. `check` and `analyze` stay tenant-less and offline.
 4. PostgreSQL deployments may additionally enable row-level security.
 5. Mandatory automated tests: for each endpoint, a user from tenant A must get
    404 on tenant B resources; a client viewer must not see unassigned domains.

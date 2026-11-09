@@ -185,7 +185,28 @@ newline (added by `typer.echo`); the REST body is the same bytes without the new
   admin and analyst; never a client viewer. Deniable with `{"dns.tools": false}`.
 - Anonymous requests get 401 (or a redirect to login in the browser); an invisible domain (missing,
   another tenant's, or unassigned to a client viewer) gets 404. A denied request sends no DNS
-  query. The CLI has no permission model: its trust boundary is shell access to the instance.
+  query. The CLI `check` and `analyze` commands have no permission model: their trust boundary is
+  shell access to the instance.
+
+### CLI commands that use tenant data
+
+`app/cli/tenant_scope.py` is for commands that need tenant data (first user: M5-17). Such a
+command requires `--tenant-id N --user-id M`; there is no default tenant and no system context. The
+helper connects with the app configuration and builds the principal and `TenantContext` the same
+way as the web layer, then runs the same `can()`. A denied command does not run.
+
+These options select who the command acts as. They are **not authentication**: anyone with shell
+access and the database configuration can name any user, and the database configuration alone
+already gives full access to the data. The trust boundary remains shell access. The permission
+check keeps the CLI consistent with the web (for example, a client viewer cannot run an action
+the web denies them); it does not protect the instance from its operator.
+
+| Code | Meaning |
+|---|---|
+| 0 | the command ran (the command may define further result codes, as `check` does) |
+| 2 | could not evaluate: missing or invalid configuration, database unreachable, schema not migrated, or a database driver error while the command runs |
+| 64 | usage error: missing option, or an id that is not a plain decimal in 1..2147483647 |
+| 77 | permission denied: unknown or inactive user, no membership in that tenant, or a role or toggle without the permission (one message for all, like the web's 404) |
 
 ## How to add a check
 
