@@ -45,8 +45,17 @@ from app.core.security import SESSION_COOKIE_NAME
 from app.core.tenancy import TenantContext
 from app.main import create_app
 from app.repositories import repo_for
+from app.repositories.base import MAX_LIMIT
+from app.repositories.content_rules import ContentRuleRecord
 from app.web import deps
-from tests.tenancy.conftest import ROLES, World, WorldMutated, assert_pristine, leaks
+from tests.tenancy.conftest import (
+    B_TENANT_NAME,
+    ROLES,
+    World,
+    WorldMutated,
+    assert_pristine,
+    leaks,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 TESTING_DOC = ROOT / "docs" / "TESTING.md"
@@ -124,6 +133,7 @@ class Kind(Enum):
     SESSION = "session"  # session only, no tenant data (logout)
     SWITCH = "switch"  # changes the active tenant
     DNS = "dns"  # raw DNS tools: tenant-level `dns.tools`, no tenant data (M2-12)
+    RULE = "rule"  # addresses one content rule by id (M5-18); `own` is the status on tenant B's
 
 
 Body = Callable[[World, str], Any]
@@ -138,6 +148,7 @@ class Entry:
     # (role, target) -> reason: a known isolation bug, reported as a ticket and NOT fixed here.
     # The case is marked xfail(strict=True), so it fails again once the bug is fixed.
     xfail: Mapping[tuple[str, str], str] = field(default_factory=dict)
+    not_found: str = "api.error.not_found"  # i18n key of the route's 404 body
 
 
 def _by_role(writers: int, readers: int) -> dict[str, int]:
@@ -207,6 +218,17 @@ _MSG_OWN = {**_by_role(415, 415), "viewer": 403}  # client viewers never analyse
 
 _CONTENT_OWN = {**_by_role(422, 422), "viewer": 403}  # client viewers never analyse content
 
+_RULES_404 = "api.rules.error.not_found"
+_RULES_READ = {**_by_role(200, 200), "viewer": 403}  # client viewers never see rule configuration
+# Addressing a rule of tenant B: permission first (403), then the row is simply not there (404).
+_RULE_READ_ON_B = {**_by_role(404, 404), "viewer": 403}
+_RULE_WRITE_ON_B = _by_role(404, 403)
+
+
+def _rule_sample(_w: World, _role: str) -> dict[str, Any]:
+    return {"kind": "keyword", "pattern": "probe", "sample": "probe text"}
+
+
 MATRIX: dict[tuple[str, str], Entry] = {
     # session / tenant switch (app.web.auth)
     ("POST", "/logout"): Entry(Kind.SESSION),
@@ -261,6 +283,22 @@ MATRIX: dict[tuple[str, str], Entry] = {
     # a JSON body with no html/text, so permitted roles stop at 422 (decided before the analyzer);
     # the 200 path is covered by tests/api/test_content_analyze.py.
     ("POST", "/api/v1/content/analyze"): Entry(Kind.DNS, body=_content_empty, own=_CONTENT_OWN),
+    # content rules API (app.api.v1.rules), tenant path. The global path needs no tenant, so it is
+    # covered per role and verb by tests/api/test_rules_api.py.
+    ("GET", "/api/v1/rules"): Entry(Kind.COLLECTION, own=_RULES_READ, not_found=_RULES_404),
+    ("POST", "/api/v1/rules"): Entry(
+        Kind.COLLECTION, body=_smuggle_json, smuggle=_by_role(422, 403), not_found=_RULES_404
+    ),
+    ("POST", "/api/v1/rules/test"): Entry(
+        Kind.DNS, body=_rule_sample, own=_by_role(200, 403), not_found=_RULES_404
+    ),
+    ("GET", "/api/v1/rules/{rule_id}"): Entry(Kind.RULE, own=_RULE_READ_ON_B, not_found=_RULES_404),
+    ("PATCH", "/api/v1/rules/{rule_id}"): Entry(
+        Kind.RULE, body=_rename, own=_RULE_WRITE_ON_B, not_found=_RULES_404
+    ),
+    ("DELETE", "/api/v1/rules/{rule_id}"): Entry(
+        Kind.RULE, own=_RULE_WRITE_ON_B, not_found=_RULES_404
+    ),
     # DKIM SSE streams (app.web.checks_stream): check.run on the domain / dns.tools (free).
     # The free route needs `?name=`; without it permitted roles get 422 (decided before streaming).
     ("GET", "/domains/{domain_id}/authentication"): Entry(Kind.DOMAIN),
@@ -292,6 +330,7 @@ TARGETS: dict[Kind, tuple[str, ...]] = {
     Kind.SESSION: ("own", "b_session"),
     Kind.SWITCH: ("own", "b_session"),
     Kind.DNS: ("own", "b_session"),
+    Kind.RULE: ("b_rule", "b_session"),
 }
 
 
@@ -473,7 +512,7 @@ def _expected(case: Case) -> int:
             return 404
         table = entry.own if case.target == "own" else entry.smuggle
         return table[case.role]
-    if entry.kind is Kind.DNS:
+    if entry.kind in (Kind.DNS, Kind.RULE):
         return 404 if case.target == "b_session" else entry.own[case.role]
     if entry.kind is Kind.LANDING:
         return 200
@@ -482,7 +521,32 @@ def _expected(case: Case) -> int:
     return 404  # SWITCH: tenant B is not a membership of any tenant A user
 
 
+def b_rule(w: World) -> ContentRuleRecord:
+    """Tenant B's private content rule, created on first use. Its name holds a tenant B secret, so
+    `leaks` catches it in any response or log line. The world baseline does not cover rules."""
+    w.db.expire_all()
+    repository = repo_for(TenantContext(w.tenants["b"], w.users["b_owner"]), w.db).content_rules
+    for existing in repository.list(limit=MAX_LIMIT):
+        if existing.scope == "tenant":
+            return existing
+    created = repository.create(
+        {
+            "name": f"{B_TENANT_NAME} private rule",
+            "kind": "keyword",
+            "pattern": "b-private-pattern",
+            "weight": 1,
+            "category": "spam",
+            "severity": "low",
+            "title": "B private title",
+        }
+    )
+    w.db.commit()
+    return created
+
+
 def _path(w: World, case: Case) -> str:
+    if "{rule_id}" in case.leaf.path:
+        return case.leaf.path.replace("{rule_id}", str(b_rule(w).id))
     target_domain = {
         "b_domain": "secret",
         "b_session": "secret",
@@ -523,6 +587,7 @@ def _check_case(world: World, logs: pytest.LogCaptureFixture, case: Case) -> Non
     entry = case.entry
     assert entry is not None
     before_a, before_b = world.state("a"), world.state("b")
+    rule_before = b_rule(world) if case.leaf.path.startswith("/api/v1/rules") else None
     tenant = "b" if case.target.startswith("b_session") else "a"
     fresh = entry.kind in (Kind.SESSION, Kind.SWITCH)  # these consume/rotate the session
     body = entry.body(world, case.role) if entry.body is not None else None
@@ -542,10 +607,12 @@ def _check_case(world: World, logs: pytest.LogCaptureFixture, case: Case) -> Non
     if case.role == "anon" and response.status_code == 303:
         assert response.headers["location"].startswith("/login?next=")
     if api and response.status_code == 404:
-        assert response.json() == {"detail": t("api.error.not_found", "en")}
+        assert response.json() == {"detail": t(entry.not_found, "en")}
 
     after_b = world.state("b")
     assert after_b == before_b, "tenant B changed"
+    if rule_before is not None:
+        assert b_rule(world) == rule_before, "tenant B's rule changed"
     after_a = world.state("a")
     if case.target == "smuggle" and response.status_code == 303:
         # The UI create ignores the smuggled tenant_id: the domain lands in tenant A only.
