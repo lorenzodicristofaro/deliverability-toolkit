@@ -13,4 +13,4 @@ Acceptance criteria:
 - Table tests: missing file, directory, binary file, oversized file, invalid language.
 New i18n keys: cli.content.* (help, status label cli.content.status, errors cannot_read/too_large/empty) (en + it)
 GM note (maintainer decision 2026-11-09): uses the M5-17a helper with `--tenant-id` and `--user-id` and Action.CONTENT_ANALYZE; a permission denial test covers a client viewer. Exit codes follow `analyze`: 0 ok, 1 warn or fail, 2 error status or bad input, 64 usage, plus the denial code from M5-17a. Overall `ok` with `complete` false exits 1 and the text output says the rules were not evaluated, so scripts cannot read an incomplete run as clean. Copying the small `_fail` and `read_bounded` helpers is acceptable and goes in Follow-ups.
-Status: todo
+Status: done

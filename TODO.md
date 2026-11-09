@@ -126,7 +126,7 @@ Carried over from M0-07 QA:
   - [x] M5-15d PostgreSQL on tmpfs in CI (measured, no gain, reverted)
   - [x] M5-16 web UI content analyzer
   - [x] M5-17a CLI operator tenant and user selection (opus)
-  - [ ] M5-17 CLI `content`
+  - [x] M5-17 CLI `content`
   - [ ] M5-17b ids above 32 bits give a 500 on PostgreSQL (opus)
   - [ ] M5-18 content rules admin service + REST + test on sample (opus)
   - [ ] M5-19 content rules admin UI
@@ -169,6 +169,7 @@ Carried over from M0-07 QA:
 - [ ] Security review checklist, dependency/license audit, v0.1.0 release
 
 ## Follow-ups (post-M1)
+- [ ] CLI content (M5-17 QA): make `_fail`, `read_bounded` and `InputRejected` shared public helpers (copied in app/cli/content.py, comments at :52 and :67), with the M4-13 item. `dtk analyze - <&-` gives a traceback and exit 1 because `sys.stdin` is None (app/cli/analyze.py:56; fixed for `content`). docs/CONTENT.md (M5-25) must state that `dtk content --lang` is the content language hint and `--output-lang` the output language, unlike `check` and `analyze`, and that a run without `--eml` has List-Unsubscribe `not_evaluated`, so `complete` is false and it exits 1.
 - [ ] CLI tenant scope (M5-17a QA): `_load` in app/cli/tenant_scope.py duplicates private `_build`/`_with_assigned_domains` from app/web/deps.py (a parity test guards it for tenant-level actions); extract a public `load_tenant_principal(db, user, tenant_id)` in app/repositories/principal.py. It also imports `_fail` from app/cli/check.py (shared public helper, with the M4-13 item). A driver error's class name is logged at INFO, so its cause is invisible until the CLI configures logging. A config error without `name` prints the raw key.
 - [ ] Content UI nit (M5-16 QA): matched rows in app/web/templates/content/_result.html show the raw r.status in <code>; use a localized label.
 - [ ] Test DB fixtures (M5-15b QA nits): tests/test_db_isolation.py:90 never sets `_pg.fingerprint`, so removing `_require_vetted` from `_truncate_postgres` survives locally (set a non-None fingerprint); the schema fingerprint at tests/conftest.py:31 omits constraints, defaults and nullability; the "never both fixtures" failure at tests/conftest.py:181 has no pinned test; the .github/workflows/ci.yml:39 comment still says only `db_url`; the lint-test job has no `timeout-minutes`.
