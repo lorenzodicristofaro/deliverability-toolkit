@@ -16,4 +16,4 @@ Acceptance criteria:
 - Table-driven tests including malformed option values (zero, negative, non-integer, huge), every role, and a two-tenant case, on SQLite and PostgreSQL. Offline apart from the database connection (socket guard allowing only the test database).
 - docs/CHECKS.md states honestly: these options select who the command acts as; they are not authentication; anyone with shell access and the database configuration can name any user; the trust boundary remains shell access.
 New i18n keys: cli.operator.* (coder lists the final set, en + it)
-Status: todo
+Status: done
