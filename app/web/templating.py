@@ -123,6 +123,21 @@ def message_tools_nav(request: Request) -> bool:
         return False
 
 
+def content_tools_nav(request: Request) -> bool:
+    """Like `dns_tools_nav` for `content.analyze` (fail closed, no DB access)."""
+    from app.core.permissions import Action, TenantResource, can  # lazy: deps imports this module
+
+    try:
+        auth = getattr(request.state, "auth_session", None)
+        if auth is None or auth.active_tenant_id is None:
+            return False
+        return bool(
+            can(auth.principal, Action.CONTENT_ANALYZE, TenantResource(auth.active_tenant_id))
+        )
+    except Exception:
+        return False
+
+
 def render(request: Request, template: str, status_code: int = 200, **context: Any) -> HTMLResponse:
     """Render `template` for `request` (language, CSRF token and current path in the context)."""
     lang = request_language(request.scope)
@@ -143,6 +158,7 @@ def render(request: Request, template: str, status_code: int = 200, **context: A
         supported_languages=SUPPORTED_LANGUAGES,
         show_dns_tools=dns_tools_nav(request),
         show_message_tools=message_tools_nav(request),
+        show_content_tools=content_tools_nav(request),
         **context,
     )
     response = HTMLResponse(html, status_code=status_code)

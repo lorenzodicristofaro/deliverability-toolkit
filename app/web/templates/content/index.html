@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}{{ t("web.content.title") }} · {{ app_name }}{% endblock %}
+{% block content %}
+<h1>{{ t("web.content.title") }}</h1>
+<p>{{ t("web.content.intro") }}</p>
+
+<form class="dns-form" method="post" action="/tools/content" data-testid="content-form">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <p>
+    <label for="content-subject">{{ t("web.content.field.subject") }}</label><br>
+    <input id="content-subject" name="subject" type="text" size="100" autocomplete="off" spellcheck="false">
+  </p>
+  <p>
+    <label for="content-html">{{ t("web.content.field.html") }}</label><br>
+    <textarea id="content-html" name="html" rows="12" cols="100" spellcheck="false" autocomplete="off" wrap="off"></textarea>
+  </p>
+  <p>
+    <label for="content-text">{{ t("web.content.field.text") }}</label><br>
+    <textarea id="content-text" name="text" rows="8" cols="100" spellcheck="false" autocomplete="off" wrap="off"></textarea>
+  </p>
+  <p>
+    <label for="content-eml">{{ t("web.content.field.eml_text") }}</label><br>
+    <textarea id="content-eml" name="eml" rows="8" cols="100" spellcheck="false" autocomplete="off" wrap="off"></textarea>
+  </p>
+  <p id="content-file-row" hidden>
+    <label for="content-file">{{ t("web.content.field.eml") }}</label>
+    <input id="content-file" type="file" accept=".eml,message/rfc822,text/plain"
+           data-target="content-eml" data-max-bytes="{{ max_raw_bytes }}"
+           data-too-large-text="{{ t('web.content.file_too_large') }}"
+           data-unreadable-text="{{ t('web.content.file_unreadable') }}">
+  </p>
+  <p>
+    <label for="content-language">{{ t("web.content.field.language") }}</label>
+    <input id="content-language" name="language" type="text" size="8" maxlength="16" autocomplete="off">
+  </p>
+  {% if error %}<p class="form-error" role="alert" data-testid="content-error">{{ t(error) }}</p>{% endif %}
+  <button type="submit">{{ t("web.content.submit") }}</button>
+</form>
+<script src="/static/js/content_file.js" defer></script>
+
+{% if analysis is not none %}{% include "content/_result.html" %}{% endif %}
+{% endblock %}

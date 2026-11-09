@@ -185,6 +185,10 @@ def _message_form(_w: World, _role: str) -> dict[str, Any]:
     return {"raw": "Subject: probe\r\nFrom: a@example.com\r\n\r\nbody"}
 
 
+def _content_form(_w: World, _role: str) -> dict[str, Any]:
+    return {"text": "probe text", "subject": "probe"}
+
+
 def _content_empty(_w: World, _role: str) -> dict[str, Any]:
     return {"subject": "probe"}
 
@@ -237,6 +241,9 @@ MATRIX: dict[tuple[str, str], Entry] = {
     # message analysis UI (app.web.message): tenant-level `message.analyze`
     ("GET", "/tools/message"): Entry(Kind.DNS, own=_DNS_OWN),
     ("POST", "/tools/message"): Entry(Kind.DNS, body=_message_form, own=_DNS_OWN),
+    # content analysis UI (app.web.content): tenant-level `content.analyze`
+    ("GET", "/tools/content"): Entry(Kind.DNS, own=_DNS_OWN),
+    ("POST", "/tools/content"): Entry(Kind.DNS, body=_content_form, own=_DNS_OWN),
     # DNS tools API (app.api.v1.dns_tools)
     ("POST", "/api/v1/dns/lookup"): Entry(Kind.DNS, body=_dns_lookup, own=_DNS_OWN),
     ("POST", "/api/v1/dns/reverse"): Entry(Kind.DNS, body=_dns_reverse, own=_DNS_OWN),
