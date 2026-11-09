@@ -127,6 +127,7 @@ Carried over from M0-07 QA:
   - [x] M5-16 web UI content analyzer
   - [ ] M5-17a CLI operator tenant and user selection (opus)
   - [ ] M5-17 CLI `content`
+  - [ ] M5-17b ids above 32 bits give a 500 on PostgreSQL (opus)
   - [ ] M5-18 content rules admin service + REST + test on sample (opus)
   - [ ] M5-19 content rules admin UI
   - [ ] M5-20 DKIM selectors admin service + REST + check wiring (opus)
