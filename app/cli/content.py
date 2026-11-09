@@ -82,7 +82,10 @@ def read_bounded(stream: BinaryIO, limit: int) -> bytes:
 def _read(source: str, budget: int) -> bytes:
     try:
         if source == "-":
-            return read_bounded(sys.stdin.buffer, budget)
+            stream = getattr(sys.stdin, "buffer", None)  # stdin is None when closed (`<&-`)
+            if stream is None:
+                raise InputRejected(CANNOT_READ_KEY)
+            return read_bounded(stream, budget)
         with open(source, "rb") as fh:
             return read_bounded(fh, budget)
     except InputRejected:
