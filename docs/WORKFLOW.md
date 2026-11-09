@@ -44,7 +44,7 @@ Recommended operating point for Pro:
 Token hygiene:
 1. Tickets are small: one concern, a list of files, explicit acceptance criteria.
 2. `/clear` between unrelated tickets; `/compact` when a session grows long.
-3. PM, coder and QA run on Sonnet (`model: sonnet`); a stronger model only for hard design problems.
+3. PM runs on Sonnet and QA on Opus; the coder uses the ticket's `Model:` line, subject to the Sonnet → Opus escalation in section 3.
 4. Agents read only the files named in the ticket plus what they must.
 5. Keep CLAUDE.md short; detail lives in docs read on demand.
 6. Tests and linters produce concise output (`-q`, `--tb=short`).
@@ -72,12 +72,17 @@ Model rule: `opus` for authentication, permissions and tenant isolation, secret 
 the anti-SSRF network client, ReDoS protection, SPF logic, and parsers for raw messages and DMARC reports;
 `sonnet` for everything else.
 
+Escalation rule (maintainer decision 2026-11-09): once code written by Sonnet fails (QA CHANGES REQUESTED,
+red local tests or red CI), every further code or test change on that ticket goes to `coder` on `opus`,
+whatever the ticket's `Model:` line says. Start a new `coder` with the Opus override and give it the
+branch and the findings, because resuming the Sonnet agent would keep Sonnet. The 2-round limit is unchanged.
+
 ## 4. Loop
 
 1. GM reads CLAUDE.md, WORKFLOW.md, TODO.md and `docs/HANDOFF.md` (if present).
 2. GM asks `pm` to split the current milestone into tickets; GM reviews and sends back anything vague.
 3. For each ticket: GM delegates to `coder` (own worktree/branch) → coder implements, runs ruff + mypy + tests, commits, replies in max 15 lines.
-4. GM delegates to `qa-reviewer` (ticket + branch). If CHANGES REQUESTED, back to coder (max 2 rounds, then escalate to the human).
+4. GM delegates to `qa-reviewer` (ticket + branch). If CHANGES REQUESTED, back to coder, on Opus if the failed code came from Sonnet (section 3; max 2 rounds, then escalate to the human).
 5. On APPROVE and green tests the GM merges into `dev` and asks `pm` to update ticket status and TODO.md.
 6. At milestone end the GM runs the full suite on `dev`; if green, merges `dev` → `qa` and writes `docs/reports/<milestone>.md` (max 30 lines).
 7. Promotion `qa` → `main` is requested from the human.
