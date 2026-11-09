@@ -149,6 +149,7 @@ class Entry:
     # The case is marked xfail(strict=True), so it fails again once the bug is fixed.
     xfail: Mapping[tuple[str, str], str] = field(default_factory=dict)
     not_found: str = "api.error.not_found"  # i18n key of the route's 404 body
+    b_session: Mapping[str, int] = field(default_factory=dict)  # role -> status if not 404
 
 
 def _by_role(writers: int, readers: int) -> dict[str, int]:
@@ -312,7 +313,8 @@ MATRIX: dict[tuple[str, str], Entry] = {
     # content rules UI (app.web.rules). Reads need `rules.read`, every other route `rules.manage`
     # on the tenant path; the global tab is covered by tests/web/test_rules_ui.py. `POST /rules`
     # (create) and `/rules/test` take no rule id; the permitted roles stop at 422 / 200.
-    ("GET", "/rules"): Entry(Kind.COLLECTION, own=_RULES_READ),
+    # With no usable tenant, an instance admin lands on the global tab (no tenant B data).
+    ("GET", "/rules"): Entry(Kind.COLLECTION, own=_RULES_READ, b_session={"instance_admin": 200}),
     ("GET", "/rules/new"): Entry(Kind.COLLECTION, own=_by_role(200, 403)),
     ("POST", "/rules"): Entry(Kind.DNS, body=_rule_form, own=_by_role(422, 403)),
     ("POST", "/rules/{rule_id}/edit"): Entry(Kind.RULE, body=_rule_form, own=_RULE_WRITE_ON_B),
@@ -531,7 +533,7 @@ def _expected(case: Case) -> int:
         return 404  # every role, every verb, every cross-tenant or unassigned target
     if entry.kind is Kind.COLLECTION:
         if case.target == "b_session":
-            return 404
+            return entry.b_session.get(case.role, 404)
         table = entry.own if case.target == "own" else entry.smuggle
         return table[case.role]
     if entry.kind in (Kind.DNS, Kind.RULE):

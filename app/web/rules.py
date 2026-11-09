@@ -8,7 +8,9 @@ before the body is read. A denied principal gets a 403 page (404 for a missing t
 or malformed rule id), and the service is not reached with the body.
 
 Routes (all need a session; anonymous GET -> 303 /login, anonymous POST -> 401):
-- GET  /rules                   list (tenant tab: global rows read-only + the tenant's rows)
+- GET  /rules                   list (tenant tab: the tenant's rows, then global rows read-only;
+                                `?page=`; a session with no tenant defaults to the global tab if
+                                its user may manage it)
 - GET  /rules/new               create form
 - POST /rules                   create
 - GET  /rules/{rule_id}/edit    edit form
@@ -18,10 +20,12 @@ Routes (all need a session; anonymous GET -> 303 /login, anonymous POST -> 401):
 - GET/POST /rules/test          test on a sample (`service.test_pattern`, in a worker thread)
 
 Bodies are urlencoded and size-capped by `_read_capped`. NUL and lone surrogates are refused before
-the service and never echoed. The sample and pattern are echoed back only in the test panel;
-everything derived from rules and samples is autoescaped (no `|safe`) and shown through
-`visible`. Every response is `Cache-Control: no-store`. The caps are far below the CSRF middleware's
-default form cap, so an oversize no-JS post reaches this module's localized 413.
+the service and never echoed. A browser submits textarea newlines as CRLF: `_lf` turns them back
+into LF, and an edit that leaves the pattern as shown keeps the stored bytes. The sample and
+pattern are echoed back only in the test panel; everything derived from rules and samples is
+autoescaped (no `|safe`) and shown through `visible`. Every response is `Cache-Control: no-store`.
+The caps are far below the CSRF middleware's default form cap, so an oversize no-JS post reaches
+this module's localized 413.
 """
 
 from __future__ import annotations
@@ -64,6 +68,7 @@ _FORM_OVERHEAD_BYTES: Final = 4096
 MAX_SAVE_BYTES: Final = 3 * 4 * 4000 + _FORM_OVERHEAD_BYTES
 MAX_TEST_BYTES: Final = 3 * (MAX_SAMPLE_BYTES + 4 * 1100) + _FORM_OVERHEAD_BYTES
 _MAX_FIELDS: Final = 40
+PAGE_SIZE: Final = 200
 _WEIGHT = re.compile(r"-?[0-9]{1,6}")
 
 # Regex flag letters of the form, mapped to `re` flags (the service rejects anything it does not
@@ -122,7 +127,7 @@ TOO_LARGE_KEY: Final = "web.rules.error.too_large"
 INVALID_FLAGS_KEY: Final = "web.rules.error.invalid_flags"
 INVALID_WEIGHT_KEY: Final = "api.rules.error.invalid_weight"
 
-__all__ = ["MAX_SAVE_BYTES", "MAX_TEST_BYTES", "router", "visible"]
+__all__ = ["MAX_SAVE_BYTES", "MAX_TEST_BYTES", "PAGE_SIZE", "router", "visible"]
 
 
 # --- helpers ------------------------------------------------------------------------------------
@@ -143,6 +148,10 @@ def _parse_scope(value: str | None) -> RuleScope | None:
     if value in (RuleScope.TENANT.value, RuleScope.GLOBAL.value):
         return RuleScope(value)
     return None
+
+
+def _parse_page(value: str | None) -> int | None:
+    return 1 if value is None else parse_id(value)
 
 
 def _respond(
@@ -220,6 +229,10 @@ def _single(form: dict[str, list[str]], name: str) -> str | None:
     return values[0] if len(values) == 1 else None
 
 
+def _lf(value: str) -> str:
+    return value.replace("\r\n", "\n")
+
+
 def _bad_chars(value: str) -> bool:
     return "\x00" in value or any("\ud800" <= ch <= "\udfff" for ch in value)
 
@@ -244,6 +257,7 @@ class _Row:
     title: str
     can_edit: bool
     can_delete: bool
+    override_enabled: bool | None = None  # None: no rule of this tenant overrides this global row
 
 
 def _form_values(record: ContentRuleRecord | None) -> dict[str, Any]:
@@ -285,17 +299,29 @@ def _field_error(exc: RuleFieldInvalid) -> dict[str, str | None]:
 # --- list ---------------------------------------------------------------------------------------
 
 
+def _all_records(service: ContentRulesAdminService, scope: RuleScope) -> list[ContentRuleRecord]:
+    """Every row visible in `scope`, read in batches until a short one. The override markers need
+    all of the tenant's rows, wherever the page being shown falls."""
+    records: list[ContentRuleRecord] = []
+    while True:
+        batch = service.list_rules(scope, limit=MAX_LIMIT, offset=len(records))
+        records.extend(batch)
+        if len(batch) < MAX_LIMIT:
+            return records
+
+
 def _list_page(
     request: Request,
     service: ContentRulesAdminService,
     scope: RuleScope,
     *,
+    page: int = 1,
     status_code: int = 200,
     error: str | None = None,
     notice: str | None = None,
 ) -> Response:
     try:
-        records = service.list_rules(scope, limit=MAX_LIMIT)
+        records = _all_records(service, scope)
     except RulesAdminError as exc:
         return _failure(request, exc)
     can_manage = {s: _allowed(service.check_manage, s) for s in RuleScope}
@@ -307,6 +333,11 @@ def _list_page(
         text = catalogue.get(f"CONTENT_RULE.{record.seed_key}.title") if record.seed_key else None
         return text or record.name
 
+    own = [r for r in records if r.scope == RuleScope.TENANT.value]
+    shared = [r for r in records if r.scope == RuleScope.GLOBAL.value]
+    overrides = {r.seed_key: r.enabled for r in own if r.seed_key is not None}
+    last_page = max(1, (len(records) + PAGE_SIZE - 1) // PAGE_SIZE)
+    page = min(page, last_page)
     rows = [
         _Row(
             record,
@@ -317,8 +348,13 @@ def _list_page(
                 and can_manage[scope]
                 and not (record.scope == RuleScope.GLOBAL.value and record.seed_key is not None)
             ),
+            override_enabled=(
+                overrides.get(record.seed_key)
+                if record.scope == RuleScope.GLOBAL.value and record.seed_key is not None
+                else None
+            ),
         )
-        for record in records
+        for record in [*own, *shared][(page - 1) * PAGE_SIZE : page * PAGE_SIZE]
     ]
     return _respond(
         request,
@@ -327,6 +363,10 @@ def _list_page(
         scope=scope.value,
         tenant_rows=[r for r in rows if r.record.scope == RuleScope.TENANT.value],
         global_rows=[r for r in rows if r.record.scope == RuleScope.GLOBAL.value],
+        has_tenant_rows=bool(own),
+        has_global_rows=bool(shared),
+        page=page,
+        last_page=last_page,
         show_tenant_tab=_allowed(service.check_read, RuleScope.TENANT),
         show_global_tab=can_manage[RuleScope.GLOBAL],
         can_manage=can_manage[scope],
@@ -342,11 +382,20 @@ def rules_index(
     db: DbDep,
     scope: str | None = None,
     notice: str | None = None,
+    page: str | None = None,
 ) -> Response:
     parsed = _parse_scope(scope)
-    if parsed is None:
+    page_number = _parse_page(page)
+    if parsed is None or page_number is None:
         return _not_found(request)
-    return _list_page(request, _service(db, auth), parsed, notice=notice)
+    service = _service(db, auth)
+    if (
+        scope is None
+        and auth.active_tenant_id is None
+        and _allowed(service.check_manage, RuleScope.GLOBAL)
+    ):
+        parsed = RuleScope.GLOBAL
+    return _list_page(request, service, parsed, page=page_number, notice=notice)
 
 
 # --- create / edit ------------------------------------------------------------------------------
@@ -430,6 +479,8 @@ def _save_data(
         if value is None:
             return {}, echo, INVALID_FORM_KEY
         texts[name] = value
+    texts["pattern"] = _lf(texts["pattern"])
+    texts["advice"] = _lf(texts["advice"])
     letters = form.get("flags", [])
     enabled = _single(form, "enabled")
     if enabled is None:
@@ -490,6 +541,14 @@ async def _save(
         return _form_page(
             request, service, scope, target, values=values, status_code=422, plain_error=problem
         )
+    if target is not None:
+        try:
+            stored = service.get_rule(scope, target).pattern
+        except RulesAdminError as exc:
+            return _failure(request, exc)
+        # A textarea cannot carry a stored CR, so a pattern left as shown keeps its stored bytes.
+        if _lf(stored).replace("\r", "\n") == data["pattern"]:
+            data["pattern"] = stored
     try:
         if target is None:
             service.create(scope, data)
@@ -572,6 +631,8 @@ async def rules_toggle(
         return _list_page(request, service, parsed, status_code=422, error=INVALID_FORM_KEY)
     try:
         service.update(parsed, target, {"enabled": enabled == "1"})
+    except RuleFieldInvalid as exc:  # the service re-validates the stored pattern on any update
+        return _list_page(request, service, parsed, status_code=422, error=exc.key)
     except RulesAdminError as exc:
         return _failure(request, exc)
     return _redirect(parsed, "enabled" if enabled == "1" else "disabled")
@@ -662,7 +723,7 @@ async def rules_test(
     if form is None or fields is None or any(v is None for v in fields.values()):
         return _test_page(request, parsed, status_code=422, plain_error=INVALID_FORM_KEY)
     letters = form.get("flags", [])
-    texts = {n: v for n, v in fields.items() if v is not None}
+    texts = {n: _lf(v) for n, v in fields.items() if v is not None}
     if any(_bad_chars(v) for v in (*texts.values(), *letters)):
         return _test_page(request, parsed, status_code=422, plain_error=INVALID_CHARS_KEY)
     echo = {**texts, "flags": letters}

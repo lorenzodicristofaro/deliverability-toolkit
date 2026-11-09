@@ -139,13 +139,23 @@ def content_tools_nav(request: Request) -> bool:
 
 
 def rules_tools_nav(request: Request) -> bool:
-    """Like `dns_tools_nav` for `rules.read` (fail closed, no DB access)."""
-    from app.core.permissions import Action, TenantResource, can  # lazy: deps imports this module
+    """Like `dns_tools_nav` for `rules.read`; with no active tenant, for `rules.manage` on the
+    global scope, the only tab such a session can open (fail closed, no DB access)."""
+    from app.core.permissions import (  # lazy: deps imports this module
+        Action,
+        RuleScope,
+        RuleScopeResource,
+        TenantResource,
+        can,
+    )
 
     try:
         auth = getattr(request.state, "auth_session", None)
-        if auth is None or auth.active_tenant_id is None:
+        if auth is None:
             return False
+        if auth.active_tenant_id is None:
+            resource = RuleScopeResource(RuleScope.GLOBAL, None)
+            return bool(can(auth.principal, Action.RULES_MANAGE, resource))
         return bool(can(auth.principal, Action.RULES_READ, TenantResource(auth.active_tenant_id)))
     except Exception:
         return False

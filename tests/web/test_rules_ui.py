@@ -8,10 +8,13 @@ stays out of `SEEDLESS_MODULES`.
 
 from __future__ import annotations
 
+import dataclasses
 import datetime as dt
+import html
 import json
 import re
 from collections.abc import Iterator
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
@@ -19,6 +22,7 @@ from urllib.parse import urlencode
 import pytest
 from fastapi.testclient import TestClient
 from markupsafe import escape
+from sqlalchemy import update
 
 from app.core import i18n
 from app.core.config import Settings
@@ -26,7 +30,7 @@ from app.core.db import create_db_engine, create_session_factory
 from app.core.i18n import LOCALES_DIR
 from app.core.tenancy import TenantContext
 from app.main import create_app
-from app.models import Membership, MembershipRole, User
+from app.models import ContentRule, Membership, MembershipRole, User
 from app.repositories import GlobalContentRuleRepository, repo_for
 from app.repositories.content_rules import ContentRuleRecord
 from app.services.content_rules_admin import (
@@ -35,6 +39,7 @@ from app.services.content_rules_admin import (
     RuleTestOutcome,
     RuleTestStatus,
 )
+from app.web import rules as rules_module
 from app.web.rules import MAX_SAVE_BYTES, MAX_TEST_BYTES
 from tests.support.socket_guard import db_endpoint, install
 from tests.web.test_domains_ui import CSRF_HEADER, KEY, World, _login, _seed, get
@@ -67,11 +72,15 @@ def world(migrated_db_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[Wor
     db = create_session_factory(engine)()
     tenant_a, tenant_b, users, domains = _seed(db)
     root = User(email="root@example.com", is_instance_admin=True)
-    db.add(root)
+    lonely_admin = User(email="lonely-admin@example.com", is_instance_admin=True)
+    drifter = User(email="drifter@example.com")
+    db.add_all([root, lonely_admin, drifter])
     db.flush()
     db.add(Membership(user_id=root.id, tenant_id=tenant_a, role=MembershipRole.OWNER))
     db.commit()
     users["root"] = root.id
+    users["lonely_admin"] = lonely_admin.id  # no membership: the session resolves to no tenant
+    users["drifter"] = drifter.id
     settings = Settings(database_url=migrated_db_url, secret_key=KEY, encryption_key=KEY)  # type: ignore[call-arg]
     application = create_app(settings)
     try:
@@ -207,9 +216,64 @@ def oversize(w: World, path: str, size: int) -> Any:
     )
 
 
-def assert_no_hostile_markup(html: str) -> None:
+def assert_no_hostile_markup(text: str) -> None:
     for needle in HOSTILE_NEEDLES:
-        assert needle not in html, needle
+        assert needle not in text, needle
+
+
+class _RuleFormFields(HTMLParser):
+    """The fields a browser would submit for the page's rule form, as the HTML spec has it: one
+    LF right after `<textarea>` is dropped by the parser and every textarea newline is sent as
+    CRLF. The CSRF token is left out: `send` supplies the one of its own login."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.fields: dict[str, list[str]] = {}
+        self._in_form = False
+        self._select: str | None = None
+        self._textarea: str | None = None
+        self._text: list[str] = []
+
+    def _add(self, name: str, value: str) -> None:
+        if name != "csrf_token":
+            self.fields.setdefault(name, []).append(value)
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        attr = dict(attrs)
+        if tag == "form" and attr.get("data-testid") == "rules-form":
+            self._in_form = True
+        if not self._in_form:
+            return
+        if tag == "input" and attr.get("name"):
+            if attr.get("type") != "checkbox" or "checked" in attr:
+                self._add(str(attr["name"]), attr.get("value") or "")
+        elif tag == "select":
+            self._select = attr.get("name")
+        elif tag == "option" and "selected" in attr and self._select:
+            self._add(self._select, attr.get("value") or "")
+        elif tag == "textarea":
+            self._textarea = attr.get("name")
+            self._text = []
+
+    def handle_data(self, data: str) -> None:
+        if self._textarea is not None:
+            self._text.append(data)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "form":
+            self._in_form = False
+        elif tag == "textarea" and self._textarea is not None:
+            value = "".join(self._text).removeprefix("\n")
+            self._add(self._textarea, re.sub(r"\r\n|\r|\n", "\r\n", value))
+            self._textarea = None
+
+
+def browser_fields(page: str) -> dict[str, list[str]]:
+    parser = _RuleFormFields()
+    parser.feed(page)
+    parser.close()
+    assert parser.fields, "the page has no rule form"
+    return parser.fields
 
 
 def test_world_login_helper_returns_token(world: World) -> None:
@@ -224,7 +288,7 @@ def test_world_login_helper_returns_token(world: World) -> None:
     ("who", "status"), [("owner", 200), ("admin", 200), ("analyst", 200), ("viewer", 403)]
 )
 def test_list_role_matrix(world: World, who: str, status: int) -> None:
-    add_tenant_rule(world)
+    rule = add_tenant_rule(world)
     r = get(world, who, "/rules")
     assert r.status_code == status
     assert r.headers["cache-control"] == "no-store"
@@ -235,7 +299,9 @@ def test_list_role_matrix(world: World, who: str, status: int) -> None:
         assert "Zebra title" in r.text
         # buttons only when permitted (analyst reads, owner and admin manage)
         assert ('data-testid="rules-new"' in r.text) is (who != "analyst")
-        assert ("/delete?scope=tenant" in r.text) is (who != "analyst")
+        assert (f"/rules/{rule.id}/delete?scope=tenant" in r.text) is (who != "analyst")
+        assert (f"/rules/{rule.id}/edit?scope=tenant" in r.text) is (who != "analyst")
+        assert (f"/rules/{rule.id}/toggle?scope=tenant" in r.text) is (who != "analyst")
 
 
 def test_anonymous_gets_login_or_401(world: World, spy: list[str]) -> None:
@@ -311,6 +377,7 @@ def test_post_without_csrf_is_refused(world: World, spy: list[str]) -> None:
     rule = add_tenant_rule(world)
     for path, data in (
         ("/rules?scope=tenant", form()),
+        (f"/rules/{rule.id}/edit?scope=tenant", form(name="hijack")),
         (f"/rules/{rule.id}/toggle", {"enabled": "0"}),
         (f"/rules/{rule.id}/delete", None),
         ("/rules/test", {"kind": "keyword", "pattern": "x", "sample": "x"}),
@@ -339,6 +406,123 @@ def test_nav_link_visibility(world: World, who: str, visible_link: bool) -> None
     r = get(world, who, "/")
     assert r.status_code == 200
     assert ('href="/rules"' in r.text) is visible_link
+
+
+def test_instance_admin_without_a_tenant_lands_on_the_global_tab(world: World) -> None:
+    r = get(world, "lonely_admin", "/rules")
+    assert r.status_code == 200
+    assert 'data-testid="rules-global"' in r.text
+    assert 'data-testid="tab-global"' in r.text
+    assert 'data-testid="tab-tenant"' not in r.text
+    assert 'data-testid="nav-rules"' in r.text
+
+
+def test_no_tenant_default_does_not_widen_access(world: World) -> None:
+    # An explicit tenant tab stays a 404 for the admin; a plain user without a tenant gets no tab.
+    assert get(world, "lonely_admin", "/rules?scope=tenant").status_code == 404
+    r = get(world, "drifter", "/rules")
+    assert r.status_code == 404
+    assert 'data-testid="nav-rules"' not in r.text
+    assert get(world, "drifter", "/rules?scope=global").status_code == 403
+
+
+def test_member_still_defaults_to_the_tenant_tab(world: World) -> None:
+    r = get(world, "root", "/rules")
+    assert r.status_code == 200
+    assert 'data-testid="rules-tenant"' in r.text
+    assert 'data-testid="nav-rules"' in r.text
+
+
+# --- list: pages, seed keys and overrides --------------------------------------------------------
+
+
+def row_html(page: str, rule_id: int) -> str:
+    found = re.search(rf'<tr data-rule="{rule_id}">.*?</tr>', page, re.S)
+    assert found is not None, rule_id
+    return found.group(0)
+
+
+def test_disabled_override_past_the_first_batch_marks_the_global_row(world: World) -> None:
+    seeded = seeded_rule(world)
+    repo = repo_for(TenantContext(world.tenant_a, None), world.db).content_rules
+    for i in range(1100):
+        repo.create(rule_values(name=f"Bulk {i}", pattern=f"bulkword{i}", title=f"Bulk {i}"))
+    override = repo.create(
+        rule_values(name="Override", title="Override", seed_key=seeded.seed_key, enabled=False)
+    )
+    world.db.commit()
+    total = repo.count()
+    assert total > 1100
+    seen: list[str] = []
+    marked: str | None = None
+    path: str | None = "/rules?scope=tenant"
+    while path is not None:
+        r = get(world, "owner", path)
+        assert r.status_code == 200
+        seen += re.findall(r'<tr data-rule="(\d+)">', r.text)
+        if f'<tr data-rule="{seeded.id}">' in r.text:
+            marked = row_html(r.text, seeded.id)
+        link = re.search(r'href="([^"]+)" data-testid="rules-page-next"', r.text)
+        path = html.unescape(link.group(1)) if link else None
+    assert len(seen) == len(set(seen)) == total  # every row once
+    assert str(override.id) in seen
+    assert marked is not None
+    assert 'data-testid="rule-overridden-disabled"' in marked
+    assert str(seeded.seed_key) in marked
+
+
+def test_override_markers_and_seed_key_under_the_limit(world: World) -> None:
+    glob_on, glob_off, untouched = [
+        r for r in GlobalContentRuleRepository(world.db).list(limit=1000) if r.seed_key is not None
+    ][:3]
+    add_tenant_rule(world, name="On", seed_key=glob_on.seed_key)
+    add_tenant_rule(world, name="Off", seed_key=glob_off.seed_key, enabled=False)
+    foreign = repo_for(TenantContext(world.tenant_b, None), world.db).content_rules
+    foreign.create(rule_values(name="Foreign", seed_key=untouched.seed_key))
+    world.db.commit()
+    page = get(world, "owner", "/rules").text
+    on, off, plain = (row_html(page, r.id) for r in (glob_on, glob_off, untouched))
+    assert 'data-testid="rule-overridden"' in on
+    assert 'data-testid="rule-overridden-disabled"' not in on
+    assert 'data-testid="rule-overridden-disabled"' in off
+    assert 'data-testid="rule-overridden"' not in off
+    assert "rule-overridden" not in plain  # another tenant's override is not this tenant's
+    assert f"<code>{untouched.seed_key}</code>" in plain
+    assert "rule-overridden" not in get(world, "root", "/rules?scope=global").text
+
+
+@pytest.mark.parametrize("page", ["0", "-1", "abc", "1e3", "", "9" * 30])
+def test_malformed_page_is_404(world: World, page: str) -> None:
+    assert get(world, "owner", f"/rules?page={page}").status_code == 404
+
+
+def test_pages_navigate_and_leave_out_a_section_with_rows_elsewhere(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(rules_module, "PAGE_SIZE", 2)
+    rules = [add_tenant_rule(world, name=f"R{i}", pattern=f"word{i}") for i in range(3)]
+    first = get(world, "owner", "/rules").text
+    assert 'data-testid="rules-page-prev"' not in first
+    assert 'data-testid="rules-page-next"' in first
+    assert "Page 1 of" in first
+    assert [f'data-rule="{r.id}"' in first for r in rules] == [True, True, False]
+    assert 'data-testid="rules-global"' not in first  # not an empty "Global rules" section
+    second = get(world, "owner", "/rules?page=2").text
+    assert 'data-testid="rules-page-prev"' in second
+    assert f'data-rule="{rules[2].id}"' in second
+    assert f'data-rule="{rules[0].id}"' not in second
+    last_status = re.search(r"Page 1 of (\d+)", first)
+    assert last_status is not None
+    beyond = get(world, "owner", "/rules?page=99999")
+    assert beyond.status_code == 200  # past the end: the last page
+    assert f"Page {last_status.group(1)} of {last_status.group(1)}" in beyond.text
+    assert 'data-testid="rules-page-next"' not in beyond.text
+    assert 'data-testid="rules-tenant"' not in beyond.text
+
+
+def test_one_page_has_no_navigation(world: World) -> None:
+    add_tenant_rule(world)
+    assert 'data-testid="rules-pages"' not in get(world, "owner", "/rules").text
 
 
 # --- create, edit, enable/disable, delete -------------------------------------------------------
@@ -375,6 +559,122 @@ def test_create_edit_toggle_delete_round_trip(world: World) -> None:
     gone = send(world, "owner", f"/rules/{rule.id}/delete")
     assert gone.headers["location"] == "/rules?scope=tenant&notice=deleted"
     assert tenant_rules(world) == []
+
+
+def _stored_rule(w: World, broken: str, *, enabled: bool) -> ContentRuleRecord:
+    if broken == "blank_keyword":
+        return add_tenant_rule(w, pattern="   ", enabled=enabled)
+    rule = add_tenant_rule(w, kind="regex", pattern="fine", enabled=enabled)
+    w.db.execute(update(ContentRule).where(ContentRule.id == rule.id).values(pattern="("))
+    w.db.commit()
+    return rule
+
+
+@pytest.mark.parametrize("broken", ["blank_keyword", "bad_regex"])
+@pytest.mark.parametrize("target", ["0", "1"])
+def test_toggle_of_a_broken_stored_rule_is_a_list_error(
+    world: World, broken: str, target: str
+) -> None:
+    rule = _stored_rule(world, broken, enabled=target == "0")
+    before = tenant_rules(world)
+    r = send(world, "owner", f"/rules/{rule.id}/toggle?scope=tenant", {"enabled": target})
+    assert r.status_code == 422
+    assert 'data-testid="rules-error"' in r.text
+    assert "The pattern is not valid." in r.text
+    assert f'<tr data-rule="{rule.id}">' in r.text
+    assert tenant_rules(world) == before
+
+
+EDIT_ROUND_TRIPS = [
+    pytest.param({"kind": "regex", "pattern": "foo\nbar"}, id="multi-line-pattern"),
+    pytest.param({"advice": "line one\nline two\n\nline four"}, id="multi-line-advice"),
+    pytest.param({"kind": "regex", "pattern": "\nfoo"}, id="leading-lf-pattern"),
+    pytest.param({"advice": "\nleading"}, id="leading-lf-advice"),
+    pytest.param({"kind": "regex", "pattern": "foo\n", "advice": "tail\n"}, id="trailing-lf"),
+    pytest.param({"kind": "regex", "pattern": "foo\r\nbar"}, id="stored-crlf-pattern"),
+    pytest.param({"kind": "regex", "pattern": "foo\rbar"}, id="stored-cr-pattern"),
+    pytest.param(
+        {
+            "kind": "regex",
+            "pattern": "a  # one\nb  # two",
+            "flags": 2 | 8 | 16 | 64 | 256,
+            "weight": 37,
+            "category": "phishing",
+            "language": "pt-br",
+            "severity": "high",
+            "enabled": False,
+            "title": "Tit & <le>",
+            "advice": "x < y\n& z",
+        },
+        id="every-field",
+    ),
+    pytest.param({"pattern": "zebraword", "title": None, "seed_key": "SEEDED"}, id="override"),
+]
+
+
+@pytest.mark.parametrize("values", EDIT_ROUND_TRIPS)
+def test_unchanged_edit_in_a_browser_keeps_every_field(
+    world: World, values: dict[str, Any]
+) -> None:
+    if values.get("seed_key") == "SEEDED":
+        values = {**values, "seed_key": seeded_rule(world).seed_key}
+    rule = add_tenant_rule(world, **values)
+    (before,) = tenant_rules(world)
+    path = f"/rules/{rule.id}/edit?scope=tenant"
+    fields = browser_fields(get(world, "owner", path).text)
+    for name in ("pattern", "advice"):
+        stored = str(values.get(name, ""))
+        assert ("\r\n" in fields[name][0]) is any(c in stored for c in "\r\n"), name
+    r = send(world, "owner", path, fields)
+    assert r.status_code == 303, r.text
+    (after,) = tenant_rules(world)
+    assert dataclasses.replace(after, updated_at=before.updated_at) == before
+
+
+def test_unchanged_edit_of_a_global_rule_keeps_every_field(world: World) -> None:
+    rule = add_global_rule(world, kind="regex", pattern="foo\nbar", advice="one\ntwo")
+    before = global_rule(world, rule.id)
+    path = f"/rules/{rule.id}/edit?scope=global"
+    r = send(world, "root", path, browser_fields(get(world, "root", path).text))
+    assert r.status_code == 303, r.text
+    after = global_rule(world, rule.id)
+    assert dataclasses.replace(after, updated_at=before.updated_at) == before
+
+
+def test_create_stores_browser_crlf_as_lf(world: World) -> None:
+    r = send(
+        world,
+        "owner",
+        "/rules?scope=tenant",
+        form(kind="regex", pattern="foo\r\nbar", advice="one\r\ntwo\r\n"),
+    )
+    assert r.status_code == 303, r.text
+    (rule,) = tenant_rules(world)
+    assert (rule.pattern, rule.advice) == ("foo\nbar", "one\ntwo\n")
+
+
+def test_changed_pattern_is_stored_as_lf_not_kept(world: World) -> None:
+    rule = add_tenant_rule(world, kind="regex", pattern="foo\r\nbar")
+    r = send(
+        world,
+        "owner",
+        f"/rules/{rule.id}/edit?scope=tenant",
+        form(kind="regex", pattern="baz\r\nqux"),
+    )
+    assert r.status_code == 303, r.text
+    assert tenant_rules(world)[0].pattern == "baz\nqux"
+
+
+def test_form_echo_keeps_a_leading_newline(world: World) -> None:
+    r = send(
+        world,
+        "owner",
+        "/rules?scope=tenant",
+        form(kind="regex", pattern="\r\nfoo", advice="\r\nbar", weight="abc"),
+    )
+    assert r.status_code == 422
+    assert browser_fields(r.text)["pattern"] == ["\r\nfoo"]
+    assert browser_fields(r.text)["advice"] == ["\r\nbar"]
 
 
 @pytest.mark.parametrize(
@@ -600,6 +900,15 @@ def test_hostile_values_are_escaped_everywhere(world: World) -> None:
     assert "&lt;script&gt;" in edit.text
 
 
+@pytest.mark.parametrize("field", ["seed_key", "weight"])
+def test_hostile_seed_key_and_weight_are_escaped_in_the_echo(world: World, field: str) -> None:
+    r = send(world, "owner", "/rules?scope=tenant", form(**{field: HOSTILE}))
+    assert r.status_code == 422
+    assert_no_hostile_markup(r.text)
+    assert "&lt;script&gt;" in r.text
+    assert tenant_rules(world) == []
+
+
 def test_hostile_category_in_a_stored_rule_is_escaped_in_the_list(world: World) -> None:
     # The repository only accepts slugs, so exercise the template with a hostile verification
     # source on a global row (the other free-text value shown in the list).
@@ -706,6 +1015,40 @@ def test_real_outcomes(world: World, spy: list[str], data: dict[str, Any], outco
     for other, text in TEST_MESSAGES.items():
         if other != outcome:
             assert text not in r.text, (outcome, other)
+
+
+@pytest.mark.parametrize(
+    ("pattern", "sample"),
+    [("a\r\nb", "a\nb"), ("a\nb", "a\r\nb"), ("a\r\nb", "a\r\nb")],
+)
+def test_panel_treats_browser_crlf_as_lf(world: World, pattern: str, sample: str) -> None:
+    r = send(world, "owner", "/rules/test", {"kind": "regex", "pattern": pattern, "sample": sample})
+    assert r.status_code == 200
+    assert 'data-outcome="matched"' in r.text
+
+
+@pytest.mark.parametrize("field", ["pattern", "sample"])
+def test_panel_echo_keeps_a_leading_newline(world: World, field: str) -> None:
+    data = {"kind": "regex", "pattern": "x", "sample": "x", field: "\r\nfoo"}
+    r = send(world, "owner", "/rules/test", data)
+    assert r.status_code == 200
+    assert 'wrap="off">\n\nfoo</textarea>' in r.text
+
+
+def test_panel_holds_no_connection_and_leaves_the_event_loop(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    in_transaction: list[bool] = []
+    real = rules_module.run_in_threadpool
+
+    async def recording(func: Any, *args: Any, **kwargs: Any) -> Any:
+        in_transaction.append(func.__self__._db.in_transaction())
+        return await real(func, *args, **kwargs)
+
+    monkeypatch.setattr(rules_module, "run_in_threadpool", recording)
+    r = send(world, "owner", "/rules/test", {"kind": "keyword", "pattern": "x", "sample": "x"})
+    assert r.status_code == 200
+    assert in_transaction == [False]
 
 
 def test_matches_are_listed_and_truncation_is_stated(world: World) -> None:
@@ -826,7 +1169,7 @@ def test_every_rules_key_exists_in_both_locales() -> None:
     keys = _used_rule_keys()
     keys = {k for k in keys if not k.endswith(".")}
     assert len(keys) > 40
-    # keys composed in the templates ("web.rules.kind." ~ kind, ".flag.", ".scope.")
+    # every kind, flag and scope needs a label: listed here so a dropped value fails too
     keys |= {f"web.rules.kind.{k}" for k in ("regex", "keyword")}
     keys |= {f"web.rules.flag.{k}" for k in "imsxa"}
     keys |= {f"web.rules.scope.{k}" for k in ("tenant", "global")}

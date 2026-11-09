@@ -17,7 +17,8 @@
   </p>
   <p>
     <label for="test-pattern">{{ t("web.rules.field.pattern") }}</label><br>
-    <textarea id="test-pattern" name="pattern" rows="3" cols="80" maxlength="1024" spellcheck="false" autocomplete="off" wrap="off">{{ form.pattern }}</textarea>
+    <textarea id="test-pattern" name="pattern" rows="3" cols="80" maxlength="1024" spellcheck="false" autocomplete="off" wrap="off">
+{{ form.pattern }}</textarea>
   </p>
   <fieldset>
     <legend>{{ t("web.rules.field.flags") }}</legend>
@@ -27,7 +28,8 @@
   </fieldset>
   <p>
     <label for="test-sample">{{ t("web.rules.field.sample") }}</label><br>
-    <textarea id="test-sample" name="sample" rows="8" cols="100" spellcheck="false" autocomplete="off" wrap="off">{{ form.sample }}</textarea>
+    <textarea id="test-sample" name="sample" rows="8" cols="100" spellcheck="false" autocomplete="off" wrap="off">
+{{ form.sample }}</textarea>
   </p>
   <button type="submit">{{ t("web.rules.test.run") }}</button>
   <a href="/rules?scope={{ scope }}">{{ t("web.rules.action.back") }}</a>

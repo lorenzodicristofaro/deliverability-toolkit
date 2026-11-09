@@ -8,6 +8,7 @@
     <th scope="col">{{ t("web.rules.col.name") }}</th>
     <th scope="col">{{ t("web.rules.col.kind") }}</th>
     <th scope="col">{{ t("web.rules.col.pattern") }}</th>
+    <th scope="col">{{ t("web.rules.col.seed_key") }}</th>
     <th scope="col">{{ t("web.rules.col.category") }}</th>
     <th scope="col">{{ t("web.rules.col.severity") }}</th>
     <th scope="col">{{ t("web.rules.col.weight") }}</th>
@@ -20,9 +21,10 @@
   {% for row in rows %}
     {% set r = row.record %}
     <tr data-rule="{{ r.id }}">
-      <td class="dns-wrap">{{ row.title|visible }}{% if r.title is none and r.seed_key %}<br><small>{{ t("web.rules.seeded") }}</small>{% endif %}{% if r.locally_modified %}<br><small>{{ t("web.rules.pinned") }}</small>{% endif %}</td>
+      <td class="dns-wrap">{{ row.title|visible }}{% if r.title is none and r.seed_key %}<br><small>{{ t("web.rules.seeded") }}</small>{% endif %}{% if r.locally_modified %}<br><small>{{ t("web.rules.pinned") }}</small>{% endif %}{% if row.override_enabled is true %}<br><small data-testid="rule-overridden">{{ t("web.rules.overridden") }}</small>{% elif row.override_enabled is false %}<br><small data-testid="rule-overridden-disabled">{{ t("web.rules.overridden_disabled") }}</small>{% endif %}</td>
       <td>{{ kind_text[r.kind] }}</td>
       <td class="dns-wrap"><code>{{ r.pattern|visible }}</code></td>
+      <td class="dns-wrap">{% if r.seed_key %}<code>{{ r.seed_key|visible }}</code>{% endif %}</td>
       <td class="dns-wrap">{{ r.category|visible }}</td>
       <td>{{ severity_text[r.severity] }}</td>
       <td>{{ r.weight }}</td>
@@ -53,7 +55,7 @@
       </td>
     </tr>
   {% else %}
-    <tr><td colspan="10" class="empty-state">{{ t("web.rules.empty") }}</td></tr>
+    <tr><td colspan="11" class="empty-state">{{ t("web.rules.empty") }}</td></tr>
   {% endfor %}
   </tbody>
 </table>
@@ -69,20 +71,32 @@
 {% if flash %}<p class="dns-state dns-state-ok" role="status" data-testid="rules-flash">{{ t(flash) }}</p>{% endif %}
 {% if error %}<p class="form-error" role="alert" data-testid="rules-error">{{ t(error) }}</p>{% endif %}
 
+{#- A section with rows only on another page is left out rather than shown as empty. -#}
 {% if scope == "tenant" %}
+{% if tenant_rows or not has_tenant_rows %}
 <section>
   <h2>{{ t("web.rules.section.tenant") }}</h2>
   {{ rule_table(tenant_rows, "tenant") }}
 </section>
+{% endif %}
+{% if global_rows or not has_global_rows %}
 <section>
   <h2>{{ t("web.rules.section.global") }}</h2>
   <p>{{ t("web.rules.global_readonly") }}</p>
   {{ rule_table(global_rows, "global") }}
 </section>
+{% endif %}
 {% else %}
 <section>
   <h2>{{ t("web.rules.section.global") }}</h2>
   {{ rule_table(global_rows, "global") }}
 </section>
+{% endif %}
+{% if last_page > 1 %}
+<p data-testid="rules-pages">
+  {% if page > 1 %}<a href="/rules?scope={{ scope }}&amp;page={{ page - 1 }}" data-testid="rules-page-prev">{{ t("web.rules.page.prev") }}</a> · {% endif %}
+  <span data-testid="rules-page-status">{{ t("web.rules.page.status", page=page, pages=last_page) }}</span>
+  {% if page < last_page %} · <a href="/rules?scope={{ scope }}&amp;page={{ page + 1 }}" data-testid="rules-page-next">{{ t("web.rules.page.next") }}</a>{% endif %}
+</p>
 {% endif %}
 {% endblock %}

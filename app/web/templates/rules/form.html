@@ -24,7 +24,8 @@
   </p>
   <p>
     <label for="rule-pattern">{{ t("web.rules.field.pattern") }}</label><br>
-    <textarea id="rule-pattern" name="pattern" rows="3" cols="80" maxlength="1024" spellcheck="false" autocomplete="off" wrap="off">{{ form.pattern }}</textarea>
+    <textarea id="rule-pattern" name="pattern" rows="3" cols="80" maxlength="1024" spellcheck="false" autocomplete="off" wrap="off">
+{{ form.pattern }}</textarea>
   </p>
   <fieldset>
     <legend>{{ t("web.rules.field.flags") }}</legend>
@@ -57,7 +58,8 @@
   </p>
   <p>
     <label for="rule-advice">{{ t("web.rules.field.advice") }}</label><br>
-    <textarea id="rule-advice" name="advice" rows="4" cols="80" maxlength="2000" autocomplete="off">{{ form.advice }}</textarea>
+    <textarea id="rule-advice" name="advice" rows="4" cols="80" maxlength="2000" autocomplete="off">
+{{ form.advice }}</textarea>
   </p>
   {% if scope == "tenant" %}
   <p>
