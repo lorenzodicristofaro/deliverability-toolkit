@@ -12,7 +12,8 @@ change. A disabled tenant row does not hide an enabled global row of the same na
 Fallback: no global row at all, enabled or not, means the seed sync failed or never ran, and the
 seed file stands in for the global rows. Global rows that exist but are all disabled are the
 admin's choice: the list can then be empty, which the check reports as "nothing probed". A seed
-file that cannot be read gives `names=None`, so the check loads it and reports its own `error`.
+file that cannot be read gives `names=None`: the check, or the SSE stream, then tries to load it and
+reports status `error`.
 
 At most `MAX_PROBE_SELECTORS` names are probed, on API and SSE alike. The admin caps normally keep
 the list under it; concurrent creates can overshoot, and then the last names in sort order are
@@ -40,7 +41,7 @@ MAX_PROBE_SELECTORS: Final = 250
 
 @dataclass(frozen=True, slots=True)
 class ProbeSelectors:
-    names: tuple[str, ...] | None  # None: the check uses the seed file itself
+    names: tuple[str, ...] | None  # None: the check or stream loads the seed file itself
     dropped: int = 0
 
 

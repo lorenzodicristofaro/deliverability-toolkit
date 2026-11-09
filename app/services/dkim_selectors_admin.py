@@ -23,6 +23,10 @@ Deliberate seed semantics:
 - A seeded global row cannot be deleted (`SeededSelectorNotDeletable`, 409): the seed sync would
   recreate it. Disabling it is the supported way to turn it off.
 
+A selector must also be a name the probe can query: `<selector>._domainkey.example.com` has to pass
+`to_dns_name` unchanged, and `*` is refused because it would ask DNS for a wildcard owner name. The
+repository's own label rule is looser; such a row would fail as `invalid_name` on every run.
+
 Caps, so the DNS use of a probe stays bounded: a create is refused (422, `too_many`) when the
 scope already holds `MAX_TENANT_SELECTORS` rows of that tenant, or `MAX_SELECTORS` global rows.
 Disabled rows count, so re-enabling one can never exceed the cap. Concurrent creates can overshoot
@@ -42,6 +46,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.orm.exc import StaleDataError
 
 from app.checks.dkim_selectors import MAX_SELECTORS
+from app.core.domain_names import InvalidDomainName, to_dns_name
 from app.core.permissions import (
     Action,
     Principal,
@@ -59,6 +64,7 @@ from app.repositories.dkim_selectors import (
     DkimSelectorRecord,
     DkimSelectorRepository,
     SelectorTaken,
+    clean_global_values,
 )
 from app.services.dkim_probe_selectors import all_visible
 
@@ -188,6 +194,24 @@ class DkimSelectorsAdminService:
             raise SelectorFieldInvalid("body", "unknown_field")
         return dict(data)
 
+    @staticmethod
+    def _check_selector(values: Mapping[str, Any]) -> None:
+        """The repository's own reasons first, then the probe's rule. Stores nothing."""
+        if "selector" not in values:
+            return
+        selector = values["selector"]
+        try:
+            clean_global_values({"selector": selector})
+        except DkimSelectorInvalid as exc:
+            raise SelectorFieldInvalid(exc.field, exc.reason) from None
+        name = f"{selector}._domainkey.example.com"
+        try:
+            probeable = selector != "*" and to_dns_name(name) == name
+        except InvalidDomainName:
+            probeable = False
+        if not probeable:
+            raise SelectorFieldInvalid("selector", "invalid_label")
+
     def _check_capacity(self, scope: RuleScope) -> None:
         if scope is RuleScope.GLOBAL:
             full = GlobalDkimSelectorRepository(self._db).count() >= MAX_SELECTORS
@@ -228,6 +252,7 @@ class DkimSelectorsAdminService:
     def create(self, scope: RuleScope, data: Mapping[str, Any]) -> DkimSelectorRecord:
         self.check_manage(scope)
         values = self._payload(data)
+        self._check_selector(values)
         self._check_capacity(scope)
         try:
             if scope is RuleScope.GLOBAL:
@@ -255,6 +280,7 @@ class DkimSelectorsAdminService:
             for name in sorted(SEED_MANAGED_FIELDS & values.keys()):
                 if values[name] != getattr(current, name):
                     raise SelectorFieldInvalid(name, "seed_managed")
+        self._check_selector(values)
         if scope is RuleScope.GLOBAL:
             values["locally_modified"] = True
         try:

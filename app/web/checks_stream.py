@@ -25,6 +25,7 @@ The client (M3-17) must close its EventSource on `done`, otherwise the browser r
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from collections.abc import AsyncGenerator, AsyncIterator, Callable, Sequence
 from typing import Annotated, Final, cast
@@ -33,9 +34,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
 from app.api.v1.checks import ResolverDep
-from app.checks.dkim import SelectorResult, probe_selectors, summarize
-from app.checks.dkim_selectors import list_selectors
-from app.checks.models import CheckContext, CheckResult
+from app.checks.dkim import DkimCheck, SelectorResult, probe_selectors, summarize
+from app.checks.dkim_selectors import KnowledgeError, list_selectors
+from app.checks.models import CheckContext, CheckResult, finding
 from app.core.domain_names import InvalidDomainName, to_ascii_domain, to_dns_name
 from app.core.i18n import t
 from app.core.permissions import Action, DomainResource, TenantResource, can
@@ -48,6 +49,7 @@ from app.web.domains import _domain_id
 from app.web.templating import env, request_language
 
 router = APIRouter()
+log = logging.getLogger(__name__)
 
 STREAM_DEADLINE_S: Final = 60.0
 MAX_NAME_LEN: Final = 1024
@@ -138,6 +140,41 @@ def _row(res: SelectorResult) -> dict[str, object]:
     }
 
 
+def _done_frame(lang: str, result: CheckResult, *, complete: bool, deadline: bool) -> str:
+    states = [sel["state"] for sel in result.data["selectors"]]
+    summary = {
+        "probed": result.data["probed"],
+        "found": result.data["found"],
+        "not_found": states.count("not_found"),
+        "errors": states.count("error"),
+    }
+    return sse(
+        "done",
+        _render(
+            lang,
+            kind="done",
+            summary=summary,
+            findings=result.findings,
+            complete=complete,
+            deadline=deadline,
+            status=result.status,
+        ),
+    )
+
+
+def _not_evaluated(ctx: CheckContext, domain: str) -> CheckResult:
+    """The selector list could not be loaded: same verdict as the runner gives on the API."""
+    return CheckResult.build(
+        check_id=DkimCheck.id,
+        target=domain,
+        findings=[finding("CHECK_INTERNAL_ERROR", "medium", remediation=False)],
+        evaluated=False,
+        started_at=ctx.clock(),
+        duration_ms=0,
+        data={"enumerable": False, "probed": 0, "found": 0, "selectors": []},
+    )
+
+
 async def dkim_events(
     ctx: CheckContext,
     domain: str,
@@ -148,8 +185,19 @@ async def dkim_events(
     deadline_s: float = STREAM_DEADLINE_S,
     on_result: Callable[[CheckResult], None] | None = None,
 ) -> AsyncIterator[str]:
-    """SSE frames for one probe run. Closing this generator closes the probe."""
-    names = tuple(selectors) if selectors is not None else tuple(s.name for s in list_selectors())
+    """SSE frames for one probe run. Closing this generator closes the probe. A seed file that
+    cannot be read still ends with a `done` event, status `error`."""
+    try:
+        names = (
+            tuple(selectors) if selectors is not None else tuple(s.name for s in list_selectors())
+        )
+    except KnowledgeError:
+        log.warning("dkim selector seed unreadable", extra={"event": "checks.dkim.seed_unreadable"})
+        failed = _not_evaluated(ctx, domain)
+        if on_result is not None:
+            on_result(failed)
+        yield _done_frame(lang, failed, complete=False, deadline=False)
+        return
     results: list[SelectorResult] = []
     complete = True
     started = ctx.clock()
@@ -183,25 +231,7 @@ async def dkim_events(
         )
         if on_result is not None:
             on_result(result)
-        states = [sel["state"] for sel in result.data["selectors"]]
-        summary = {
-            "probed": result.data["probed"],
-            "found": result.data["found"],
-            "not_found": states.count("not_found"),
-            "errors": states.count("error"),
-        }
-        yield sse(
-            "done",
-            _render(
-                lang,
-                kind="done",
-                summary=summary,
-                findings=result.findings,
-                complete=complete and not dropped,
-                deadline=not complete,
-                status=result.status,
-            ),
-        )
+        yield _done_frame(lang, result, complete=complete and not dropped, deadline=not complete)
     finally:
         await probe.aclose()
 

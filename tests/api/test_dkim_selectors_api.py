@@ -533,3 +533,29 @@ def test_tenant_cap_is_a_422_too_many(world: World) -> None:
 def test_too_many_exists_in_both_languages(lang: str) -> None:
     key = "api.dkim_selectors.error.too_many"
     assert t(key, lang) != key
+
+
+# --- the selector must be a name the probe can query ---------------------------------------------
+
+NOT_PROBEABLE = ["a_b", "a_", "_", "a/b", "-a", "a-", "$x", "<x>", "a\\046b", "xn--a", "*"]
+
+
+@pytest.mark.parametrize("selector", NOT_PROBEABLE)
+def test_post_refuses_a_selector_the_probe_cannot_query(world: World, selector: str) -> None:
+    before = rows(world.db)
+    response = call(world, "owner", "POST", URL, json={"selector": selector})
+    assert_problem(
+        response, 422, "api.dkim_selectors.error.invalid_selector", "selector", "invalid_label"
+    )
+    assert rows(world.db) == before
+
+
+@pytest.mark.parametrize("selector", NOT_PROBEABLE)
+def test_patch_refuses_a_selector_the_probe_cannot_query(world: World, selector: str) -> None:
+    target = make(world)
+    before = rows(world.db)
+    response = call(world, "owner", "PATCH", f"{URL}/{target['id']}", json={"selector": selector})
+    assert_problem(
+        response, 422, "api.dkim_selectors.error.invalid_selector", "selector", "invalid_label"
+    )
+    assert rows(world.db) == before

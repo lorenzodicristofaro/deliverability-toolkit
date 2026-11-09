@@ -5,6 +5,7 @@ Runs on SQLite and, when TEST_DATABASE_URL is set, on PostgreSQL. No network.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -15,7 +16,9 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.exc import StaleDataError
 
-from app.checks.dkim_selectors import MAX_SELECTORS
+from app.checks.dkim import DkimCheck
+from app.checks.dkim_selectors import MAX_SELECTORS, list_selectors
+from app.checks.models import CheckContext, Target
 from app.core.db import create_db_engine, create_session_factory
 from app.core.permissions import MembershipGrant, Principal, RuleScope
 from app.core.tenancy import TenantContext
@@ -33,6 +36,7 @@ from app.services.dkim_selectors_admin import (
     SelectorNotFound,
 )
 from app.services.seed_sync import sync_dkim_selectors
+from tests.support.dns_zones import parse_zones
 from tests.support.socket_guard import db_endpoint, install
 
 SEED_KEY = "selector1"
@@ -545,3 +549,56 @@ def test_a_full_scope_can_still_edit_and_delete(world: World) -> None:
     assert service.update(TENANT, mine.id, {"enabled": False}).enabled is False
     service.delete(TENANT, mine.id)
     assert service.create(TENANT, {"selector": "replacement"}).selector == "replacement"
+
+
+# --- the selector must be a name the probe can query ---------------------------------------------
+
+NOT_PROBEABLE = ["a_b", "a_", "_", "a/b", "-a", "a-", "$x", "<x>", "a\\046b", "xn--a", "*"]
+PROBEABLE = ["s1", "k-1", "20240101", "_x", "selector1", "a" * 63]
+
+
+@pytest.mark.parametrize("selector", NOT_PROBEABLE)
+@pytest.mark.parametrize("who_scope", [("owner", TENANT), ("root", GLOBAL)])
+def test_create_refuses_a_selector_the_probe_cannot_query(
+    world: World, who_scope: tuple[str, RuleScope], selector: str
+) -> None:
+    who, scope = who_scope
+    before = world.rows()
+    with pytest.raises(SelectorFieldInvalid) as exc:
+        world.service(who).create(scope, {"selector": selector})
+    assert (exc.value.field, exc.value.reason) == ("selector", "invalid_label")
+    assert exc.value.key == "api.dkim_selectors.error.invalid_selector"
+    assert world.rows() == before
+
+
+@pytest.mark.parametrize("selector", NOT_PROBEABLE)
+@pytest.mark.parametrize("who_scope", [("owner", TENANT), ("root", GLOBAL)])
+def test_update_refuses_a_selector_the_probe_cannot_query(
+    world: World, who_scope: tuple[str, RuleScope], selector: str
+) -> None:
+    who, scope = who_scope
+    record = world.service(who).create(scope, {"selector": "valid-name"})
+    with pytest.raises(SelectorFieldInvalid) as exc:
+        world.service(who).update(scope, record.id, {"selector": selector})
+    assert (exc.value.field, exc.value.reason) == ("selector", "invalid_label")
+    assert world.service(who).get_selector(scope, record.id).selector == "valid-name"
+
+
+@pytest.mark.parametrize("selector", PROBEABLE)
+def test_probeable_selector_is_accepted(world: World, selector: str) -> None:
+    assert world.service("owner").create(TENANT, {"selector": selector}).selector == selector
+
+
+@pytest.mark.parametrize("selector", [s.name for s in list_selectors()])
+def test_every_seeded_selector_passes_the_admin_rule(selector: str) -> None:
+    DkimSelectorsAdminService._check_selector({"selector": selector})
+
+
+@pytest.mark.parametrize("selector", [*PROBEABLE, *(s.name for s in list_selectors())])
+def test_accepted_selectors_really_probe(selector: str) -> None:
+    """No accepted name may end as the `invalid_name` error the rule exists to prevent."""
+    resolver = parse_zones({"zones": {"default": []}}).resolver("default")
+    result = asyncio.run(
+        DkimCheck([selector]).run(CheckContext(resolver=resolver), Target(domain="example.com"))
+    )
+    assert result.data["selectors"][0]["state"] == "not_found"

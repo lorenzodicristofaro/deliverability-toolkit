@@ -18,7 +18,8 @@ from fastapi.testclient import TestClient
 from sqlalchemy import delete, event
 
 from app.api.v1 import checks as api_checks
-from app.checks.dkim_selectors import list_selectors
+from app.checks import dkim as dkim_mod
+from app.checks.dkim_selectors import KnowledgeError, list_selectors
 from app.checks.models import CheckContext
 from app.cli import check as cli_check
 from app.core.config import Settings
@@ -29,7 +30,9 @@ from app.dns.types import DnsQuestion, DnsResult
 from app.main import create_app
 from app.models.dkim_selector import DkimSelector
 from app.repositories import GlobalDkimSelectorRepository, repo_for
+from app.services import dkim_probe_selectors as probe
 from app.services.dkim_probe_selectors import MAX_PROBE_SELECTORS
+from app.web import checks_stream
 from tests.api.test_domains import KEY, World, _seed, call
 from tests.checks import test_acceptance_m3 as m3
 from tests.support.socket_guard import db_endpoint, install
@@ -395,3 +398,55 @@ def test_denied_caller_never_reads_the_table(
     assert call(w, who, "GET", stream_path(rig, domain), headers=STREAM).status_code == status
     assert not [s for s in seen if "dkim_selectors" in s]
     assert rig.queries == []
+
+
+# --- what a result shows, and an unreadable seed -------------------------------------------------
+
+
+def test_client_viewer_sees_the_name_but_never_provider_or_notes(rig: m3.Rig) -> None:
+    tenant_row(rig, "mine", provider="secret-provider", notes="SECRET-NOTE")
+    w = rig.world
+    rest = call(w, "viewer", "POST", f"/api/v1/domains/{w.domains['assigned']}/checks/dkim")
+    sse = call(w, "viewer", "GET", stream_path(rig), headers=STREAM)
+    for response in (rest, sse):
+        assert response.status_code == 200, response.text[:300]
+        assert "mine" in response.text
+        assert "secret-provider" not in response.text
+        assert "SECRET-NOTE" not in response.text
+
+
+def _break_seed(rig: m3.Rig, monkeypatch: pytest.MonkeyPatch) -> None:
+    def broken() -> Any:
+        raise KnowledgeError("seed unreadable")
+
+    for module in (probe, checks_stream, dkim_mod):
+        monkeypatch.setattr(module, "list_selectors", broken)
+    w = rig.world
+    w.db.execute(delete(DkimSelector).where(DkimSelector.scope == "global"))
+    w.db.commit()
+
+
+@pytest.mark.parametrize("route", ["domain", "free"])
+def test_unreadable_seed_ends_the_stream_with_an_error_verdict(
+    rig: m3.Rig, monkeypatch: pytest.MonkeyPatch, route: str
+) -> None:
+    _break_seed(rig, monkeypatch)
+    path = stream_path(rig) if route == "domain" else f"/tools/dkim/stream?name={D}"
+    response = call(rig.world, "analyst", "GET", path, headers=STREAM)
+    assert response.status_code == 200
+    events = parse_sse(response.text)
+    assert [name for name, _ in events] == ["done"]
+    match = DONE_STATUS.search(events[0][1])
+    assert match is not None and (match[1], match[2]) == ("0", "error")
+    assert 'data-code="CHECK_INTERNAL_ERROR"' in events[0][1]
+    assert DEADLINE_TEXT not in events[0][1]
+    assert rig.queries == []
+
+
+def test_unreadable_seed_is_an_error_on_rest_too(
+    rig: m3.Rig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _break_seed(rig, monkeypatch)
+    doc = api(rig)
+    assert doc["status"] == "error"
+    assert codes(doc) == {"CHECK_INTERNAL_ERROR"}

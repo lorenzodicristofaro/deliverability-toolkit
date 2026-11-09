@@ -11,7 +11,12 @@ because the global repositories cannot reach them. Rules, keyed by `seed_key`:
   selectors: enabled and notes; for content rules: every field the seed sets, so the row is
   skipped); the other seed-owned fields still follow the seed;
 - a row whose entry left the seed is disabled, never deleted; a locally modified row keeps its
-  enabled flag (the admin's choice) and is reported in `kept_local`.
+  enabled flag (the admin's choice) and is reported in `kept_local`;
+- DKIM only: an instance-managed global row (no seed_key) whose selector a seed entry now names is
+  adopted before the sync: it gets that seed_key and `locally_modified`, so it keeps `enabled` and
+  `notes` like any locally modified seeded row, instead of failing every sync on the unique
+  selector. Content rules cannot clash this way: only their seed_key is unique, and the admin API
+  never sets it on a global row.
 
 The seed file is parsed and every entry validated before the first write, so a malformed seed
 raises `SeedSyncError` and writes nothing. Writes are flushed, not committed: `run_seed_sync`
@@ -21,7 +26,7 @@ on any error. Offline: no network.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence, Set
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
@@ -42,6 +47,7 @@ from app.repositories.content_rules import (
 )
 from app.repositories.dkim_selectors import (
     DkimSelectorInvalid,
+    DkimSelectorRecord,
     GlobalDkimSelectorRepository,
     clean_global_values,
 )
@@ -213,12 +219,27 @@ def load_dkim_selector_seed(
     return tuple(entries)
 
 
+def _adopt_unseeded_selectors(store: GlobalDkimSelectorRepository, keys: Set[str]) -> None:
+    """Link instance-managed global rows to the seed entry of the same name (module docstring)."""
+    rows: list[DkimSelectorRecord] = []
+    while True:
+        page = store.list(limit=MAX_LIMIT, offset=len(rows))
+        rows.extend(page)
+        if len(page) < MAX_LIMIT:
+            break
+    for row in rows:
+        if row.seed_key is None and row.selector in keys:
+            store.update(row.id, {"seed_key": row.selector, "locally_modified": True})
+
+
 def sync_dkim_selectors(
     session: Session, seeds_dir: Path = SEEDS_DIR, today: date | None = None
 ) -> SeedSyncResult:
     """Sync global DKIM selectors from the seed on `session` (flushed, not committed)."""
     entries = load_dkim_selector_seed(seeds_dir, today)
-    return sync_seed(GlobalDkimSelectorRepository(session), entries, local_fields=DKIM_LOCAL_FIELDS)
+    store = GlobalDkimSelectorRepository(session)
+    _adopt_unseeded_selectors(store, {e.key for e in entries})
+    return sync_seed(store, entries, local_fields=DKIM_LOCAL_FIELDS)
 
 
 # --- content rules -------------------------------------------------------------------------------

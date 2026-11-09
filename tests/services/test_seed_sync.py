@@ -257,16 +257,94 @@ def test_sync_never_touches_tenant_or_unseeded_global_rows(world: World, tmp_pat
     assert set(world.by_key()) == {"aa1", "zz9", "bb1"}
 
 
-def test_seed_entry_clashing_with_admin_global_row_fails_whole_sync(
+def _admin_row(world: World, selector: str, **values: Any) -> Any:
+    record = GlobalDkimSelectorRepository(world.session).create(
+        {"selector": selector, **values}, actor=None
+    )
+    world.session.commit()
+    return record
+
+
+def _row(world: World, selector: str) -> Any:
+    world.session.expire_all()
+    rows = GlobalDkimSelectorRepository(world.session).list(limit=MAX_LIMIT)
+    return next(r for r in rows if r.selector == selector)
+
+
+def test_seed_entry_naming_an_admin_global_row_adopts_it(world: World, tmp_path: Path) -> None:
+    admin = _admin_row(world, "bb1", notes="admin note", enabled=False)
+    result = _sync(world, _seed(tmp_path, [_entry("aa1"), _entry("bb1")]))
+    assert "bb1" in result.kept_local and "bb1" not in result.created
+    row = _row(world, "bb1")
+    assert row.id == admin.id  # the same row, not a new one
+    assert (row.seed_key, row.locally_modified) == ("bb1", True)
+    assert (row.notes, row.enabled) == ("admin note", False)  # the admin's values survive
+    assert row.status == "verified"  # seed-owned fields follow the seed, as on any seeded row
+    assert world.count() == 2
+
+
+def test_adoption_is_idempotent(world: World, tmp_path: Path) -> None:
+    _admin_row(world, "bb1", notes="admin note")
+    seeds = _seed(tmp_path, [_entry("bb1")])
+    _sync(world, seeds)
+    before = _row(world, "bb1")
+    assert not _sync(world, seeds).changed
+    assert _row(world, "bb1") == before
+
+
+def test_row_the_seed_does_not_name_is_not_adopted(world: World, tmp_path: Path) -> None:
+    _admin_row(world, "zz9", notes="mine")
+    _sync(world, _seed(tmp_path, [_entry("aa1")]))
+    row = _row(world, "zz9")
+    assert (row.seed_key, row.locally_modified, row.notes) == (None, False, "mine")
+
+
+def test_tenant_row_of_the_same_name_is_never_adopted(world: World, tmp_path: Path) -> None:
+    ctx = TenantContext(world.tenant, None)
+    tenant = repo_for(ctx, world.session).dkim_selectors.create({"selector": "bb1", "notes": "t"})
+    world.session.commit()
+    _sync(world, _seed(tmp_path, [_entry("bb1")]))
+    world.session.expire_all()
+    after = repo_for(ctx, world.session).dkim_selectors.get(tenant.id)
+    assert after is not None
+    assert (after.scope, after.seed_key, after.notes) == ("tenant", None, "t")
+
+
+def test_real_sync_with_a_clash_still_syncs_content_rules(world: World, tmp_path: Path) -> None:
+    """The whole sync is one transaction: a clash used to roll the content rules back too."""
+    _admin_row(world, "bb1", notes="admin note")
+    seeds = _seed(tmp_path, [_entry("aa1"), _entry("bb1")])
+    _rules_seed(seeds, [_rule("adopted_clash_rule")])
+    results = run_seed_sync(world.factory, seeds)
+    assert results["content_rules"].created == ("adopted_clash_rule",)
+    assert "aa1" in results["dkim_selectors"].created
+    world.session.expire_all()
+    assert "adopted_clash_rule" in _global_rules(world)
+    assert _row(world, "bb1").seed_key == "bb1"
+
+
+def test_content_rule_named_like_a_new_seed_key_does_not_clash(
     world: World, tmp_path: Path
 ) -> None:
-    GlobalDkimSelectorRepository(world.session).create({"selector": "bb1"}, actor=None)
+    """Content rules have no such exposure: only seed_key is unique, and this row has none."""
+    GlobalContentRuleRepository(world.session).create(
+        {
+            "name": "new_seed_rule",
+            "kind": "keyword",
+            "pattern": "admin",
+            "weight": 1,
+            "category": "spam",
+            "severity": "low",
+            "title": "Admin title",
+        },
+        actor=None,
+    )
     world.session.commit()
-    before = world.count()
-    with pytest.raises(SelectorTaken):
-        sync_dkim_selectors(world.session, _seed(tmp_path, [_entry("aa1"), _entry("bb1")]), TODAY)
-    world.session.rollback()
-    assert world.count() == before
+    result = _sync_rules(world, _rules_seed(tmp_path, [_rule("new_seed_rule")]))
+    assert result.created == ("new_seed_rule",)
+    rows = GlobalContentRuleRepository(world.session).list(limit=MAX_LIMIT)
+    same = [r for r in rows if r.name == "new_seed_rule"]
+    assert sorted(r.seed_key or "" for r in same) == ["", "new_seed_rule"]
 
 
 # --- malformed seeds: error, nothing written ------------------------------------------------------
