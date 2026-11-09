@@ -16,6 +16,7 @@ Running the work:
 - Default concurrency: 1 coder at a time. 2 in parallel only for tickets touching different directories and only if no usage warning has appeared.
 - When delegating to `coder`, use the model given in the ticket's `Model:` line; default to Sonnet if missing.
 - Once code written by Sonnet fails (QA CHANGES REQUESTED, red local tests or red CI), every further code or test change on that ticket goes to a new `coder` with `model: opus`, given the branch and the findings. Do not resume the Sonnet agent: it would stay on Sonnet.
+- `qa-reviewer` defaults to Opus; run it on Sonnet only under the QA model rule in `docs/WORKFLOW.md` section 3. Test runs per ticket follow the same section: coder relevant tests, QA full suite on the final round, you on the merge result.
 - Per ticket: `coder` implements on its own branch/worktree → `qa-reviewer` reviews → if CHANGES REQUESTED, back to `coder` (max 2 rounds) → you merge into `dev` when APPROVE, then ask `pm` to update ticket status and `TODO.md`.
 - Never merge a ticket without a QA APPROVE and green tests.
 - At milestone end: run the full suite on `dev`; if green, you may merge `dev` into `qa`. Write a short milestone report in `docs/reports/`.

@@ -44,7 +44,7 @@ Recommended operating point for Pro:
 Token hygiene:
 1. Tickets are small: one concern, a list of files, explicit acceptance criteria.
 2. `/clear` between unrelated tickets; `/compact` when a session grows long.
-3. PM runs on Sonnet and QA on Opus; the coder uses the ticket's `Model:` line, subject to the Sonnet → Opus escalation in section 3.
+3. PM runs on Sonnet; coder and QA follow the model rules in section 3.
 4. Agents read only the files named in the ticket plus what they must.
 5. Keep CLAUDE.md short; detail lives in docs read on demand.
 6. Tests and linters produce concise output (`-q`, `--tb=short`).
@@ -77,11 +77,20 @@ red local tests or red CI), every further code or test change on that ticket goe
 whatever the ticket's `Model:` line says. Start a new `coder` with the Opus override and give it the
 branch and the findings, because resuming the Sonnet agent would keep Sonnet. The 2-round limit is unchanged.
 
+QA model (maintainer decision 2026-11-09): `qa-reviewer` defaults to Opus. The GM runs it on Sonnet (model override)
+only for a `sonnet` ticket that stays outside the `opus` areas above and neither parses nor renders untrusted
+input. A ticket that hit the escalation rule gets Opus QA for the rest of its rounds.
+
+Test runs per ticket (maintainer decision 2026-11-09): the coder runs ruff, mypy and only the tests relevant to the
+change, including the PostgreSQL params when local PostgreSQL is up, and the full suite only if the ticket changes
+shared test fixtures, migrations or code used across the app. QA runs the full suite once, on the final round's
+commit. The GM runs it on the merge result. CI on `dev` remains the gate after every merge.
+
 ## 4. Loop
 
 1. GM reads CLAUDE.md, WORKFLOW.md, TODO.md and `docs/HANDOFF.md` (if present).
 2. GM asks `pm` to split the current milestone into tickets; GM reviews and sends back anything vague.
-3. For each ticket: GM delegates to `coder` (own worktree/branch) → coder implements, runs ruff + mypy + tests, commits, replies in max 15 lines.
+3. For each ticket: GM delegates to `coder` (own worktree/branch) → coder implements, runs ruff + mypy + the relevant tests (section 3), commits, replies in max 15 lines.
 4. GM delegates to `qa-reviewer` (ticket + branch). If CHANGES REQUESTED, back to coder, on Opus if the failed code came from Sonnet (section 3; max 2 rounds, then escalate to the human).
 5. On APPROVE and green tests the GM merges into `dev` and asks `pm` to update ticket status and TODO.md.
 6. At milestone end the GM runs the full suite on `dev`; if green, merges `dev` → `qa` and writes `docs/reports/<milestone>.md` (max 30 lines).
