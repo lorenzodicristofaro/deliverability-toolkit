@@ -15,4 +15,4 @@ Acceptance criteria:
 - Both locales render; i18n scan test passes.
 New i18n keys: web.content.title, .intro, .field.html, .field.text, .field.subject, .field.eml, .submit, .error.too_large, .error.empty, .error.nul_byte, .section.* , .col.* (coder lists final set) (en + it)
 GM note (constraints from M5-14): the UI must display `complete`, because overall can be `ok` with complete=False; `rules.facts.complete` is the engine's own value and can differ from the overall one, so show the overall one as the result's completeness.
-Status: todo
+Status: done

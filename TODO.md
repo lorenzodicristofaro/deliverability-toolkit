@@ -124,7 +124,7 @@ Carried over from M0-07 QA:
   - [x] M5-15b test DB fixtures: migrate once per session (opus)
   - [x] M5-15c test suite speed: seed sync, parallel CI jobs, docs-only pushes (opus)
   - [x] M5-15d PostgreSQL on tmpfs in CI (measured, no gain, reverted)
-  - [ ] M5-16 web UI content analyzer
+  - [x] M5-16 web UI content analyzer
   - [ ] M5-17a CLI operator tenant and user selection (opus)
   - [ ] M5-17 CLI `content`
   - [ ] M5-18 content rules admin service + REST + test on sample (opus)
