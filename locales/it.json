@@ -684,7 +684,7 @@
   "web.content.rules.matched": "Regole scattate",
   "web.content.rules.score": "Punteggio",
   "web.content.section.body": "Corpo",
-  "web.content.section.empty": "Nessuna regola di questa categoria è scattata.",
+  "web.content.section.empty": "Nessuna regola è scattata.",
   "web.content.section.findings": "Rilievi",
   "web.content.section.links": "Link",
   "web.content.section.message": "Intestazioni .eml",

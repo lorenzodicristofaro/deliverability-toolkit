@@ -14,7 +14,7 @@
   <p data-testid="content-complete" data-complete="{{ "true" if analysis.complete else "false" }}">
     {{ t("web.content.complete.label") }}: <strong>{{ t("web.content.complete.yes") if analysis.complete else t("web.content.complete.no") }}</strong>
     {% if not analysis.complete %}<br>{{ t("web.content.complete.note") }}{% endif %}
-    {% if analysis.not_evaluated_sections %}<br>{{ t("web.content.complete.skipped") }}: {% for s in analysis.not_evaluated_sections %}<code>{{ s|visible }}</code> {% endfor %}{% endif %}
+    {% if analysis.not_evaluated_sections %}<br>{{ t("web.content.complete.skipped") }}: {% for s in analysis.not_evaluated_sections %}{{ section_text[s] }}{% if not loop.last %}, {% endif %}{% endfor %}{% endif %}
   </p>
 
   <section data-testid="content-sections">
@@ -58,7 +58,7 @@
       {% for r in facts.results if r.category == cat.category and r.status != "ok" %}
         <tr data-rule="{{ r.rule_id }}">
           <td class="dns-wrap">{{ r.name|visible }}</td>
-          <td class="dns-wrap">{{ r.severity|visible }}</td>
+          <td>{{ severity_text[r.severity] }}</td>
           <td class="dns-wrap"><code>{{ r.status|visible }}</code>{% if r.issue %} <code>{{ r.issue|visible }}</code>{% endif %}</td>
           <td class="dns-wrap">{% if r.evidence %}<code>{{ r.evidence|visible }}</code>{% endif %}</td>
         </tr>

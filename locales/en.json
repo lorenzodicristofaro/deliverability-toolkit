@@ -684,7 +684,7 @@
   "web.content.rules.matched": "Rules matched",
   "web.content.rules.score": "Score",
   "web.content.section.body": "Body",
-  "web.content.section.empty": "No rules in this category matched.",
+  "web.content.section.empty": "No rules matched.",
   "web.content.section.findings": "Findings",
   "web.content.section.links": "Links",
   "web.content.section.message": ".eml headers",

@@ -7,6 +7,7 @@ tenancy matrix (tests/tenancy/test_matrix.py).
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from collections.abc import Iterator
@@ -15,6 +16,7 @@ from urllib.parse import urlencode
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.orm import Session
 
 from app.core import csrf, i18n
 from app.core.config import Settings
@@ -35,6 +37,9 @@ HOSTILE_RULE = '<script>alert("rule")</script>'
 HOSTILE_EVIDENCE = '"><img src=x onerror=alert(1)> zebraword <script>alert(2)</script>'
 HOSTILE_SUBJECT = '<script>alert("subj")</script> "><img onerror=alert(3)>'
 HOSTILE_HTML = '<p>"><img src=x onerror=alert(4)><script>alert(5)</script> zebraword</p>'
+HOSTILE_TITLE = '<script>alert("title")</script> "><img src=x onerror=alert(6)>'
+HOSTILE_ADVICE = '<script>alert("advice")</script> "><img src=x onerror=alert(7)>'
+SEVERITY_RANK = ("critical", "high", "medium", "low", "info")
 
 
 @pytest.fixture(autouse=True)
@@ -83,18 +88,27 @@ def spy(monkeypatch: pytest.MonkeyPatch) -> list[ContentInput]:
     return calls
 
 
-def add_rule(w: World, *, name: str = "r1", pattern: str = "zebraword") -> None:
+def add_rule(
+    w: World,
+    *,
+    name: str = "r1",
+    pattern: str = "zebraword",
+    title: str = "T",
+    advice: str | None = None,
+    severity: str = "medium",
+) -> None:
     repo = repo_for(TenantContext(w.tenant_a, None), w.db).content_rules
     repo.create(
         {
             "kind": "keyword",
             "weight": 10,
             "category": "spam",
-            "severity": "medium",
+            "severity": severity,
             "enabled": True,
             "name": name,
             "pattern": pattern,
-            "title": "T",
+            "title": title,
+            "advice": advice,
         }
     )
 
@@ -103,8 +117,9 @@ def analyze(w: World, who: str, data: dict[str, str] | None = None, **kw: Any) -
     return post(w, who, PATH, {"text": "hello there"} if data is None else data, **kw)
 
 
-def raw_post(w: World, content: bytes) -> Any:
-    """A urlencoded body sent with the CSRF header (JS/HTMX style)."""
+def raw_post(w: World, content: bytes | Iterator[bytes], **extra_headers: str) -> Any:
+    """A urlencoded body sent with the CSRF header (JS/HTMX style). An iterator is sent chunked,
+    with no Content-Length; an explicit Content-Length header overrides the real one."""
     token = _login(w, "analyst")
     assert token is not None
     return w.client.post(
@@ -114,9 +129,21 @@ def raw_post(w: World, content: bytes) -> Any:
             "Accept": "text/html",
             "Content-Type": "application/x-www-form-urlencoded",
             CSRF_HEADER: token,
+            **extra_headers,
         },
         follow_redirects=False,
     )
+
+
+def padded_body(size: int) -> bytes:
+    """A valid urlencoded body of exactly `size` bytes; the padding is not an analysed field."""
+    head = b"text=hello+there&pad="
+    return head + b"a" * (size - len(head))
+
+
+def in_chunks(body: bytes, size: int = 64 * 1024) -> Iterator[bytes]:
+    for start in range(0, len(body), size):
+        yield body[start : start + size]
 
 
 def form_post(w: World, size: int, token: str | None = "", **headers: str) -> Any:
@@ -263,6 +290,42 @@ def test_overall_complete_false_is_shown_even_when_status_ok(
     assert t("web.content.complete.note") in html
 
 
+def test_findings_are_listed_by_severity(world: World) -> None:
+    add_rule(world, name="a-low", pattern="zebraword", severity="low")
+    add_rule(world, name="b-high", pattern="quagga", severity="high")
+    html = analyze(world, "analyst", {"text": "zebraword quagga"}).text
+    severities = re.findall(r'<li data-code="[^"]*" data-severity="([^"]*)"', html)
+    assert {"low", "high"} <= set(severities)
+    assert severities == sorted(severities, key=SEVERITY_RANK.index)
+
+
+def test_rule_severity_is_localized(world: World) -> None:
+    add_rule(world, name="plain")
+    html = analyze(world, "analyst", {"text": "zebraword"}, **{"Accept-Language": "it"}).text
+    row = re.search(
+        r'<tr data-rule="\d+">\s*<td class="dns-wrap">plain</td>\s*<td>([^<]*)</td>', html
+    )
+    assert row is not None
+    assert row.group(1) == t("checks.severity.medium", "it")
+
+
+def test_skipped_sections_are_localized(world: World) -> None:
+    html = analyze(world, "analyst", {"text": "hello"}, **{"Accept-Language": "it"}).text
+    skipped = html.split(t("web.content.complete.skipped", "it"), 1)[1].split("</p>", 1)[0]
+    assert t("web.content.section.subject", "it") in skipped
+    assert "<code>" not in skipped
+
+
+@pytest.mark.parametrize(("lang", "word"), [("en", "category"), ("it", "categoria")])
+def test_no_matched_rule_does_not_mention_a_category(world: World, lang: str, word: str) -> None:
+    """The engine lists only categories with a match, so none listed means no rule matched."""
+    html = analyze(world, "analyst", None, **{"Accept-Language": lang}).text
+    block = html.split('data-testid="content-rules"', 1)[1].split("</section>", 1)[0]
+    assert "data-category=" not in block
+    assert t("web.content.section.empty", lang) in block
+    assert word not in t("web.content.section.empty", lang).lower()
+
+
 def test_eml_flow(world: World, spy: list[ContentInput]) -> None:
     eml = "From: a@example.com\r\nSubject: hi\r\nContent-Type: text/plain\r\n\r\nbody\r\n"
     r = analyze(world, "analyst", {"eml": eml})
@@ -288,6 +351,16 @@ def test_hostile_evidence_is_escaped(world: World) -> None:
     r = analyze(world, "analyst", {"text": HOSTILE_EVIDENCE})
     assert_no_hostile_markup(r.text)
     assert "zebraword" in r.text
+
+
+def test_hostile_rule_title_and_advice_are_escaped(world: World) -> None:
+    add_rule(world, name="plain", title=HOSTILE_TITLE, advice=HOSTILE_ADVICE)
+    r = analyze(world, "analyst", {"text": "zebraword"})
+    assert r.status_code == 200
+    assert_no_hostile_markup(r.text)
+    assert "&lt;script&gt;alert(&#34;title&#34;)" in r.text
+    assert "&lt;script&gt;alert(&#34;advice&#34;)" in r.text
+    assert "&amp;lt;" not in r.text
 
 
 def test_page_has_no_inline_script_or_safe(world: World) -> None:
@@ -362,6 +435,73 @@ def test_body_over_transport_cap_is_413(world: World, spy: list[ContentInput]) -
     assert r.status_code == 413
     assert t("web.content.error.too_large") in r.text
     assert spy == []
+
+
+@pytest.mark.parametrize(("delta", "status"), [(0, 200), (1, 413)])
+def test_undeclared_length_is_capped_while_streaming(
+    world: World, spy: list[ContentInput], delta: int, status: int
+) -> None:
+    r = raw_post(world, in_chunks(padded_body(MAX_BODY_BYTES + delta)))
+    assert "content-length" not in r.request.headers
+    assert r.status_code == status
+    assert len(spy) == (1 if status == 200 else 0)
+
+
+def test_understated_length_is_capped_while_streaming(
+    world: World, spy: list[ContentInput]
+) -> None:
+    r = raw_post(world, padded_body(MAX_BODY_BYTES + 1), **{"Content-Length": "10"})
+    assert r.status_code == 413
+    assert t("web.content.error.too_large") in r.text
+    assert spy == []
+
+
+@pytest.mark.parametrize("declared", [str(MAX_BODY_BYTES + 1), "12abc", "-1"])
+def test_declared_length_alone_is_refused(
+    world: World, spy: list[ContentInput], declared: str
+) -> None:
+    """The real body is tiny, so only the declared-length check can refuse it."""
+    r = raw_post(world, b"text=hello", **{"Content-Length": declared})
+    assert r.status_code == 413
+    assert t("web.content.error.too_large") in r.text
+    assert spy == []
+
+
+def test_session_released_before_body_read_and_analyzer_off_the_loop(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """analyze_content blocks: it must run in a worker thread, with no transaction held open."""
+    events: list[str] = []
+    in_tx: list[bool] = []
+    on_loop: list[bool] = []
+    real_read = content_web._read_capped
+    real_rollback = Session.rollback
+
+    async def read(request: Any) -> bytes:
+        events.append("read")
+        return await real_read(request)
+
+    def rollback(self: Session) -> None:
+        if self is not world.db:  # the test's own session, used to log in
+            events.append("rollback")
+        real_rollback(self)
+
+    def wrapper(ctx: TenantContext, session: Any, content: ContentInput) -> ContentAnalysis:
+        in_tx.append(session.in_transaction())
+        try:
+            asyncio.get_running_loop()
+            on_loop.append(True)
+        except RuntimeError:
+            on_loop.append(False)
+        return analyze_content(ctx, session, content)
+
+    monkeypatch.setattr(content_web, "_read_capped", read)
+    monkeypatch.setattr(Session, "rollback", rollback)
+    monkeypatch.setattr(content_web, "analyze_content", wrapper)
+    assert analyze(world, "analyst").status_code == 200
+    assert "rollback" in events[: events.index("read")]
+    assert in_tx == [False]
+    assert on_loop == [False]
 
 
 # --- M5-01: CSRF form cap = route cap -----------------------------------------------------------
