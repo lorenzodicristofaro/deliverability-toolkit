@@ -121,6 +121,7 @@ Carried over from M0-07 QA:
   - [x] M5-13 content rules engine (opus)
   - [x] M5-14 content analysis service + CONTENT_* findings
   - [ ] M5-15 REST POST /api/v1/content/analyze
+  - [ ] M5-15b test DB fixtures: migrate once per session (opus)
   - [ ] M5-16 web UI content analyzer
   - [ ] M5-17 CLI `content`
   - [ ] M5-18 content rules admin service + REST + test on sample (opus)
