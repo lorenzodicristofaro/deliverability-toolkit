@@ -122,7 +122,23 @@ REPOS = {
 }
 REPO_PARAMS = pytest.mark.parametrize("repo_name", list(REPOS))
 
-MALFORMED_IDS = [None, "1", "abc", "1 OR 1=1", 1.0, True, False, 0, -1, 2**63, 2**80, [1], b"1"]
+MALFORMED_IDS = [
+    None,
+    "1",
+    "abc",
+    "1 OR 1=1",
+    1.0,
+    True,
+    False,
+    0,
+    -1,
+    2**31,
+    2**63 - 1,
+    2**63,
+    2**80,
+    [1],
+    b"1",
+]
 
 
 def _setup(world: World, repo_name: str) -> tuple[Any, str, list[int], list[int]]:
@@ -166,7 +182,7 @@ def test_tenant_context_rejects_malformed_principal(principal: Any) -> None:
 
 @pytest.mark.parametrize(
     ("value", "expected"),
-    [(1, 1), (2**63 - 1, 2**63 - 1), *[(v, None) for v in MALFORMED_IDS]],
+    [(1, 1), (2**31 - 1, 2**31 - 1), *[(v, None) for v in MALFORMED_IDS]],
 )
 def test_coerce_id(value: Any, expected: int | None) -> None:
     assert coerce_id(value) == expected

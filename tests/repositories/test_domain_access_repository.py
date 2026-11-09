@@ -19,7 +19,7 @@ from app.repositories.domain_access import MAX_ASSIGNMENTS, DomainAccessReposito
 
 ROOT = Path(__file__).resolve().parents[2]
 KEY = "k" * 40
-MALFORMED_IDS = [None, "1", "abc", 1.0, True, False, 0, -1, 2**63, [1], b"1"]
+MALFORMED_IDS = [None, "1", "abc", 1.0, True, False, 0, -1, 2**31, 2**63 - 1, 2**63, [1], b"1"]
 
 
 @dataclass

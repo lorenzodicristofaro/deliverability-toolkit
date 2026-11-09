@@ -21,7 +21,7 @@ from pydantic import Field, StrictInt, StrictStr
 from app.api.v1._common import Body, _error, _parse, _Strict
 from app.core.permissions import Principal
 from app.core.tenancy import TenantContext
-from app.repositories.base import DEFAULT_LIMIT, MAX_LIMIT
+from app.repositories.base import DEFAULT_LIMIT, MAX_LIMIT, parse_id
 from app.repositories.domain_access import MAX_ASSIGNMENTS
 from app.services.domains import (
     DomainAccessView,
@@ -81,9 +81,7 @@ class AccessIn(_Strict):
 
 def _domain_id(value: str) -> int | None:
     """Path id as a positive int; anything else is None (answered as 404, like a missing id)."""
-    if not value.isascii() or not value.isdigit() or len(value) > _MAX_ID_DIGITS:
-        return None
-    return int(value)
+    return parse_id(value)
 
 
 def _page_value(request: Request, raw: str | None, default: int, maximum: int | None) -> int:

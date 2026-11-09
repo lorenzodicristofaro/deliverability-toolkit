@@ -34,8 +34,12 @@ from sqlalchemy.orm.base import NEVER_SET, NO_VALUE
 from app.core.tenancy import TenantContext
 from app.models.base import Base
 
-# Largest value of a signed 64-bit integer: larger "ids" are malformed, not just missing.
-_MAX_ID = 2**63 - 1
+# Every primary and foreign key id is an INTEGER column (signed 32-bit on PostgreSQL), where a
+# larger bound value is a DataError, not a miss. Larger "ids" are malformed, not just missing.
+# tests/tenancy/test_id_range.py checks this against the models and the migrated schema.
+MAX_ID = 2**31 - 1
+# Only bounds the work of `int()`: zero-padded ids up to this length stay valid.
+_MAX_ID_DIGITS = 19
 DEFAULT_LIMIT = 100
 TENANT_ATTR = "tenant_id"
 MAX_LIMIT = 1000
@@ -48,13 +52,20 @@ class TenantScopeError(ValueError):
 def coerce_id(value: object) -> int | None:
     """Return `value` as a primary-key id, or None if it cannot be a valid id.
 
-    Only real ints in 1..2**63-1 are accepted (no bool, str, float or None): callers parse path
+    Only real ints in 1..MAX_ID are accepted (no bool, str, float or None): callers parse path
     parameters before reaching a repository, and a malformed id is treated as "not found"."""
     if isinstance(value, bool) or not isinstance(value, int):
         return None
-    if value < 1 or value > _MAX_ID:
+    if value < 1 or value > MAX_ID:
         return None
     return value
+
+
+def parse_id(raw: str) -> int | None:
+    """An id received as text (path segment, form field), or None if it cannot be a valid id."""
+    if not raw.isascii() or not raw.isdigit() or len(raw) > _MAX_ID_DIGITS:
+        return None
+    return coerce_id(int(raw))
 
 
 _PLAIN_SCALARS: tuple[type, ...] = (
