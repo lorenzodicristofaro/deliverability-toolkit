@@ -204,7 +204,7 @@ the web denies them); it does not protect the instance from its operator.
 | Code | Meaning |
 |---|---|
 | 0 | the command ran (the command may define further result codes, as `check` does) |
-| 2 | could not evaluate: missing or invalid configuration, database unreachable, schema not migrated |
+| 2 | could not evaluate: missing or invalid configuration, database unreachable, schema not migrated, or a database driver error while the command runs |
 | 64 | usage error: missing option, or an id that is not a plain decimal in 1..2147483647 |
 | 77 | permission denied: unknown or inactive user, no membership in that tenant, or a role or toggle without the permission (one message for all, like the web's 404) |
 

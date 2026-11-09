@@ -7,6 +7,7 @@ test also checks that the engine was disposed with no connection still checked o
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -15,7 +16,7 @@ from typing import Annotated, Any
 import pytest
 import typer
 from sqlalchemy import Engine, select, text
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import NoResultFound, OperationalError
 from sqlalchemy.orm import Session
 from typer.testing import CliRunner
 
@@ -42,6 +43,8 @@ from tests.support.socket_guard import db_endpoint, install
 
 KEY = "k" * 40
 SECRET = "hunter-secret-marker"
+PARAM = "bound-parameter-marker"
+LOGGER = "app.cli.tenant_scope"
 TENANT_A = "Agency Alpha"
 TENANT_B = "Zanzibar Confidential"
 DOMAIN_A = "alpha.example"
@@ -87,7 +90,9 @@ def _probe(
         if fail == "boom":
             raise RuntimeError("boom")
         if fail == "db":
-            raise OperationalError("SELECT secret", {}, Exception(SECRET))
+            raise OperationalError("SELECT secret", {"param": PARAM}, Exception(SECRET))
+        if fail == "bug":
+            raise NoResultFound("a programming error")
 
 
 @dataclass
@@ -525,7 +530,11 @@ def test_resolver_entry_is_not_printed(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_unreachable_database(
-    db_backend: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, opened: list[_Opened]
+    db_backend: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    opened: list[_Opened],
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     url = (
         f"sqlite:///{tmp_path}/missing-directory/{SECRET}.db"
@@ -534,9 +543,14 @@ def test_unreachable_database(
         else f"postgresql://ci:{SECRET}@127.0.0.1:1/ci_test"
     )
     _set_env(monkeypatch, url)
-    result = _invoke(1, 1)
+    with caplog.at_level(logging.INFO, logger=LOGGER):
+        result = _invoke(1, 1)
     _assert_clean(result, EXIT_ERROR, t(tenant_scope.DATABASE_KEY))
     assert SECRET not in result.output
+    assert SECRET not in caplog.text
+    assert [r.getMessage() for r in caplog.records if r.name == LOGGER] == [
+        "cli.operator database error class=OperationalError"
+    ]
     assert len(opened) == 1
 
 
@@ -556,12 +570,35 @@ def test_partially_migrated_schema(db_url: str, monkeypatch: pytest.MonkeyPatch)
     _assert_clean(_invoke(1, 1), EXIT_ERROR, t(tenant_scope.DATABASE_KEY))
 
 
-def test_database_error_inside_the_block(world: World) -> None:
-    result = _invoke(world.tenants["a"], world.users["owner"], "--fail", "db")
+def test_driver_error_inside_the_block_is_exit_2_and_logs_only_the_class(
+    world: World, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.DEBUG, logger=LOGGER):
+        result = _invoke(world.tenants["a"], world.users["owner"], "--fail", "db")
     assert result.exit_code == EXIT_ERROR
     assert result.stderr.strip() == t(tenant_scope.DATABASE_KEY)
-    assert SECRET not in result.output
-    assert "SELECT" not in result.output
+    records = [r for r in caplog.records if r.name == LOGGER]
+    assert [r.getMessage() for r in records] == [
+        "cli.operator database error class=OperationalError"
+    ]
+    # Below WARNING: without logging configured, logging.lastResort would print it on stderr.
+    assert records[0].levelno == logging.INFO
+    assert records[0].exc_info is None
+    for leaked in (SECRET, PARAM, "SELECT"):
+        assert leaked not in result.output
+        assert leaked not in caplog.text
+        assert leaked not in str(vars(records[0]))
+
+
+def test_other_sqlalchemy_error_inside_the_block_propagates_as_a_bug(
+    world: World, opened: list[_Opened], caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.DEBUG, logger=LOGGER):
+        result = _invoke(world.tenants["a"], world.users["owner"], "--fail", "bug")
+    assert isinstance(result.exception, NoResultFound)
+    assert t(tenant_scope.DATABASE_KEY) not in result.output
+    assert [r for r in caplog.records if r.name == LOGGER] == []
+    assert len(opened) == 1
 
 
 def test_exit_from_the_block_keeps_its_code(world: World, opened: list[_Opened]) -> None:
