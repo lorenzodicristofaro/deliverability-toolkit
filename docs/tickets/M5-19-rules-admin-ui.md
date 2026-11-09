@@ -13,4 +13,4 @@ Acceptance criteria:
 - Unverified seed rows display an "unverified" badge; verified rows show `verified_on` and sources.
 - Both locales; i18n scan passes.
 New i18n keys: web.rules.title, .tab.global, .tab.tenant, .col.*, .action.*, .test.title, .test.run, .test.timed_out, .test.invalid, .badge.unverified, .flash.* (coder lists final set) (en + it)
-Status: todo
+Status: done

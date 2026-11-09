@@ -129,7 +129,7 @@ Carried over from M0-07 QA:
   - [x] M5-17 CLI `content`
   - [x] M5-17b ids above 32 bits give a 500 on PostgreSQL (opus)
   - [x] M5-18 content rules admin service + REST + test on sample (opus)
-  - [ ] M5-19 content rules admin UI
+  - [x] M5-19 content rules admin UI
   - [ ] M5-20 DKIM selectors admin service + REST + check wiring (opus)
   - [ ] M5-21 DKIM selectors admin UI
   - [ ] M5-22 custom checks schema + DNS evaluator (http_fetch rejected, deferred to M7)
@@ -169,6 +169,7 @@ Carried over from M0-07 QA:
 - [ ] Security review checklist, dependency/license audit, v0.1.0 release
 
 ## Follow-ups (post-M1)
+- [ ] Rules admin UI (M5-19 QA): a broken stored rule cannot be disabled by toggle or by an unchanged edit, because the service re-validates its pattern on enabled-only updates (toggle gives a 422; a tenant row can be deleted, a broken seeded global row can only be edited with a replacement pattern). Toggle, delete and error responses return to page 1. Every list view reads all rows (about 0.65 s at 10003 rows on SQLite, no per-tenant cap). The localized 413 stops at 1 MiB because `register_form_cap` matches exact paths only. `/rules/test` has no language input (the page says so).
 - [ ] Rules admin (M5-18 QA): a tenant admin can fill the process-wide 4-slot regex pool through `/rules/test` and push other tenants' analyses to `busy`/`not_evaluated` (same exposure as `/content/analyze`; pairs with the safe_regex per-tenant fairness and rate-limit items). app/services/content_rules_admin.py imports private helpers (`_clean_values`, `_text`, `_evidence`, `_find_keyword`, `_fold`, `_keyword_is_valid`); make them public. GM decisions: DELETE of a seeded global row is 409 (disable it instead; a tombstone would need a migration); any accepted PATCH on a seeded row pins it against seed updates, even with unchanged values.
 - [ ] Id overflow leftovers (M5-17b QA): the comment at app/cli/tenant_scope.py:45 still says `coerce_id` allows 63 bits. `app/api/v1` has no `__init__.py`, so `pkgutil.walk_packages` at tests/tenancy/test_matrix.py:95 finds none of its 6 modules and `declared_endpoints` sees 30 of 45 endpoints; no route escapes today because the main guard reads the route table, but the self-test is weaker than the test_matrix.py docstring and docs/TESTING.md:57 claim. tests/tenancy/test_id_range.py guards are name-based (limits in its docstring).
 - [ ] CLI content (M5-17 QA): make `_fail`, `read_bounded` and `InputRejected` shared public helpers (copied in app/cli/content.py, comments at :52 and :67), with the M4-13 item. `dtk analyze - <&-` gives a traceback and exit 1 because `sys.stdin` is None (app/cli/analyze.py:56; fixed for `content`). docs/CONTENT.md (M5-25) must state that `dtk content --lang` is the content language hint and `--output-lang` the output language, unlike `check` and `analyze`, and that a run without `--eml` has List-Unsubscribe `not_evaluated`, so `complete` is false and it exits 1.
