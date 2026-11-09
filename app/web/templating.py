@@ -139,8 +139,8 @@ def content_tools_nav(request: Request) -> bool:
 
 
 def rules_tools_nav(request: Request) -> bool:
-    """Like `dns_tools_nav` for `rules.read`; with no active tenant, for `rules.manage` on the
-    global scope, the only tab such a session can open (fail closed, no DB access)."""
+    """Whether the nav shows the rules and DKIM selectors links: `rules.read` in the active tenant
+    or `rules.manage` on the global scope, either one opens a tab (fail closed, no DB access)."""
     from app.core.permissions import (  # lazy: deps imports this module
         Action,
         RuleScope,
@@ -153,9 +153,10 @@ def rules_tools_nav(request: Request) -> bool:
         auth = getattr(request.state, "auth_session", None)
         if auth is None:
             return False
+        if can(auth.principal, Action.RULES_MANAGE, RuleScopeResource(RuleScope.GLOBAL, None)):
+            return True
         if auth.active_tenant_id is None:
-            resource = RuleScopeResource(RuleScope.GLOBAL, None)
-            return bool(can(auth.principal, Action.RULES_MANAGE, resource))
+            return False
         return bool(can(auth.principal, Action.RULES_READ, TenantResource(auth.active_tenant_id)))
     except Exception:
         return False
@@ -183,6 +184,7 @@ def render(request: Request, template: str, status_code: int = 200, **context: A
         show_message_tools=message_tools_nav(request),
         show_content_tools=content_tools_nav(request),
         show_rules_tools=rules_tools_nav(request),
+        show_dkim_selector_tools=rules_tools_nav(request),
         **context,
     )
     response = HTMLResponse(html, status_code=status_code)

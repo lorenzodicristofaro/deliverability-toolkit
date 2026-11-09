@@ -9,8 +9,8 @@ or malformed rule id), and the service is not reached with the body.
 
 Routes (all need a session; anonymous GET -> 303 /login, anonymous POST -> 401):
 - GET  /rules                   list (tenant tab: the tenant's rows, then global rows read-only;
-                                `?page=`; a session with no tenant defaults to the global tab if
-                                its user may manage it)
+                                `?page=`; a session that may not read the tenant tab, or has no
+                                tenant, defaults to the global tab if its user may manage it)
 - GET  /rules/new               create form
 - POST /rules                   create
 - GET  /rules/{rule_id}/edit    edit form
@@ -391,7 +391,7 @@ def rules_index(
     service = _service(db, auth)
     if (
         scope is None
-        and auth.active_tenant_id is None
+        and not _allowed(service.check_read, RuleScope.TENANT)
         and _allowed(service.check_manage, RuleScope.GLOBAL)
     ):
         parsed = RuleScope.GLOBAL

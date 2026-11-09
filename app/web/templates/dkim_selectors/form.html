@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% set heading = t("web.dkim_selectors.form.edit") if record else t("web.dkim_selectors.form.new") %}
+{% set type_text = {"txt": t("web.dkim_selectors.record_type.txt"), "cname": t("web.dkim_selectors.record_type.cname"), "either": t("web.dkim_selectors.record_type.either")} %}
+{% set scope_text = {"tenant": t("web.dkim_selectors.scope.tenant"), "global": t("web.dkim_selectors.scope.global")} %}
+{% block title %}{{ heading }} · {{ app_name }}{% endblock %}
+{% block content %}
+<h1>{{ heading }}</h1>
+<p>{{ scope_text[scope] }}</p>
+{% if seeded %}<p class="dns-state dns-state-absent" data-testid="dkim-seeded-note">{{ t("web.dkim_selectors.form.seeded_note") }}</p>{% endif %}
+{% include "dkim_selectors/_error.html" %}
+<form class="dns-form" method="post" action="{% if record %}/dkim-selectors/{{ record.id }}/edit{% else %}/dkim-selectors{% endif %}?scope={{ scope }}" data-testid="dkim-form">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <p>
+    <label for="dkim-selector">{{ t("web.dkim_selectors.field.selector") }}</label>
+    <input id="dkim-selector" name="selector" type="text" size="30" maxlength="63" value="{{ form.selector }}" autocomplete="off" spellcheck="false"{% if seeded %} readonly{% endif %}>
+  </p>
+  <p>
+    <label for="dkim-provider">{{ t("web.dkim_selectors.field.provider") }}</label>
+    <input id="dkim-provider" name="provider" type="text" size="30" maxlength="64" value="{{ form.provider }}" autocomplete="off" spellcheck="false"{% if seeded %} readonly{% endif %}>
+  </p>
+  <p>
+    <label for="dkim-record-type">{{ t("web.dkim_selectors.field.record_type") }}</label>
+    {% if seeded %}
+    <input id="dkim-record-type" name="record_type" type="text" size="8" value="{{ form.record_type }}" readonly>
+    {% else %}
+    <select id="dkim-record-type" name="record_type">
+      {% for k in record_types %}<option value="{{ k }}"{% if form.record_type == k %} selected{% endif %}>{{ type_text[k] }}</option>{% endfor %}
+    </select>
+    {% endif %}
+  </p>
+  <p>
+    <label for="dkim-notes">{{ t("web.dkim_selectors.field.notes") }}</label>
+    <input id="dkim-notes" name="notes" type="text" size="60" maxlength="500" value="{{ form.notes }}" autocomplete="off">
+  </p>
+  <p>
+    <label><input type="checkbox" name="enabled" value="1"{% if form.enabled %} checked{% endif %}> {{ t("web.dkim_selectors.field.enabled") }}</label>
+  </p>
+  <button type="submit">{{ t("web.dkim_selectors.action.save") }}</button>
+  <a href="/dkim-selectors?scope={{ scope }}">{{ t("web.dkim_selectors.action.cancel") }}</a>
+</form>
+{% endblock %}
