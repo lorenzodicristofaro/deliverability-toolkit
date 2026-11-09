@@ -18,8 +18,11 @@ from sqlalchemy import Engine, and_, bindparam, inspect, or_, select, text
 from sqlalchemy.exc import DataError, IntegrityError
 from sqlalchemy.orm import Session
 
+from app.checks.custom import CustomDnsCheck
+from app.checks.models import CheckContext, Target
 from app.core.db import create_db_engine, create_session_factory
 from app.core.tenancy import TenantContext
+from app.dns.types import DnsQuestion, DnsResult, ResultState
 from app.models import CustomCheck, Tenant, User
 from app.models.custom_check import (
     MAX_DEFINITION_LENGTH,
@@ -816,6 +819,12 @@ _NAME = "definition.name"
 SCHEMA_REJECTED = [
     ("dns_exists", {"name": "@", "rrtype": "TXT"}, _NAME, "placeholder_missing"),
     (
+        "dns_value_range",
+        {"name": "{domain}", "rrtype": "MX", "min": 0, "max": 1},
+        "definition.rrtype",
+        "range_requires_txt",
+    ),
+    (
         "dns_exists",
         {"name": "{domain}.evil.example", "rrtype": "TXT"},
         _NAME,
@@ -922,6 +931,35 @@ def test_unrelated_update_of_a_legacy_row_is_allowed(world: World) -> None:
     with pytest.raises(CustomCheckInvalid):
         repo.update(rid, {"definition": {"contains": "y"}})
     assert repo.delete(rid) is True
+
+
+class _NoRecord:
+    identity = "no-record"
+
+    async def resolve(self, question: DnsQuestion) -> DnsResult:
+        return DnsResult(question, ResultState.nxdomain)
+
+
+@pytest.mark.parametrize(("row", "text"), [("a1", TEXT), ("g2", TEXT), ("g1", None)])
+async def test_evaluator_accepts_a_real_stored_record(
+    world: World, row: str, text: dict[str, str] | None
+) -> None:
+    # Frozen definition and LocalizedText, exactly what the repository hands to M5-23.
+    rec = world.repo("a").get(world.checks[row])
+    assert rec is not None
+    check = CustomDnsCheck(
+        check_key=rec.check_key,
+        kind=rec.kind,
+        definition=rec.definition,
+        severity=rec.severity,
+        remediation_text=rec.remediation_text,
+        remediation_key=rec.remediation_key,
+        scope=rec.scope,
+    )
+    result = await check.run(CheckContext(resolver=_NoRecord()), Target(domain="example.com"))
+    assert result.status == "warn"
+    assert [f.code for f in result.findings] == ["CUSTOM_CHECK_FAILED"]
+    assert result.findings[0].params.get("remediation_text") == text
 
 
 def test_none_json_is_sql_null(world: World) -> None:

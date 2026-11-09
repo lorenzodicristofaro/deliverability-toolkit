@@ -298,6 +298,14 @@ def test_bad_definitions(kind: str, definition: object, expected: tuple[str, str
     assert _reason(kind, definition) == expected
 
 
+@pytest.mark.parametrize("rrtype", sorted(RRTYPES - {"TXT"}))
+def test_range_is_txt_only(rrtype: str) -> None:
+    definition = _def("dns_value_range", rrtype=rrtype)
+    assert _reason("dns_value_range", definition) == ("definition.rrtype", "range_requires_txt")
+    assert parse_definition("dns_exists", _def(rrtype=rrtype)).rrtype == rrtype
+    assert parse_definition("dns_matches", _def("dns_matches", rrtype=rrtype)).rrtype == rrtype
+
+
 def test_size_cap_measures_ascii_json() -> None:
     within = _def("dns_matches", pattern="a" * MAX_PATTERN_LENGTH)
     assert len(json.dumps(within)) < MAX_DEFINITION_JSON_LENGTH

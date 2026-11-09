@@ -6,6 +6,7 @@ The regex engine really runs (its worker is a local subprocess) except where a t
 from __future__ import annotations
 
 import json
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -18,13 +19,15 @@ from app.checks.custom import (
     MAX_EVIDENCE_CHARS,
     MAX_EVIDENCE_ITEMS,
     MAX_RECORDS,
+    MAX_REGEX_BUDGET_S,
     CustomDnsCheck,
 )
 from app.checks.models import CheckContext, CheckResult, Target
 from app.core import custom_check_schema
 from app.core.i18n import LOCALES_DIR, t
-from app.core.safe_regex import MatchResult, SearchFailure
+from app.core.safe_regex import Match, MatchResult, SearchFailure
 from app.dns.types import DnsQuestion, DnsRecord, DnsResult, ResultState, join_txt_strings
+from app.services.checks import DEFAULT_DEADLINE_S
 
 NAME = "_x.example.com"
 TEXT = {"en": "Publish <b>it</b>.", "it": "Pubblicalo."}
@@ -197,16 +200,18 @@ async def test_txt_records_are_never_merged() -> None:
     _assert_failed(result, "no_match")
 
 
-async def test_catastrophic_regex_is_cut_off_and_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(custom_module, "MATCH_TIMEOUT_S", 0.2)
+async def test_catastrophic_regex_is_cut_off_and_error() -> None:
     spec = _spec("dns_matches", pattern="(a+)+$")
+    t0 = time.monotonic()
     result = await _run(spec, Dns(values=("a" * 64 + "!",)))
+    elapsed = time.monotonic() - t0
     _assert_error(result, "regex_timeout")
+    assert elapsed < 4.0  # the 1 s rule timeout plus worker start, never a longer timeout
 
 
 INCOMPLETE = [
     ("timeout", MatchResult((), True, False, SearchFailure.TIMEOUT), "regex_timeout"),
-    ("batch", MatchResult((), True, False, SearchFailure.BATCH_DEADLINE), "regex_timeout"),
+    ("batch", MatchResult((), True, False, SearchFailure.BATCH_DEADLINE), "regex_budget_exceeded"),
     ("busy", MatchResult((), False, False, SearchFailure.BUSY), "regex_failed"),
     ("worker", MatchResult((), False, False, SearchFailure.WORKER_FAILED), "regex_failed"),
     ("too large", MatchResult((), False, True, SearchFailure.TEXT_TOO_LARGE), "regex_failed"),
@@ -218,7 +223,7 @@ INCOMPLETE = [
 async def test_incomplete_regex_result_is_error(
     monkeypatch: pytest.MonkeyPatch, case: str, outcome: MatchResult, reason: str
 ) -> None:
-    monkeypatch.setattr(custom_module, "search_all", lambda *_a, **_k: outcome)
+    monkeypatch.setattr(custom_module, "search_many", lambda *_a, **_k: [outcome])
     _assert_error(await _run(MATCHES, Dns(values=("v=spf1",))), reason)
 
 
@@ -226,21 +231,99 @@ async def test_incomplete_regex_result_is_error(
 async def test_incomplete_search_beats_a_hit_in_any_order(
     monkeypatch: pytest.MonkeyPatch, values: tuple[str, str]
 ) -> None:
-    real = custom_module.search_all
+    real = custom_module.search_many
 
-    def fake(rule: Any, text: str, **kwargs: Any) -> MatchResult:
+    def fake(rules: Any, text: str, **kwargs: Any) -> list[MatchResult]:
         if text == "boom":
-            return MatchResult((), True, False, SearchFailure.TIMEOUT)
-        return real(rule, text, **kwargs)
+            return [MatchResult((), True, False, SearchFailure.TIMEOUT)]
+        return real(rules, text, **kwargs)
 
-    monkeypatch.setattr(custom_module, "search_all", fake)
+    monkeypatch.setattr(custom_module, "search_many", fake)
     _assert_error(await _run(MATCHES, Dns(values=values)), "regex_timeout")
 
 
-async def test_too_many_records_is_error_not_a_partial_verdict() -> None:
-    dns = Dns(values=tuple(f"v{i}" for i in range(MAX_RECORDS + 1)))
-    _assert_error(await _run(MATCHES, dns), "too_many_records")
-    _assert_error(await _run(RANGE, dns), "too_many_records")
+CAPPED = [(MATCHES, "v=spf1"), (RANGE, "5")]
+
+
+@pytest.mark.parametrize(("spec", "value"), CAPPED, ids=["matches", "range"])
+@pytest.mark.parametrize("count", [17, 64])
+async def test_records_up_to_the_cap_are_evaluated(
+    spec: dict[str, Any], value: str, count: int
+) -> None:
+    result = await _run(spec, Dns(values=(value,) * count))
+    assert result.status == "ok" and result.data["records"] == count
+
+
+@pytest.mark.parametrize(("spec", "value"), CAPPED, ids=["matches", "range"])
+async def test_too_many_records_is_error_not_a_partial_verdict(
+    spec: dict[str, Any], value: str
+) -> None:
+    assert MAX_RECORDS == 64
+    _assert_error(await _run(spec, Dns(values=(value,) * 65)), "too_many_records")
+
+
+class _Budget:
+    """Stubbed matcher on a fake clock: every search takes `step` seconds, no real waiting."""
+
+    def __init__(self, step: float, hit: bool) -> None:
+        self.step, self.hit, self.now = step, hit, 0.0
+        self.calls: list[tuple[float, float]] = []
+
+    def clock(self) -> float:
+        return self.now
+
+    def search(self, _rules: Any, text: str, **kwargs: Any) -> list[MatchResult]:
+        self.calls.append((kwargs["timeout_s"], kwargs["total_timeout_s"]))
+        self.now += self.step
+        matches = (Match(0, len(text), text),) if self.hit else ()
+        return [MatchResult(matches, False, False)]
+
+    def install(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(custom_module, "_regex_clock", self.clock)
+        monkeypatch.setattr(custom_module, "search_many", self.search)
+
+
+BUDGET_EXCEEDED = [
+    ("runs out midway, hits so far", 5, 4.0, True, 3),
+    ("runs out midway, no hit so far", 5, 4.0, False, 3),
+    ("last search ends past it, hit", 3, 4.0, True, 3),
+    ("last search ends past it, no hit", 3, 4.0, False, 3),
+    ("exactly at the budget", 2, 5.0, True, 2),
+]
+
+
+@pytest.mark.parametrize(
+    ("case", "records", "step", "hit", "searched"),
+    BUDGET_EXCEEDED,
+    ids=[c[0] for c in BUDGET_EXCEEDED],
+)
+async def test_regex_budget_exceeded_is_error_never_a_verdict(
+    monkeypatch: pytest.MonkeyPatch, case: str, records: int, step: float, hit: bool, searched: int
+) -> None:
+    budget = _Budget(step, hit)
+    budget.install(monkeypatch)
+    _assert_error(await _run(MATCHES, Dns(values=("x",) * records)), "regex_budget_exceeded")
+    assert len(budget.calls) == searched
+
+
+@pytest.mark.parametrize(("hit", "status"), [(True, "ok"), (False, "warn")])
+async def test_verdict_within_the_regex_budget(
+    monkeypatch: pytest.MonkeyPatch, hit: bool, status: str
+) -> None:
+    _Budget(3.0, hit).install(monkeypatch)
+    assert (await _run(MATCHES, Dns(values=("x",) * 3))).status == status
+
+
+async def test_each_search_gets_only_the_budget_left(monkeypatch: pytest.MonkeyPatch) -> None:
+    budget = _Budget(9.5, True)
+    budget.install(monkeypatch)
+    await _run(MATCHES, Dns(values=("x", "y")))
+    assert budget.calls == [(1.0, MAX_REGEX_BUDGET_S), (0.5, 0.5)]
+
+
+def test_regex_budget_is_below_the_run_deadline() -> None:
+    assert MAX_REGEX_BUDGET_S == 10.0
+    assert MAX_REGEX_BUDGET_S < DEFAULT_DEADLINE_S
 
 
 async def test_regex_is_recompiled_on_every_run(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -305,9 +388,67 @@ async def test_range(case: str, values: tuple[str, ...], status: str, reason: st
         _assert_failed(result, reason, status)
 
 
-async def test_range_on_compound_rdata_is_error() -> None:
-    spec = _spec("dns_value_range", rrtype="MX", min=0, max=100)
-    _assert_error(await _run(spec, Dns(values=("10 mx.example.com",), rrtype="MX")), "non_numeric")
+HALF = 2**53
+RANGE_EDGES = [
+    ("just above an int max", 0, 100, "100.00000000000000000000001", "out_of_range"),
+    ("just below an int min", 100, 200, "99.99999999999999999999999", "out_of_range"),
+    ("above 2**53 max", 0, HALF, "9007199254740993", "out_of_range"),
+    ("below -2**53 min", -HALF, 0, "-9007199254740993", "out_of_range"),
+    ("at 2**53 max", 0, HALF, "9007199254740992", None),
+    ("trailing zeros at max", 0, 100, "100.000000000000000000000000", None),
+    ("float min as written", 0.1, 1, "0.1", None),
+    ("float max as written", 0, 0.1, "0.1", None),
+    ("just above a float max", 0, 0.1, "0.1000000000000000001", "out_of_range"),
+    ("just below a float min", 0.1, 1, "0.0999999999999999999", "out_of_range"),
+    ("above a tiny float max", 0, 1e-300, "0.000000000000000000000000000001", "out_of_range"),
+]
+
+
+@pytest.mark.parametrize(
+    ("case", "low", "high", "value", "reason"), RANGE_EDGES, ids=[c[0] for c in RANGE_EDGES]
+)
+async def test_range_compares_exactly(
+    case: str, low: float, high: float, value: str, reason: str | None
+) -> None:
+    result = await _run(_spec("dns_value_range", min=low, max=high), Dns(values=(value,)))
+    if reason is None:
+        assert result.status == "ok" and result.findings == ()
+    else:
+        _assert_failed(result, reason)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "sNaN",
+        "-sNaN",
+        "NaN123",
+        "-NaN",
+        "Inf",
+        "-Infinity",
+        "+Infinity",
+        "1E+999999",
+        "1e999999999999999999",
+        "1E-999999",
+        ".5",
+        "5.",
+        "1" * 31,
+        "0." + "1" * 31,
+    ],
+)
+async def test_range_grammar_stays_strict(value: str) -> None:
+    _assert_error(await _run(RANGE, Dns(values=(value,))), "non_numeric")
+
+
+async def test_stored_range_on_another_rrtype_is_error_without_a_query() -> None:
+    dns = Dns(values=("10 mx.example.com",), rrtype="MX")
+    result = await _run(_spec("dns_value_range", rrtype="MX", min=0, max=100), dns)
+    _assert_error(result, "invalid_definition")
+    assert (result.data["field"], result.data["detail"]) == (
+        "definition.rrtype",
+        "range_requires_txt",
+    )
+    assert dns.questions == []
 
 
 # --- never trusts what is stored ------------------------------------------------------------------

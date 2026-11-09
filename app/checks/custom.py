@@ -8,8 +8,9 @@ recompiles any regex through `compile_checked`, on every run. An invalid stored 
 Status rules:
 - `error` (could not evaluate; never `ok`, never a claim that the record is absent): any DNS state
   other than ok/nxdomain/nodata, an "ok" with no record of the asked type, a regex timeout or any
-  incomplete regex result, a non-numeric value on a range, an invalid definition, a name that
-  cannot be built (too long included), too many records to evaluate.
+  incomplete regex result, the regex time budget running out, a non-numeric value on a range, an
+  invalid definition, a name that cannot be built (too long included), too many records to
+  evaluate.
 - Missing record (DNS answered definitively): `CUSTOM_CHECK_FAILED` with the configured severity
   on all three kinds, `reason` being `nxdomain` or `nodata`. For `dns_matches` and
   `dns_value_range` the requirement is unmet because there is no record to satisfy it; it is not
@@ -21,9 +22,13 @@ record concatenated with no separator (`join_txt_strings`), never merged across 
 Multiple records:
 - `dns_matches`: `ok` if at least one record matches; `CUSTOM_CHECK_FAILED` (`no_match`) if none
   does. Every record is searched and any incomplete search makes the result `error`, even when
-  another record matched, so the verdict does not depend on record order.
+  another record matched, so the verdict does not depend on record order. All the searches of one
+  evaluation share MAX_REGEX_BUDGET_S (below the 15 s run deadline of `app.services.checks`);
+  running out is `error` (`regex_budget_exceeded`), never a verdict from the records searched.
 - `dns_value_range`: every value must be numeric, otherwise `error`; `ok` only if all are in
-  [min, max], otherwise `CUSTOM_CHECK_FAILED` (`out_of_range`).
+  [min, max], otherwise `CUSTOM_CHECK_FAILED` (`out_of_range`). The grammar is plain decimal
+  notation (no exponent, NaN or Infinity, at most 30 digits on each side of the point) and the
+  comparison is exact, in `Decimal`.
 
 `Finding.remediation_key` is always None: the remediation is the plain text of the definition, in
 `params["remediation_text"]` ({en, it}), and renderers escape it. A global row carrying only a
@@ -37,6 +42,7 @@ import re
 import time
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
+from decimal import Decimal
 from typing import Any, Final
 
 from app.checks.dnsutil import _classify
@@ -51,7 +57,7 @@ from app.core.custom_check_schema import (
     validate_remediation_text,
     validate_severity,
 )
-from app.core.safe_regex import MAX_MATCHES, CompiledRule, search_all
+from app.core.safe_regex import MAX_MATCHES, CompiledRule, SearchFailure, search_many
 from app.dns.types import DnsQuestion
 
 CODES: tuple[str, ...] = (
@@ -60,12 +66,15 @@ CODES: tuple[str, ...] = (
     "CUSTOM_KIND_UNAVAILABLE",
 )
 
-MAX_RECORDS: Final = 16
+MAX_RECORDS: Final = 64
 MAX_EVIDENCE_ITEMS: Final = 5
 MAX_EVIDENCE_CHARS: Final = 256
 MATCH_TIMEOUT_S: Final = 1.0
+MAX_REGEX_BUDGET_S: Final = 10.0  # all the regex searches of one evaluation
 _NUMBER: Final = re.compile(r"[+-]?[0-9]{1,30}(\.[0-9]{1,30})?")
 _CHECK_KEY: Final = re.compile(r"[a-z0-9][a-z0-9_.-]{0,63}")
+_BUDGET_EXCEEDED: Final = "regex_budget_exceeded"
+_regex_clock = time.monotonic
 
 
 def _evidence(values: Iterable[str]) -> list[str]:
@@ -127,7 +136,10 @@ class CustomDnsCheck:
             if self._remediation_text is not None:
                 raise DefinitionInvalid("remediation", "both")
             return None
-        return validate_remediation_text(self._remediation_text)
+        text = self._remediation_text
+        # A stored record carries a LocalizedText; checks do not import repositories.
+        as_dict = getattr(text, "as_dict", None)
+        return validate_remediation_text(as_dict() if callable(as_dict) else text)
 
     async def _evaluate(self, ctx: CheckContext, target: Target) -> _Outcome:
         try:
@@ -206,11 +218,19 @@ class CustomDnsCheck:
         )
 
 
-async def _search(rule: CompiledRule, text: str) -> bool:
-    # search_all blocks on a worker subprocess; keep the event loop free.
-    result = await asyncio.to_thread(
-        search_all, rule, text, timeout_s=MATCH_TIMEOUT_S, max_matches=MAX_MATCHES
+async def _search(rule: CompiledRule, text: str, remaining: float) -> bool:
+    # search_many blocks on a worker subprocess; keep the event loop free. Its total_timeout_s
+    # bounds the slot wait, the worker start and the rule together.
+    (result,) = await asyncio.to_thread(
+        search_many,
+        [rule],
+        text,
+        timeout_s=min(MATCH_TIMEOUT_S, remaining),
+        max_matches=MAX_MATCHES,
+        total_timeout_s=remaining,
     )
+    if result.failure is SearchFailure.BATCH_DEADLINE:
+        raise _CannotEvaluate(_BUDGET_EXCEEDED)
     if result.timed_out:
         raise _CannotEvaluate("regex_timeout")
     if not result.complete:
@@ -220,21 +240,37 @@ async def _search(rule: CompiledRule, text: str) -> bool:
 
 async def _any_match(parsed: ParsedDefinition, records: Sequence[str]) -> bool:
     assert parsed.rule is not None
+    started = _regex_clock()
+
+    def budget_left() -> float:
+        remaining = MAX_REGEX_BUDGET_S - (_regex_clock() - started)
+        if remaining <= 0:
+            raise _CannotEvaluate(_BUDGET_EXCEEDED)
+        return remaining
+
     matched = False
     for text in records:  # no early exit: an incomplete search is `error` in any record order
-        matched = await _search(parsed.rule, text) or matched
+        matched = await _search(parsed.rule, text, budget_left()) or matched
+    budget_left()  # a last search that ended past the budget gives no verdict either
     return matched
 
 
-def _number_of(text: str) -> float:
+def _number_of(text: str) -> Decimal:
     candidate = text.strip(" \t")
     if not _NUMBER.fullmatch(candidate):
         raise _CannotEvaluate("non_numeric")
-    return float(candidate)
+    return Decimal(candidate)  # exact: the context only applies to arithmetic
+
+
+def _exact_bound(bound: int | float) -> Decimal:
+    """The bound as written: `repr` of a float is its shortest round-trip text, so 0.1 is 0.1 and
+    not its binary expansion."""
+    return Decimal(bound) if isinstance(bound, int) else Decimal(repr(bound))
 
 
 def _all_in_range(parsed: ParsedDefinition, records: Sequence[str]) -> bool:
     assert parsed.minimum is not None and parsed.maximum is not None
     # Parse every value first: a non-numeric one is `error` even if another is out of range.
     values = [_number_of(text) for text in records]
-    return all(parsed.minimum <= v <= parsed.maximum for v in values)
+    minimum, maximum = _exact_bound(parsed.minimum), _exact_bound(parsed.maximum)
+    return all(minimum <= v <= maximum for v in values)

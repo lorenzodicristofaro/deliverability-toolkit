@@ -8,7 +8,8 @@ Definition keys, per kind (anything else is refused as `unknown_key`):
 - `dns_exists`: `name`, `rrtype`;
 - `dns_matches`: `name`, `rrtype`, `pattern` (through `compile_checked`, no flag key: use inline
   flags such as `(?i)`);
-- `dns_value_range`: `name`, `rrtype`, `min`, `max` (numbers, not bool, finite, min <= max).
+- `dns_value_range`: `name`, `rrtype` (TXT only: no other type's rdata is a bare number), `min`,
+  `max` (numbers, not bool, finite, min <= max).
 
 `http_fetch` is a known kind that is not available yet (M7, guarded outbound client):
 `parse_definition` raises `KindUnavailable`.
@@ -239,10 +240,13 @@ def parse_definition(kind: object, definition: object) -> ParsedDefinition:
         maximum = _number("definition.max", definition["max"])
         if minimum > maximum:
             raise DefinitionInvalid("definition.min", "min_above_max")
+    rrtype = _rrtype(definition["rrtype"])
+    if kind == "dns_value_range" and rrtype != "TXT":
+        raise DefinitionInvalid("definition.rrtype", "range_requires_txt")
     parsed = ParsedDefinition(
         kind=kind,
         name_template=definition["name"],
-        rrtype=_rrtype(definition["rrtype"]),
+        rrtype=rrtype,
         rule=rule,
         minimum=minimum,
         maximum=maximum,
