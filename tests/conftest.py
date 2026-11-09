@@ -3,9 +3,12 @@ TEST_DATABASE_URL is set (CI, or a local throwaway container), on PostgreSQL.
 
 - `migrated_db_url`: an empty database at Alembic head. Migrations run once per backend per
   session (lazily): SQLite tests get a copy of a migrated template, PostgreSQL tests a TRUNCATE.
-- `db_url`: a truly empty database, for tests that run migrations themselves or need no schema."""
+- `db_url`: a truly empty database, for tests that run migrations themselves or need no schema.
+- `--db-backend`: runs only one side of the split used by the CI jobs (docs/TESTING.md).
+- `seed_table_access`: skips the startup seed sync in `SEEDLESS_MODULES` and guards that choice."""
 
 import os
+import re
 import shutil
 from collections.abc import Callable, Iterator
 from pathlib import Path
@@ -14,7 +17,7 @@ from typing import Any
 import pytest
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import Engine, text
+from sqlalchemy import Engine, event, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import ArgumentError
 
@@ -24,6 +27,33 @@ from tests.support.dns_zones import FakeServerSet, load_zones
 
 ROOT = Path(__file__).resolve().parent.parent
 _MIGRATION_KEY = "k" * 40
+# The skip reason of every PostgreSQL parameter. `--db-backend` selects on it, so a parameter that
+# would be skipped without PostgreSQL is by construction a parameter the PostgreSQL job runs.
+PG_SKIP_REASON = "TEST_DATABASE_URL not set"
+
+# Test modules that start the app but never read the global knowledge tables: their startup skips
+# the seed sync (about 30 ms per test, mostly inserts). Add a module only after checking that it
+# needs no global row; `seed_table_access` fails any test here that touches those tables. Seed
+# sync, content rule, DKIM, check and acceptance tests must stay out, and keep the real sync.
+SEEDLESS_MODULES = frozenset(
+    {
+        "tests/api/test_dns_tools_api.py",
+        "tests/api/test_domains.py",
+        "tests/support/test_collection_fixtures.py",
+        "tests/web/test_auth_endpoints.py",
+        "tests/web/test_dns_tools_trace_ui.py",
+        "tests/web/test_dns_tools_ui.py",
+        "tests/web/test_domains_ui.py",
+        "tests/web/test_landing.py",
+        "tests/web/test_setup.py",
+        "tests/web/test_templating.py",
+    }
+)
+# Reads and writes only: migrations and the per-test TRUNCATE name these tables too.
+SEED_TABLE_DML = re.compile(
+    r"^\s*(select|insert|update|delete)\b.*\b(content_rules|dkim_selectors)\b",
+    re.IGNORECASE | re.DOTALL,
+)
 
 # A reset that cannot get its locks fails the test instead of hanging CI. The usual cause is a
 # connection left "idle in transaction" by an earlier test (a session or engine not closed).
@@ -146,6 +176,77 @@ def _check_postgres_schema_unchanged(url: str) -> None:
     _pg.fingerprint = expected
 
 
+def pytest_addoption(parser: pytest.Parser) -> None:
+    parser.addoption(
+        "--db-backend",
+        choices=("sqlite", "postgresql"),
+        default=None,
+        help="sqlite: everything except the PostgreSQL params; postgresql: only those params",
+    )
+
+
+def needs_postgres(item: pytest.Item) -> bool:
+    """True for exactly the tests skipped when PostgreSQL is not configured."""
+    return any(m.kwargs.get("reason") == PG_SKIP_REASON for m in item.iter_markers("skipif"))
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    """Apply `--db-backend`. Without PostgreSQL the postgresql side would skip every test and
+    report success, so that combination is a usage error."""
+    backend = config.getoption("--db-backend")
+    if backend is None:
+        return
+    if backend == "postgresql" and not os.environ.get("TEST_DATABASE_URL"):
+        raise pytest.UsageError("--db-backend=postgresql requires TEST_DATABASE_URL")
+    wanted = backend == "postgresql"
+    selected = [item for item in items if needs_postgres(item) == wanted]
+    deselected = [item for item in items if needs_postgres(item) != wanted]
+    if deselected:
+        config.hook.pytest_deselected(items=deselected)
+        items[:] = selected
+
+
+def _no_seed_sync(*_args: object, **_kwargs: object) -> dict[str, Any]:
+    return {}
+
+
+@pytest.fixture(autouse=True)
+def seed_table_access(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
+) -> Iterator[list[str]]:
+    """In `SEEDLESS_MODULES`: replace the startup seed sync with a no-op and record every read or
+    write of a global knowledge table. Recorded statements fail the test at teardown (not when
+    they run: the application may catch an exception raised there), because the test would be
+    working on tables the skipped sync left empty. Elsewhere the real sync runs untouched."""
+    if request.node.nodeid.partition("::")[0] not in SEEDLESS_MODULES:
+        yield []
+        return
+    statements: list[str] = []
+
+    def record(
+        _conn: object,
+        _cursor: object,
+        statement: str,
+        _parameters: object,
+        _context: object,
+        _executemany: bool,
+    ) -> None:
+        if SEED_TABLE_DML.search(statement):
+            statements.append(statement)
+
+    monkeypatch.setattr("app.main.run_seed_sync", _no_seed_sync)
+    event.listen(Engine, "before_cursor_execute", record)
+    try:
+        yield statements
+    finally:
+        event.remove(Engine, "before_cursor_execute", record)
+    if statements:
+        pytest.fail(
+            f"{request.node.nodeid} touched a global knowledge table but its module is in "
+            f"SEEDLESS_MODULES, so the seed sync did not run: {statements[0][:200]}"
+        )
+
+
 @pytest.fixture(scope="session")
 def _sqlite_template(tmp_path_factory: pytest.TempPathFactory) -> Path:
     """A migrated SQLite file, built on first use. No test ever opens it, they get a copy."""
@@ -171,7 +272,7 @@ def _postgres_session() -> Iterator[str]:
         pytest.param(
             "postgresql",
             marks=pytest.mark.skipif(
-                not os.environ.get("TEST_DATABASE_URL"), reason="TEST_DATABASE_URL not set"
+                not os.environ.get("TEST_DATABASE_URL"), reason=PG_SKIP_REASON
             ),
         ),
     ]
