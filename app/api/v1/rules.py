@@ -12,10 +12,11 @@ Status codes (401, 403, 404, 409, 413 and 415 bodies are `{"detail": <i18n>}`):
 - 422 `{key, message, field, reason}`, never echoing the rejected value;
 - `POST /test` answers 200 with an `outcome`, including `timed_out`, `busy`, `error` and `invalid`.
 
-Permission (and, on an item, visibility) is decided before the body is read or parsed, so a denied
-caller gets 403/404 whatever it sent. Dependencies are solved in parameter order: `ManageScope`
-must stay before `Body`. `/test` can block for seconds, so it releases the database connection
-and runs in a worker thread.
+Permission is decided before the body is read, so a denied caller gets 403 whatever it sent.
+Dependencies are solved in parameter order: `ManageScope` must stay before `Body`. On PATCH the
+raw body is read (and size-limited) before the rule's visibility is checked, and parsed only
+after it: a missing or foreign id with a malformed body is a 404. `/test` can block for seconds,
+so it releases the database connection and runs in a worker thread.
 """
 
 from __future__ import annotations

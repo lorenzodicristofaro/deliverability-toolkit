@@ -39,6 +39,7 @@ from dataclasses import dataclass
 from typing import Any, Final
 
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.exc import StaleDataError
 
 from app.core.permissions import (
     Action,
@@ -309,6 +310,9 @@ class ContentRulesAdminService:
         except SeedKeyTaken:
             self._db.rollback()
             raise SeedKeyConflict from None
+        except StaleDataError:  # deleted concurrently, between the load and the flush
+            self._db.rollback()
+            raise RuleNotFound from None
         if record is None:  # deleted concurrently
             raise RuleNotFound
         self._db.commit()
@@ -382,13 +386,16 @@ class ContentRulesAdminService:
             reason = exc.reason.value
             key = field_key("pattern", reason)
             return RuleTestOutcome(RuleTestStatus.INVALID, key=key, reason=reason)
-        result = search_all(
-            compiled,
-            sample,
-            timeout_s=TEST_TIMEOUT_S,
-            max_matches=MAX_TEST_MATCHES,
-            max_text_bytes=MAX_SAMPLE_BYTES,
-        )
+        try:
+            result = search_all(
+                compiled,
+                sample,
+                timeout_s=TEST_TIMEOUT_S,
+                max_matches=MAX_TEST_MATCHES,
+                max_text_bytes=MAX_SAMPLE_BYTES,
+            )
+        except OSError:  # the worker could not be spawned (out of processes or memory)
+            return RuleTestOutcome(RuleTestStatus.ERROR, key=TEST_FAILED_KEY)
         if result.timed_out:
             return RuleTestOutcome(RuleTestStatus.TIMED_OUT, key=TIMED_OUT_KEY)
         if result.failure is SearchFailure.BUSY:

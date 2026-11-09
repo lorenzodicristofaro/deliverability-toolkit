@@ -8,7 +8,9 @@ runs here: these tests need the seeded global rows. No network.
 
 from __future__ import annotations
 
+import errno
 import json
+import threading
 from collections.abc import Iterator
 from typing import Any
 
@@ -17,6 +19,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.api.v1 import rules as rules_api
 from app.api.v1._common import MAX_BODY_BYTES
 from app.core import i18n
 from app.core.config import Settings
@@ -314,6 +317,14 @@ def test_foreign_tenant_rule_is_a_404_for_every_verb(world: World, method: str, 
     assert response.json() == {"detail": t("api.rules.error.not_found", "en")}
     assert "B private rule" not in response.text
     assert rows(world.db) == before
+
+
+def test_foreign_id_with_malformed_json_is_404_not_422(world: World) -> None:
+    """Visibility is checked before the body is parsed."""
+    foreign = make(world, "b_owner", tenant="b", name="B private rule")
+    response = call(world, "owner", "PATCH", f"{URL}/{foreign['id']}", content=b"{")
+    assert response.status_code == 404
+    assert response.json() == {"detail": t("api.rules.error.not_found", "en")}
 
 
 def test_session_in_a_foreign_tenant_gets_404(world: World) -> None:
@@ -630,6 +641,56 @@ def test_no_verdict_outcomes_are_200_and_not_timed_out(
     body = response.json()
     assert (body["outcome"], body["timed_out"], body["matches"]) == (outcome, False, [])
     assert body["message"]
+
+
+def test_worker_that_cannot_spawn_is_a_200_error_outcome(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def cannot_spawn(*_a: Any, **_k: Any) -> Any:
+        raise OSError(errno.EAGAIN, "Resource temporarily unavailable")
+
+    monkeypatch.setattr("app.core.safe_regex.subprocess.Popen", cannot_spawn)
+    response = call(world, "owner", "POST", TEST_URL, json=sample_body())
+    assert response.status_code == 200
+    body = response.json()
+    assert (body["outcome"], body["timed_out"], body["matches"]) == ("error", False, [])
+    assert body["key"] == "api.rules.error.test_failed"
+
+
+def test_sample_test_releases_the_connection_and_leaves_the_event_loop(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    events: list[str] = []
+    sessions: list[Session] = []
+    threads: dict[str, int] = {}
+    in_transaction: list[bool] = []
+    real_rollback = Session.rollback
+    real_read = rules_api._raw_body
+
+    def rollback(self: Session) -> None:
+        events.append("rollback")
+        sessions.append(self)
+        real_rollback(self)
+
+    async def read(request: Any) -> Any:
+        events.append("read")
+        threads["event_loop"] = threading.get_ident()
+        return await real_read(request)
+
+    def search(*_a: Any, **_k: Any) -> MatchResult:
+        events.append("search")
+        threads["search"] = threading.get_ident()
+        in_transaction.extend(session.in_transaction() for session in sessions)
+        return MatchResult((), False, False, None)
+
+    monkeypatch.setattr(Session, "rollback", rollback)
+    monkeypatch.setattr(rules_api, "_raw_body", read)
+    monkeypatch.setattr(admin, "search_all", search)
+    response = call(world, "owner", "POST", TEST_URL, json=sample_body())
+    assert response.json()["outcome"] == "no_match"
+    assert events == ["rollback", "read", "search"]
+    assert in_transaction == [False]
+    assert threads["search"] != threads["event_loop"]
 
 
 def test_sample_over_the_cap_is_a_422(world: World) -> None:

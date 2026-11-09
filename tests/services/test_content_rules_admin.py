@@ -6,6 +6,7 @@ subprocess; no network.
 
 from __future__ import annotations
 
+import errno
 import logging
 import time
 from collections.abc import Iterator
@@ -13,7 +14,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from app.core.db import create_db_engine, create_session_factory
@@ -23,6 +24,7 @@ from app.core.tenancy import TenantContext
 from app.models import MembershipRole, Tenant, User
 from app.models.content_rule import ContentRule
 from app.repositories import GlobalContentRuleRepository, repo_for
+from app.repositories.content_rules import _ContentRuleStore
 from app.services import content_rules_admin as admin
 from app.services.content_analysis import load_tenant_rules
 from app.services.content_rules_admin import (
@@ -675,9 +677,46 @@ def test_saturated_worker_pool_is_busy_not_a_timeout(
     assert outcome.timed_out is False
 
 
+def test_worker_that_cannot_spawn_is_an_error_outcome(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def cannot_spawn(*_a: Any, **_k: Any) -> Any:
+        raise OSError(errno.EAGAIN, "Resource temporarily unavailable")
+
+    monkeypatch.setattr("app.core.safe_regex.subprocess.Popen", cannot_spawn)
+    outcome = world.service("owner").test_pattern(TENANT, regex("hello"))
+    assert outcome.status is RuleTestStatus.ERROR
+    assert outcome.key == "api.rules.error.test_failed"
+    assert outcome.timed_out is False
+    assert outcome.matches == ()
+
+
+def test_row_deleted_between_load_and_flush_is_not_found(
+    world: World, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.INFO, logger="app.rules")
+    owner = world.service("owner")
+    created = owner.create(TENANT, rule())
+    remaining = world.rows() - 1
+    real_flush = _ContentRuleStore._flush
+
+    def delete_then_flush(store: _ContentRuleStore) -> None:
+        with Session(world.db.get_bind()) as other:
+            other.execute(delete(ContentRule).where(ContentRule.id == created.id))
+            other.commit()
+        real_flush(store)
+
+    monkeypatch.setattr(_ContentRuleStore, "_flush", delete_then_flush)
+    caplog.clear()
+    with pytest.raises(RuleNotFound):
+        owner.update(TENANT, created.id, {"weight": 3})
+    assert world.rows() == remaining  # the session was rolled back and is usable
+    assert not [r for r in caplog.records if r.name == "app.rules"]
+
+
 def test_snippets_and_match_count_are_bounded(world: World) -> None:
     long_match = world.service("owner").test_pattern(TENANT, regex(".+", "x" * 5000))
-    assert len(long_match.matches[0].snippet or "") <= admin.MAX_SNIPPET_CHARS
+    assert len(long_match.matches[0].snippet or "") == 120
     many = world.service("owner").test_pattern(TENANT, regex("a", "a " * 500))
     assert len(many.matches) == admin.MAX_TEST_MATCHES
     assert many.truncated is True
