@@ -120,7 +120,7 @@ Carried over from M0-07 QA:
   - [x] M5-12 content_rules seed + sync
   - [x] M5-13 content rules engine (opus)
   - [x] M5-14 content analysis service + CONTENT_* findings
-  - [ ] M5-15 REST POST /api/v1/content/analyze
+  - [x] M5-15 REST POST /api/v1/content/analyze
   - [ ] M5-15b test DB fixtures: migrate once per session (opus)
   - [ ] M5-16 web UI content analyzer
   - [ ] M5-17 CLI `content`
@@ -195,6 +195,9 @@ Carried over from M0-07 QA:
 - [ ] tests/services/test_content_analysis.py (M5-14 QA): the socket guard does not detect an attempt whose exception is caught and ignored; a guard recording attempts, asserted empty, would close it.
 - [ ] Content visible text (M5-14 QA): text runs are joined by a space, so a word split across inline tags is not matched by rules.
 - [ ] app/parsers/content_html.py (M5-14 QA): ContentStructure `gmail_*` field names (internal, not on the wire) should be renamed to match the clip-risk wording.
+- [ ] Content API (M5-15 QA): `db.rollback()` at app/api/v1/content.py:170 runs synchronously on the event loop; a stalled PostgreSQL connection would block the loop. Use `await run_in_threadpool(db.rollback)`; no test pins it.
+- [ ] Content analysis (M5-15 QA): `analyze_content` keeps a pooled DB connection in a transaction through rule evaluation, up to about 15 s (idle-in-transaction on PostgreSQL). Release it after loading the rules (M5-14 code).
+- [ ] M4-11 message analyze route has the same Content-Length `isdigit()` pattern fixed in M5-15 with `isascii()`; extends the existing CSRF form cap nit (M5-01 QA).
 - [ ] Subject lookalikes (M5-11 QA nits): fullwidth Latin mixed with ASCII Latin (`ｐaypal`) is not flagged (FULLWIDTH prefix stripped); Letterlike Symbols excluded so `ℎello` is not flagged. Add a width-mixing / confusable fact (consider Unicode confusables data).
 - [ ] tests/tenancy World.send: add a raw-body option so the matrix can show 200 for permitted roles on raw-body routes (M4-11 QA nit).
 - [ ] Received redaction (done in M4-10: all `@` tokens masked). Remaining: `<local>` with no domain and fullwidth ＠ stay visible; Message-ID-style hop ids become None. Also a dedicated MSG_SECTION_FAILED code (en+it) instead of reusing MSG_PARSER_LIMIT, whose "exceeded limits" text misleads for internal failures.
