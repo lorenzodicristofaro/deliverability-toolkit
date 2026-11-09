@@ -18,6 +18,11 @@ least one selector is ``found`` the status follows the findings. If none is foun
 failed, the status is ``error``. ``DKIM_NO_SELECTOR_FOUND`` is emitted only when every
 selector is ``not_found``.
 
+The caller chooses the list. An empty list means nothing was probed: the status is ``error`` with
+``DKIM_NO_SELECTORS_PROBED``, never a verdict about the domain. ``dropped`` counts selectors the
+caller cut from an over-long list: the result is incomplete (status ``error``) and says so with
+``DKIM_SELECTORS_CAPPED``.
+
 ``probe_selectors`` yields each result as soon as it is ready (completion order), with
 bounded concurrency and no early stop; ``DkimCheck.run`` drains the same generator.
 """
@@ -49,6 +54,8 @@ CODES: tuple[str, ...] = (
     "DKIM_CNAME_LOOP",
     "DKIM_CNAME_CHAIN_LONG",
     "DKIM_PROBE_ERRORS",
+    "DKIM_NO_SELECTORS_PROBED",
+    "DKIM_SELECTORS_CAPPED",
 )
 
 # ARCHITECTURE section 6: bounded concurrency, every selector probed.
@@ -209,13 +216,16 @@ def summarize(
     started_at: datetime,
     duration_ms: int,
     complete: bool = True,
+    dropped: int = 0,
 ) -> CheckResult:
     """The single source of the DKIM result (check, API, CLI and the SSE ``done`` event).
 
     ``names`` is the probe order; results are sorted by it. With ``complete=False`` (the probe
     was cut short) the result is never evaluated, so its status is ``error``, and the aggregate
-    findings (which need every selector) are not emitted.
+    findings (which need every selector) are not emitted. A positive ``dropped`` (selectors cut
+    from the list before the probe) makes the result incomplete in the same way.
     """
+    complete = complete and not dropped
     order = {n: i for i, n in enumerate(names)}
     ordered = sorted(results, key=lambda r: order.get(r.selector, len(order)))
     findings: list[Finding] = []
@@ -223,6 +233,12 @@ def summarize(
         findings.extend(_selector_findings(r))
     failed = [r for r in ordered if r.state == "error"]
     found = [r for r in ordered if r.state == "found"]
+    if not names:
+        findings.append(finding("DKIM_NO_SELECTORS_PROBED", "low"))
+    if dropped:
+        findings.append(
+            finding("DKIM_SELECTORS_CAPPED", "low", {"probed": len(names), "dropped": dropped})
+        )
     if complete:
         if failed:
             findings.append(
@@ -236,6 +252,14 @@ def summarize(
         elif ordered and not found:  # every selector is not_found
             findings.append(finding("DKIM_NO_SELECTOR_FOUND", "info", {"count": len(ordered)}))
     evaluated = complete and bool(ordered) and (bool(found) or not failed)
+    data: dict[str, Any] = {
+        "enumerable": False,
+        "probed": len(ordered),
+        "found": len(found),
+        "selectors": [_selector_data(r) for r in ordered],
+    }
+    if dropped:
+        data["dropped"] = dropped
     return CheckResult.build(
         check_id=DkimCheck.id,
         target=target,
@@ -243,20 +267,16 @@ def summarize(
         evaluated=evaluated,
         started_at=started_at,
         duration_ms=duration_ms,
-        data={
-            "enumerable": False,
-            "probed": len(ordered),
-            "found": len(found),
-            "selectors": [_selector_data(r) for r in ordered],
-        },
+        data=data,
     )
 
 
 class DkimCheck:
     id = "dkim"
 
-    def __init__(self, selectors: Sequence[str] | None = None) -> None:
+    def __init__(self, selectors: Sequence[str] | None = None, *, dropped: int = 0) -> None:
         self._selectors = tuple(selectors) if selectors is not None else None
+        self._dropped = dropped
 
     def _names(self) -> tuple[str, ...]:
         if self._selectors is not None:
@@ -278,4 +298,5 @@ class DkimCheck:
             names,
             started_at=started,
             duration_ms=int((time.monotonic() - t0) * 1000),
+            dropped=self._dropped,
         )

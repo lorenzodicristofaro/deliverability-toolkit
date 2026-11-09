@@ -153,7 +153,8 @@ async def test_all_not_found_gives_no_selector_found() -> None:
 async def test_empty_selector_list_is_error() -> None:
     r = await _run("dkim_cases.yaml", "mixallnx.example.com", [])
     assert r.status == "error"
-    assert r.findings == ()
+    assert _codes(r) == {"DKIM_NO_SELECTORS_PROBED"}  # says nothing was probed, no verdict
+    assert r.data["probed"] == 0
 
 
 # --- DNS failures (recorded zones) --------------------------------------------------------
@@ -368,3 +369,30 @@ def test_codes_have_complete_i18n_with_matching_placeholders() -> None:
             k = f"finding.{code}.{part}"
             assert en.get(k) and it.get(k), k
             assert i18n.placeholders(en[k]) == i18n.placeholders(it[k]), k
+
+
+# --- the caller's list: empty, or cut by a cap (M5-20) ----------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("selectors", "dropped"),
+    [(["sel"], 1), (["sel", "other"], 5)],
+    ids=["one", "many"],
+)
+async def test_dropped_selectors_make_the_result_incomplete(
+    selectors: list[str], dropped: int
+) -> None:
+    r = await DkimCheck(selectors, dropped=dropped).run(
+        _ctx(_Map({})), Target(domain="a.example.com")
+    )
+    assert r.status == "error"
+    assert _codes(r) == {"DKIM_SELECTORS_CAPPED"}  # never DKIM_NO_SELECTOR_FOUND
+    assert r.data["dropped"] == dropped
+    capped = next(f for f in r.findings if f.code == "DKIM_SELECTORS_CAPPED")
+    assert capped.params == {"probed": len(selectors), "dropped": dropped}
+
+
+async def test_nothing_dropped_leaves_the_result_shape_unchanged() -> None:
+    r = await DkimCheck(["sel"]).run(_ctx(_Map({})), Target(domain="a.example.com"))
+    assert set(r.data) == {"enumerable", "probed", "found", "selectors"}
+    assert _codes(r) == {"DKIM_NO_SELECTOR_FOUND"}
