@@ -14,4 +14,5 @@ Acceptance criteria:
 - docs/TESTING.md describes the CI job split and how to run the PostgreSQL params locally.
 - Measured on dev CI after merge: duration of each test job, against the 622 s baseline; the longest test job should be at most 50% of the 948 s original baseline (474 s).
 New i18n keys: none
-Status: todo
+Measured (run 42600956376 on 592cd46, all jobs green): test-sqlite pytest 128 s (20162 passed), test-postgres pytest 270 s (2791 passed), whole CI workflow 5 min 11 s; original baseline 948 s; the 474 s target is met.
+Status: done

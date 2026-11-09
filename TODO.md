@@ -122,7 +122,7 @@ Carried over from M0-07 QA:
   - [x] M5-14 content analysis service + CONTENT_* findings
   - [x] M5-15 REST POST /api/v1/content/analyze
   - [x] M5-15b test DB fixtures: migrate once per session (opus)
-  - [ ] M5-15c test suite speed: seed sync, parallel CI jobs, docs-only pushes (opus)
+  - [x] M5-15c test suite speed: seed sync, parallel CI jobs, docs-only pushes (opus)
   - [ ] M5-15d PostgreSQL on tmpfs in CI (measured)
   - [ ] M5-16 web UI content analyzer
   - [ ] M5-17 CLI `content`
@@ -168,6 +168,8 @@ Carried over from M0-07 QA:
 
 ## Follow-ups (post-M1)
 - [ ] Test DB fixtures (M5-15b QA nits): tests/test_db_isolation.py:90 never sets `_pg.fingerprint`, so removing `_require_vetted` from `_truncate_postgres` survives locally (set a non-None fingerprint); the schema fingerprint at tests/conftest.py:31 omits constraints, defaults and nullability; the "never both fixtures" failure at tests/conftest.py:181 has no pinned test; the .github/workflows/ci.yml:39 comment still says only `db_url`; the lint-test job has no `timeout-minutes`.
+- [ ] Test collection fixtures (M5-15c QA): the `seed_table_access` failure path at tests/conftest.py:243 is not pinned (mutant `if False:` survives); add a self-test that a recorded statement fails the test. Backend selection at tests/conftest.py:202-203: build both lists in one pass so a dropped test cannot go unnoticed. `SEED_TABLE_DML` at tests/conftest.py:53 misses statements starting with `WITH` or a SQL comment (app/ has no CTEs today).
+- [ ] MAINTAINER TO CHECK (M5-15c): if GitHub branch protection requires `lint-test`, replace it with `lint`, `test-sqlite`, `test-postgres`; if required, docs-only PRs stay Pending because the CI workflow is skipped.
 - [ ] Content rule targets (M5-12, GM decision 2026-11-08): add a target field to `content_rules` (subject / body; model, migration, repository, seed schema, engine) plus reply context (In-Reply-To/References) so real replies are exempt. Until then `subject_fake_reply_forward_prefix` stays disabled, and no seeded content rule is enabled.
 - [ ] content_rules seed (M5-12 QA): before `shouting_punctuation` or `all_caps_run` is enabled, reword their en/it text. "not a requirement published by a mailbox provider" is a universal claim nothing cited supports; say instead that this tool has no official source for it (locales/en.json, locales/it.json).
 - [ ] Seed sync (M5-12 QA): move `list_seeded` into GlobalContentRuleRepository and expose a public cleaner like DKIM's `clean_global_values`, replacing the subclass and the private `_clean_values` import in app/services/seed_sync.py.
