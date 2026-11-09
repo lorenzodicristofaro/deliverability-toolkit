@@ -24,12 +24,12 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Annotated, Any, NoReturn
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from starlette.concurrency import run_in_threadpool
 
-from app.api.v1._common import _error, _no_duplicate_keys
+from app.api.v1._common import _error, _no_constant, _no_duplicate_keys
 from app.core.i18n import t
 from app.core.permissions import Action, TenantResource, can
 from app.core.tenancy import TenantContext
@@ -94,7 +94,9 @@ async def _read_capped(request: Request) -> bytes:
     """The body, read with a hard cap: Content-Length is checked first, then the bytes are
     counted while streaming and reading stops at the first chunk that crosses the cap."""
     declared = request.headers.get("content-length")
-    if declared is not None and (not declared.isdigit() or int(declared) > MAX_RAW_BYTES):
+    if declared is not None and (
+        not (declared.isascii() and declared.isdigit()) or int(declared) > MAX_RAW_BYTES
+    ):
         raise _too_large(request)
     chunks: list[bytes] = []
     size = 0
@@ -104,10 +106,6 @@ async def _read_capped(request: Request) -> bytes:
             raise _too_large(request)
         chunks.append(chunk)
     return b"".join(chunks)
-
-
-def _no_constant(_name: str) -> NoReturn:
-    raise ValueError("non-finite number")
 
 
 def _parse_json(request: Request, raw: bytes) -> dict[str, Any]:
@@ -165,6 +163,11 @@ async def content_analyze(request: Request, ctx: Access, db: DbDep) -> Response:
             "content_type",
             "unsupported_media_type",
         )
+    # The auth dependency left a transaction open on this session; end it so a pooled connection
+    # is not held idle through the body read and the analysis. `ctx` holds plain ints (tenant and
+    # user ids copied before this point), so the expiry a rollback causes cannot affect it; the
+    # analyzer's own queries then begin a fresh transaction.
+    db.rollback()
     raw = await _read_capped(request)
     if not raw:
         raise _empty(request)

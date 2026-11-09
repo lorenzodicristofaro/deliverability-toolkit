@@ -7,6 +7,7 @@ byte-for-byte contract, tenant-rule isolation and the offline / nothing-stored g
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from collections.abc import AsyncIterator, Iterator
@@ -18,6 +19,7 @@ from alembic.config import Config
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select
+from sqlalchemy.orm import Session
 
 from app.api.v1 import content as content_api
 from app.api.v1.dns_tools import dns_backend
@@ -343,6 +345,97 @@ def test_malformed_json_is_422(
     assert spy == []
 
 
+def test_analyzer_runs_off_the_event_loop(
+    world: tuple[World, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """analyze_content blocks for seconds: it must run in a worker thread, not on the loop."""
+    w, _ = world
+    on_loop: list[bool] = []
+
+    def wrapper(ctx: TenantContext, session: Any, content: ContentInput) -> ContentAnalysis:
+        try:
+            asyncio.get_running_loop()
+            on_loop.append(True)
+        except RuntimeError:
+            on_loop.append(False)
+        return analyze_content(ctx, session, content)
+
+    monkeypatch.setattr(content_api, "analyze_content", wrapper)
+    assert post_json(w, "analyst").status_code == 200
+    assert on_loop == [False]
+
+
+def test_no_transaction_is_held_during_body_read_and_analysis(
+    world: tuple[World, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    w, _ = world
+    events: list[str] = []
+    real_read = content_api._read_capped
+    real_rollback = Session.rollback
+    in_tx: list[bool] = []
+
+    async def read(request: Any) -> bytes:
+        events.append("read")
+        return await real_read(request)
+
+    def rollback(self: Session) -> None:
+        events.append("rollback")
+        real_rollback(self)
+
+    def wrapper(ctx: TenantContext, session: Any, content: ContentInput) -> ContentAnalysis:
+        in_tx.append(session.in_transaction())
+        return analyze_content(ctx, session, content)
+
+    monkeypatch.setattr(content_api, "_read_capped", read)
+    monkeypatch.setattr(Session, "rollback", rollback)
+    monkeypatch.setattr(content_api, "analyze_content", wrapper)
+    assert post_json(w, "analyst").status_code == 200
+    assert "rollback" in events[: events.index("read")]
+    assert in_tx == [False]
+
+
+BAD_STRINGS = ["\\ud800", "\\udc00", "a\\ud800b", "\\ud83d\\ude00\\ud800"]
+
+
+@pytest.mark.parametrize("bad", BAD_STRINGS)
+@pytest.mark.parametrize("field", ["html", "text", "subject", "language"])
+def test_lone_surrogates_are_clean(
+    world: tuple[World, Any], spy: list[ContentInput], field: str, bad: str
+) -> None:
+    """JSON escapes yield lone surrogates, which cannot be UTF-8 encoded: never a 500."""
+    w, _ = world
+    extra = '"text": "hello", ' if field not in ("html", "text") else ""
+    r = post_json(w, "analyst", (f'{{{extra}"{field}": "{bad}"}}').encode())
+    if field == "language":
+        assert r.status_code == 422
+        assert r.json()["detail"]["key"] == "api.content.error.invalid_language"
+        assert spy == []
+    else:
+        assert r.status_code == 200, r.text[:200]
+        assert r.json()["status"] in {"ok", "warn", "fail", "error", "not_evaluated"}
+
+
+@pytest.mark.parametrize("charset", ["latin-1", "bogus", "utf-16", '"utf-8"'])
+def test_declared_charset_is_ignored_cleanly(world: tuple[World, Any], charset: str) -> None:
+    """The body is always UTF-8 JSON; a declared charset neither crashes nor changes that."""
+    w, _ = world
+    headers = {"Content-Type": f"application/json; charset={charset}"}
+    r = post_json(w, "analyst", {"text": "caf\u00e9"}, headers=headers)
+    assert r.status_code == 200
+    latin = post_json(w, "analyst", '{"text": "caf\u00e9"}'.encode("latin-1"), headers=headers)
+    assert latin.status_code == 422
+    assert latin.json()["detail"]["reason"] == "malformed_json"
+
+
+@pytest.mark.parametrize("charset", ["latin-1", "bogus"])
+@pytest.mark.parametrize("raw", [EML, EML.replace(b"text/plain", b"text/plain; charset=bogus")])
+def test_eml_charsets_are_clean(world: tuple[World, Any], charset: str, raw: bytes) -> None:
+    w, _ = world
+    r = post_eml(w, "analyst", raw, headers={"Content-Type": f"message/rfc822; charset={charset}"})
+    assert r.status_code == 200
+    assert r.content == _service(w, eml=raw)
+
+
 def test_language_hint_and_fields_reach_the_analyzer(
     world: tuple[World, Any], spy: list[ContentInput]
 ) -> None:
@@ -395,8 +488,27 @@ def test_over_cap_is_413_when_streamed(world: tuple[World, Any], spy: list[Conte
 def test_bad_content_length_is_413(world: tuple[World, Any], spy: list[ContentInput]) -> None:
     w, _ = world
     r = post_eml(w, "analyst", headers={**EML_H, "Content-Length": "abc"})
-    assert r.status_code in (400, 413)
+    assert r.status_code == 413
     assert spy == []
+
+
+async def test_reader_rejects_non_ascii_digit_length() -> None:
+    """`"\u00b2".isdigit()` is True but `int()` raises: a clean 413, never a ValueError. (An HTTP
+    client cannot send this header, so the reader is called directly.)"""
+    req = _FakeRequest({"content-length": "\u00b2"}, total_chunks=5, size=10)
+    with pytest.raises(HTTPException) as exc:
+        await content_api._read_capped(req)  # type: ignore[arg-type]
+    assert exc.value.status_code == 413
+    assert req.pulled == 0
+
+
+async def test_lying_content_length_is_still_counted() -> None:
+    """A small declared length does not switch the counter off: it trips at the 4th chunk."""
+    req = _FakeRequest({"content-length": "10"}, total_chunks=1000, size=MAX_RAW_BYTES // 4 + 1)
+    with pytest.raises(HTTPException) as exc:
+        await content_api._read_capped(req)  # type: ignore[arg-type]
+    assert exc.value.status_code == 413
+    assert req.pulled == 4
 
 
 class _FakeRequest:
@@ -488,4 +600,34 @@ def test_offline_and_nothing_stored(
     assert _count_rows(w) == before
     logged = "\n".join(f"{rec.getMessage()} {rec.__dict__}" for rec in caplog.records)
     for secret in (SECRET, "SECRET-SUBJECT-4242", "alice@example.com", "bob@example.net"):
+        assert secret not in logged
+
+
+DENIED_BODIES = [
+    ("413", EML_H, b"a" * (MAX_RAW_BYTES + 1) + SECRET.encode()),
+    ("415", {"Content-Type": "text/plain"}, EML),
+    ("422-empty", EML_H, b""),
+    ("422-nul", EML_H, EML + b"\x00"),
+    ("422-json", JSON, b'{"text": "SECRET-BODY-9191", "bogus": 1}'),
+    ("422-lang", JSON, b'{"text": "SECRET-BODY-9191", "language": "SECRET-BODY-9191"}'),
+]
+
+
+@pytest.mark.parametrize(
+    ("label", "headers", "raw"), DENIED_BODIES, ids=[d[0] for d in DENIED_BODIES]
+)
+def test_rejected_requests_do_not_log_content(
+    world: tuple[World, Any],
+    caplog: pytest.LogCaptureFixture,
+    label: str,
+    headers: dict[str, str],
+    raw: bytes,
+) -> None:
+    w, _ = world
+    caplog.set_level(logging.DEBUG)
+    r = post_eml(w, "analyst", raw, headers=headers)
+    assert r.status_code in (413, 415, 422), label
+    assert SECRET not in r.text
+    logged = "\n".join(f"{rec.getMessage()} {rec.__dict__}" for rec in caplog.records)
+    for secret in (SECRET, "SECRET-SUBJECT-4242", "alice@example.com"):
         assert secret not in logged
