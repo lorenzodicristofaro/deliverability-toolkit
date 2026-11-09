@@ -8,8 +8,9 @@ selector id), and the service is not reached with the body.
 
 Routes (all need a session; anonymous GET -> 303 /login, anonymous POST -> 401):
 - GET  /dkim-selectors                        list (tenant tab: the tenant's rows, then global rows
-                                              read-only; `?page=`; a session with no tenant defaults
-                                              to the global tab if its user may manage it)
+                                              read-only; `?page=`; a session that may not read the
+                                              tenant tab, or has no tenant, defaults to the global
+                                              tab if its user may manage it)
 - GET  /dkim-selectors/new                    create form
 - POST /dkim-selectors                        create
 - GET  /dkim-selectors/{selector_id}/edit     edit form
@@ -18,11 +19,11 @@ Routes (all need a session; anonymous GET -> 303 /login, anonymous POST -> 401):
 - POST /dkim-selectors/{selector_id}/delete   delete (a seeded global row answers 409)
 
 Bodies are urlencoded and size-capped by `_read_capped`. NUL and lone surrogates are refused before
-the service and never echoed. A browser submits textarea newlines as CRLF: `_lf` turns them back
-into LF. On a seeded row selector, provider and record_type are read-only (the service refuses a
-change with `seed_managed`) and the delete control is not shown. Everything derived from stored
-rows is autoescaped (no `|safe`) and shown through `visible`. Every response is
-`Cache-Control: no-store`.
+the service and never echoed. Notes are one line, so the form uses a text input; `_lf` is for a
+direct POST, whose CR or CRLF is normalized before the service refuses it. On a seeded row selector,
+provider and record_type are read-only (the service refuses a change with `seed_managed`) and the
+delete control is not shown. Everything derived from stored rows is autoescaped (no `|safe`) and
+shown through `visible`. Every response is `Cache-Control: no-store`.
 """
 
 from __future__ import annotations
@@ -302,7 +303,7 @@ def selectors_index(
     service = _service(db, auth)
     if (
         scope is None
-        and auth.active_tenant_id is None
+        and not _allowed(service.check_read, RuleScope.TENANT)
         and _allowed(service.check_manage, RuleScope.GLOBAL)
     ):
         parsed = RuleScope.GLOBAL

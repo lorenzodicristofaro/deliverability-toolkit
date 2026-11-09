@@ -164,6 +164,17 @@ def global_rule(w: World, rule_id: int) -> ContentRuleRecord:
     return found
 
 
+def add_viewer_admin(w: World) -> str:
+    """An instance admin who is only a client viewer of tenant A: no `rules.read` there."""
+    user = User(email="viewer-admin@example.com", is_instance_admin=True)
+    w.db.add(user)
+    w.db.flush()
+    w.db.add(Membership(user_id=user.id, tenant_id=w.tenant_a, role=MembershipRole.CLIENT_VIEWER))
+    w.db.commit()
+    w.users["viewer_admin"] = user.id
+    return "viewer_admin"
+
+
 def form(**over: Any) -> dict[str, Any]:
     return {
         "name": "New rule",
@@ -431,6 +442,42 @@ def test_member_still_defaults_to_the_tenant_tab(world: World) -> None:
     assert r.status_code == 200
     assert 'data-testid="rules-tenant"' in r.text
     assert 'data-testid="nav-rules"' in r.text
+
+
+@pytest.mark.parametrize("path", ["/rules", "/rules?scope=global"])
+def test_instance_admin_denied_the_tenant_gets_the_global_tab(world: World, path: str) -> None:
+    who = add_viewer_admin(world)
+    rule = add_tenant_rule(world)
+    r = get(world, who, path)
+    assert r.status_code == 200
+    assert 'data-testid="rules-global"' in r.text
+    assert 'data-testid="rules-tenant"' not in r.text
+    assert f'<tr data-rule="{rule.id}">' not in r.text
+    assert 'data-testid="tab-global"' in r.text
+    assert 'data-testid="tab-tenant"' not in r.text
+    assert 'data-testid="nav-rules"' in r.text
+
+
+def test_nav_link_for_an_instance_admin_denied_the_tenant(world: World) -> None:
+    assert 'href="/rules"' in get(world, add_viewer_admin(world), "/").text
+
+
+@pytest.mark.parametrize("path", ["/rules?scope=tenant", "/rules/new"])
+def test_global_default_leaves_the_tenant_tab_denied(world: World, path: str) -> None:
+    rule = add_tenant_rule(world)
+    r = get(world, add_viewer_admin(world), path)
+    assert r.status_code == 403
+    assert 'data-testid="forbidden"' in r.text
+    assert f'<tr data-rule="{rule.id}">' not in r.text
+
+
+@pytest.mark.parametrize(("who", "status"), [("viewer", 403), ("drifter", 404)])
+def test_global_default_needs_the_global_permission(world: World, who: str, status: int) -> None:
+    r = get(world, who, "/rules")
+    assert r.status_code == status
+    assert 'data-testid="rules-global"' not in r.text
+    assert 'data-testid="tab-global"' not in r.text
+    assert 'data-testid="nav-rules"' not in r.text
 
 
 # --- list: pages, seed keys and overrides --------------------------------------------------------

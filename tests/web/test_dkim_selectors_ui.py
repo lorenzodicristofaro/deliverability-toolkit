@@ -21,6 +21,7 @@ from urllib.parse import urlencode
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import update
 
 from app.core import i18n
 from app.core.config import Settings
@@ -28,12 +29,15 @@ from app.core.db import create_db_engine, create_session_factory
 from app.core.i18n import LOCALES_DIR
 from app.core.tenancy import TenantContext
 from app.main import create_app
-from app.models import Membership, MembershipRole, User
+from app.models import DkimSelector, Membership, MembershipRole, User
 from app.repositories import GlobalDkimSelectorRepository, repo_for
 from app.repositories.dkim_selectors import DkimSelectorRecord
 from app.services.dkim_selectors_admin import (
     MAX_TENANT_SELECTORS,
+    DkimSelectorsAdminError,
     DkimSelectorsAdminService,
+    SelectorConflict,
+    SelectorFieldInvalid,
     SelectorNotFound,
 )
 from app.web.dkim_selectors import MAX_SAVE_BYTES
@@ -149,6 +153,17 @@ def global_selector(w: World, selector_id: int) -> DkimSelectorRecord:
     return found
 
 
+def add_viewer_admin(w: World) -> str:
+    """An instance admin who is only a client viewer of tenant A: no `rules.read` there."""
+    user = User(email="viewer-admin@example.com", is_instance_admin=True)
+    w.db.add(user)
+    w.db.flush()
+    w.db.add(Membership(user_id=user.id, tenant_id=w.tenant_a, role=MembershipRole.CLIENT_VIEWER))
+    w.db.commit()
+    w.users["viewer_admin"] = user.id
+    return "viewer_admin"
+
+
 def form(**over: Any) -> dict[str, Any]:
     return {
         "selector": "newsel",
@@ -223,17 +238,15 @@ def row_html(page: str, selector_id: int) -> str:
 
 
 class _SelectorFormFields(HTMLParser):
-    """The fields a browser would submit for the page's selector form, as the HTML spec has it: one
-    LF right after `<textarea>` is dropped by the parser and every textarea newline is sent as
-    CRLF. The CSRF token is left out: `send` supplies the one of its own login."""
+    """The fields a browser would submit for the page's selector form, as the HTML spec has it: a
+    text input's value loses every CR and LF. The CSRF token is left out: `send` supplies the one
+    of its own login."""
 
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
         self.fields: dict[str, list[str]] = {}
         self._in_form = False
         self._select: str | None = None
-        self._textarea: str | None = None
-        self._text: list[str] = []
 
     def _add(self, name: str, value: str) -> None:
         if name != "csrf_token":
@@ -246,27 +259,19 @@ class _SelectorFormFields(HTMLParser):
         if not self._in_form:
             return
         if tag == "input" and attr.get("name"):
+            value = attr.get("value") or ""
+            if attr.get("type") == "text":
+                value = re.sub(r"[\r\n]", "", value)
             if attr.get("type") != "checkbox" or "checked" in attr:
-                self._add(str(attr["name"]), attr.get("value") or "")
+                self._add(str(attr["name"]), value)
         elif tag == "select":
             self._select = attr.get("name")
         elif tag == "option" and "selected" in attr and self._select:
             self._add(self._select, attr.get("value") or "")
-        elif tag == "textarea":
-            self._textarea = attr.get("name")
-            self._text = []
-
-    def handle_data(self, data: str) -> None:
-        if self._textarea is not None:
-            self._text.append(data)
 
     def handle_endtag(self, tag: str) -> None:
         if tag == "form":
             self._in_form = False
-        elif tag == "textarea" and self._textarea is not None:
-            value = "".join(self._text).removeprefix("\n")
-            self._add(self._textarea, re.sub(r"\r\n|\r|\n", "\r\n", value))
-            self._textarea = None
 
 
 def browser_fields(page: str) -> dict[str, list[str]]:
@@ -482,10 +487,54 @@ def test_member_still_defaults_to_the_tenant_tab(world: World) -> None:
     assert 'data-testid="nav-dkim-selectors"' in r.text
 
 
+@pytest.mark.parametrize("path", ["/dkim-selectors", "/dkim-selectors?scope=global"])
+def test_instance_admin_denied_the_tenant_gets_the_global_tab(world: World, path: str) -> None:
+    who = add_viewer_admin(world)
+    row = add_tenant_selector(world)
+    r = get(world, who, path)
+    assert r.status_code == 200
+    assert 'data-testid="dkim-global"' in r.text
+    assert 'data-testid="dkim-tenant"' not in r.text
+    assert f'<tr data-selector="{row.id}">' not in r.text
+    assert 'data-testid="tab-global"' in r.text
+    assert 'data-testid="tab-tenant"' not in r.text
+    assert 'data-testid="nav-dkim-selectors"' in r.text
+
+
+def test_nav_link_for_an_instance_admin_denied_the_tenant(world: World) -> None:
+    assert 'href="/dkim-selectors"' in get(world, add_viewer_admin(world), "/").text
+
+
+@pytest.mark.parametrize("path", ["/dkim-selectors?scope=tenant", "/dkim-selectors/new"])
+def test_global_default_leaves_the_tenant_tab_denied(world: World, path: str) -> None:
+    add_tenant_selector(world)
+    r = get(world, add_viewer_admin(world), path)
+    assert r.status_code == 403
+    assert 'data-testid="forbidden"' in r.text
+    assert "zebra" not in r.text
+
+
+@pytest.mark.parametrize(("who", "status"), [("viewer", 403), ("drifter", 404)])
+def test_global_default_needs_the_global_permission(world: World, who: str, status: int) -> None:
+    r = get(world, who, "/dkim-selectors")
+    assert r.status_code == status
+    assert 'data-testid="dkim-global"' not in r.text
+    assert 'data-testid="tab-global"' not in r.text
+    assert 'data-testid="nav-dkim-selectors"' not in r.text
+
+
+@pytest.mark.parametrize("who", ["owner", "admin", "analyst"])
+def test_global_tab_is_only_for_the_instance_admin(world: World, who: str) -> None:
+    r = get(world, who, "/dkim-selectors")
+    assert r.status_code == 200
+    assert 'data-testid="tab-tenant"' in r.text
+    assert 'data-testid="tab-global"' not in r.text
+
+
 # --- list: pages, duplicates and the global section ---------------------------------------------
 
 
-def test_override_past_the_first_batch_marks_the_global_row(world: World) -> None:
+def test_same_name_past_the_first_batch_marks_the_global_row(world: World) -> None:
     seeded = seeded_selector(world)
     repo = repo_for(TenantContext(world.tenant_a, None), world.db).dkim_selectors
     for i in range(1100):  # sorted before every seeded name
@@ -613,6 +662,65 @@ def test_toggle_with_a_bad_body_is_422_on_the_list(
     assert tenant_selectors(world)[0].enabled is True
 
 
+@pytest.mark.parametrize(
+    "stored",
+    [
+        pytest.param({"selector": "*"}, id="wildcard-selector"),
+        pytest.param({"provider": "Not A Slug"}, id="invalid-provider"),
+        pytest.param({"selector": "*", "provider": "Not A Slug"}, id="both"),
+    ],
+)
+def test_toggle_works_on_a_stored_row_that_validation_would_refuse(
+    world: World, stored: dict[str, str]
+) -> None:
+    row = add_tenant_selector(world)
+    world.db.execute(update(DkimSelector).where(DkimSelector.id == row.id).values(**stored))
+    world.db.commit()
+    before = tenant_selectors(world)[0]
+    path = f"/dkim-selectors/{row.id}/toggle"
+    for target, expected in (("0", False), ("1", True)):
+        r = send(world, "owner", path, {"enabled": target})
+        assert r.status_code == 303, r.text
+        after = tenant_selectors(world)[0]
+        assert after.enabled is expected
+        assert dataclasses.replace(after, updated_at=before.updated_at, enabled=True) == before
+
+
+@pytest.mark.parametrize(
+    ("error", "status", "message"),
+    [
+        pytest.param(
+            SelectorFieldInvalid("selector", "invalid_label"),
+            422,
+            "The selector must be a single DNS label.",
+            id="field-invalid",
+        ),
+        pytest.param(
+            SelectorConflict(), 409, "This selector already exists in this scope.", id="conflict"
+        ),
+    ],
+)
+def test_toggle_refused_by_the_service_is_a_list_error(
+    world: World,
+    monkeypatch: pytest.MonkeyPatch,
+    error: DkimSelectorsAdminError,
+    status: int,
+    message: str,
+) -> None:
+    row = add_tenant_selector(world)
+
+    def refuse(self: Any, *args: Any, **kwargs: Any) -> Any:
+        raise error
+
+    monkeypatch.setattr(DkimSelectorsAdminService, "update", refuse)
+    r = send(world, "owner", f"/dkim-selectors/{row.id}/toggle", {"enabled": "0"})
+    assert r.status_code == status
+    assert 'data-testid="dkim-error"' in r.text
+    assert message in r.text
+    assert f'<tr data-selector="{row.id}">' in r.text
+    assert tenant_selectors(world)[0].enabled is True
+
+
 EDIT_ROUND_TRIPS = [
     pytest.param({}, id="minimal"),
     pytest.param({"provider": None, "notes": None}, id="nulls"),
@@ -665,11 +773,14 @@ def test_unchanged_edit_of_a_seeded_row_keeps_every_field(world: World) -> None:
     ) == dataclasses.replace(before)
 
 
-def test_edit_form_starts_the_textarea_with_a_newline(world: World) -> None:
+def test_edit_form_shows_notes_in_a_one_line_input(world: World) -> None:
     row = add_tenant_selector(world, notes="line")
     page = get(world, "owner", f"/dkim-selectors/{row.id}/edit").text
-    assert 'autocomplete="off">\nline</textarea>' in page
-    assert 'name="notes"' in page
+    assert "<textarea" not in page
+    notes = re.search(r'<input [^>]*name="notes"[^>]*>', page)
+    assert notes is not None
+    assert 'type="text"' in notes.group(0)
+    assert 'value="line"' in notes.group(0)
 
 
 def test_crlf_in_notes_is_normalized_then_refused_as_one_line(world: World) -> None:
@@ -678,11 +789,11 @@ def test_crlf_in_notes_is_normalized_then_refused_as_one_line(world: World) -> N
     r = send(world, "owner", "/dkim-selectors?scope=tenant", form(notes="foo\r\nbar"))
     assert r.status_code == 422
     assert "Notes (optional, one line): One of the values is not valid." in r.text
-    assert browser_fields(r.text)["notes"] == ["foo\r\nbar"]
+    assert browser_fields(r.text)["notes"] == ["foobar"]
     assert tenant_selectors(world) == []
 
 
-def test_form_echo_keeps_a_leading_newline(world: World) -> None:
+def test_form_echo_of_a_direct_post_has_its_newlines_normalized(world: World) -> None:
     r = send(
         world,
         "owner",
@@ -690,9 +801,9 @@ def test_form_echo_keeps_a_leading_newline(world: World) -> None:
         form(selector="BAD", notes="\r\nfoo\r\nbar"),
     )
     assert r.status_code == 422
-    assert browser_fields(r.text)["notes"] == ["\r\nfoo\r\nbar"]
-    assert '">\n\r\n' not in r.text
-    assert 'autocomplete="off">\n\nfoo\nbar</textarea>' in r.text
+    assert browser_fields(r.text)["notes"] == ["foobar"]
+    assert 'value="\nfoo\nbar"' in r.text
+    assert "\r" not in r.text
 
 
 @pytest.mark.parametrize(
@@ -831,7 +942,7 @@ def test_seeded_form_is_read_only_for_managed_fields(world: World) -> None:
         assert tag is not None, name
         assert " readonly" in tag.group(0), name
     assert "<select" not in page
-    notes = re.search(r'<textarea [^>]*name="notes"[^>]*>', page)
+    notes = re.search(r'<input [^>]*name="notes"[^>]*>', page)
     assert notes is not None
     assert "readonly" not in notes.group(0)
 

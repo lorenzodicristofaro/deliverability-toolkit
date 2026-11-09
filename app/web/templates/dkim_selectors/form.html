@@ -29,9 +29,8 @@
     {% endif %}
   </p>
   <p>
-    <label for="dkim-notes">{{ t("web.dkim_selectors.field.notes") }}</label><br>
-    <textarea id="dkim-notes" name="notes" rows="3" cols="60" maxlength="500" autocomplete="off">
-{{ form.notes }}</textarea>
+    <label for="dkim-notes">{{ t("web.dkim_selectors.field.notes") }}</label>
+    <input id="dkim-notes" name="notes" type="text" size="60" maxlength="500" value="{{ form.notes }}" autocomplete="off">
   </p>
   <p>
     <label><input type="checkbox" name="enabled" value="1"{% if form.enabled %} checked{% endif %}> {{ t("web.dkim_selectors.field.enabled") }}</label>
