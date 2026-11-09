@@ -1,6 +1,6 @@
 """M5-05 content_rules: migration 0005, DB constraints and the repositories.
 
-Runs on SQLite and, when TEST_DATABASE_URL is set, on PostgreSQL (shared `db_url` fixture; the
+Runs on SQLite and, when TEST_DATABASE_URL is set, on PostgreSQL (shared DB fixture; the
 PG params skip locally and run on dev CI). The schema is built by Alembic. No network.
 """
 
@@ -56,12 +56,11 @@ def _rule(**overrides: Any) -> dict[str, Any]:
 
 
 @pytest.fixture
-def engine(db_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[Engine]:
-    monkeypatch.setenv("DATABASE_URL", db_url)
+def engine(migrated_db_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[Engine]:
+    monkeypatch.setenv("DATABASE_URL", migrated_db_url)
     monkeypatch.setenv("SECRET_KEY", KEY)
     monkeypatch.setenv("ENCRYPTION_KEY", KEY)
-    command.upgrade(_cfg(), "head")
-    eng = create_db_engine(db_url)
+    eng = create_db_engine(migrated_db_url)
     try:
         yield eng
     finally:
@@ -114,12 +113,12 @@ def _ids(records: Any) -> list[int]:
 # --- migration ---------------------------------------------------------------------------------
 
 
-def test_migration_upgrade_downgrade(engine: Engine) -> None:
-    assert "content_rules" in inspect(engine).get_table_names()
+def test_migration_upgrade_downgrade(real_migrations_engine: Engine) -> None:
+    assert "content_rules" in inspect(real_migrations_engine).get_table_names()
     command.downgrade(_cfg(), "0004")
-    assert "content_rules" not in inspect(engine).get_table_names()
+    assert "content_rules" not in inspect(real_migrations_engine).get_table_names()
     command.upgrade(_cfg(), "head")
-    insp = inspect(engine)
+    insp = inspect(real_migrations_engine)
     assert "content_rules" in insp.get_table_names()
     unique = {i["name"] for i in insp.get_indexes("content_rules") if i["unique"]}
     assert unique == {"uq_content_rules_global_seed_key", "uq_content_rules_tenant_seed_key"}
@@ -153,13 +152,15 @@ INDEXES_0007 = {
 }
 
 
-def test_migration_0007_reworks_indexes_and_downgrade_restores_0005(engine: Engine) -> None:
+def test_migration_0007_reworks_indexes_and_downgrade_restores_0005(
+    real_migrations_engine: Engine,
+) -> None:
     # M5-05b: no partial tenant index next to a tenant_id index (SQLite planner error).
-    assert _index_shapes(engine) == INDEXES_0007
+    assert _index_shapes(real_migrations_engine) == INDEXES_0007
     command.downgrade(_cfg(), "0006")  # pinned: later migrations stack on 0007
-    assert _index_shapes(engine) == INDEXES_0005
+    assert _index_shapes(real_migrations_engine) == INDEXES_0005
     command.upgrade(_cfg(), "head")
-    assert _index_shapes(engine) == INDEXES_0007
+    assert _index_shapes(real_migrations_engine) == INDEXES_0007
 
 
 # Tenant OR-filter + seed_key with bound parameters (the M5-12/M5-18 lookup shape). With 0005's

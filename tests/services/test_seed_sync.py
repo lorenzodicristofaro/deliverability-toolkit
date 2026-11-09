@@ -1,6 +1,6 @@
 """M5-06 seed sync: global DKIM selectors from seeds/dkim_selectors.yaml, plus the generic helper.
 
-Runs on SQLite and, when TEST_DATABASE_URL is set, on PostgreSQL (shared `db_url` fixture). The
+Runs on SQLite and, when TEST_DATABASE_URL is set, on PostgreSQL (shared DB fixture). The
 schema is built by Alembic. Seeds are read from disk (the shipped file or a tmp copy); no
 network.
 """
@@ -14,8 +14,6 @@ from typing import Any
 
 import pytest
 import yaml  # type: ignore[import-untyped]
-from alembic import command
-from alembic.config import Config
 from fastapi.testclient import TestClient
 from sqlalchemy import Engine, text
 from sqlalchemy.orm import Session, sessionmaker
@@ -57,12 +55,11 @@ SHIPPED = SEEDS_DIR / "dkim_selectors.yaml"
 
 
 @pytest.fixture
-def engine(db_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[Engine]:
-    monkeypatch.setenv("DATABASE_URL", db_url)
+def engine(migrated_db_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[Engine]:
+    monkeypatch.setenv("DATABASE_URL", migrated_db_url)
     monkeypatch.setenv("SECRET_KEY", KEY)
     monkeypatch.setenv("ENCRYPTION_KEY", KEY)
-    command.upgrade(Config(str(ROOT / "alembic.ini")), "head")
-    eng = create_db_engine(db_url)
+    eng = create_db_engine(migrated_db_url)
     try:
         yield eng
     finally:
@@ -711,17 +708,17 @@ def test_content_rule_local_fields_cover_everything_the_seed_sets(tmp_path: Path
 # --- startup wiring ------------------------------------------------------------------------------
 
 
-def _start(world: World, db_url: str) -> int:
-    settings = Settings(database_url=db_url, secret_key=KEY, encryption_key=KEY)  # type: ignore[call-arg]
+def _start(world: World, migrated_db_url: str) -> int:
+    settings = Settings(database_url=migrated_db_url, secret_key=KEY, encryption_key=KEY)  # type: ignore[call-arg]
     with TestClient(app_main.create_app(settings)) as client:
         return client.get("/healthz").status_code
 
 
 def test_startup_runs_the_seed_sync(
-    world: World, db_url: str, caplog: pytest.LogCaptureFixture
+    world: World, migrated_db_url: str, caplog: pytest.LogCaptureFixture
 ) -> None:
     caplog.set_level(logging.INFO)
-    assert _start(world, db_url) == 200
+    assert _start(world, migrated_db_url) == 200
     world.session.expire_all()
     assert _rule_count(world) == len(SHIPPED_RULES)
     assert world.count() == len(list_selectors())
@@ -730,7 +727,7 @@ def test_startup_runs_the_seed_sync(
 
 def test_startup_survives_an_invalid_seed_and_keeps_the_previous_state(
     world: World,
-    db_url: str,
+    migrated_db_url: str,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
@@ -744,7 +741,7 @@ def test_startup_survives_an_invalid_seed_and_keeps_the_previous_state(
         (bad / name).write_text((SEEDS_DIR / name).read_text(encoding="utf-8"), encoding="utf-8")
     (bad / CONTENT_RULES_FILE).write_text("rules: []\n", encoding="utf-8")
     monkeypatch.setattr(app_main, "run_seed_sync", lambda factory: run_seed_sync(factory, bad))
-    assert _start(world, db_url) == 200
+    assert _start(world, migrated_db_url) == 200
     world.session.expire_all()
     assert _global_rules(world) == rules and world.by_key() == selectors
     failed = [r for r in caplog.records if getattr(r, "event", None) == "seed_sync.failed"]
@@ -759,7 +756,7 @@ def test_startup_survives_an_invalid_seed_and_keeps_the_previous_state(
 )
 def test_startup_survives_any_sync_failure(
     world: World,
-    db_url: str,
+    migrated_db_url: str,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
     error: Exception,
@@ -768,7 +765,7 @@ def test_startup_survives_any_sync_failure(
         raise error
 
     monkeypatch.setattr(app_main, "run_seed_sync", fail)
-    assert _start(world, db_url) == 200
+    assert _start(world, migrated_db_url) == 200
     failed = [r for r in caplog.records if getattr(r, "event", None) == "seed_sync.failed"]
     assert len(failed) == 1
     assert "secret query detail" not in failed[0].getMessage()

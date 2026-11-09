@@ -1,6 +1,6 @@
 """M5-07 custom_checks: migration 0008, DB constraints and the repositories.
 
-Runs on SQLite and, when TEST_DATABASE_URL is set, on PostgreSQL (shared `db_url` fixture; the
+Runs on SQLite and, when TEST_DATABASE_URL is set, on PostgreSQL (shared DB fixture; the
 PG params skip locally and run on dev CI). The schema is built by Alembic. No network.
 """
 
@@ -65,12 +65,11 @@ def _new(**overrides: Any) -> dict[str, Any]:
 
 
 @pytest.fixture
-def engine(db_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[Engine]:
-    monkeypatch.setenv("DATABASE_URL", db_url)
+def engine(migrated_db_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[Engine]:
+    monkeypatch.setenv("DATABASE_URL", migrated_db_url)
     monkeypatch.setenv("SECRET_KEY", KEY)
     monkeypatch.setenv("ENCRYPTION_KEY", KEY)
-    command.upgrade(_cfg(), "head")
-    eng = create_db_engine(db_url)
+    eng = create_db_engine(migrated_db_url)
     try:
         yield eng
     finally:
@@ -147,15 +146,15 @@ INDEXES = {
 }
 
 
-def test_migration_upgrade_downgrade(engine: Engine) -> None:
-    assert "custom_checks" in inspect(engine).get_table_names()
-    assert _index_shapes(engine) == INDEXES
+def test_migration_upgrade_downgrade(real_migrations_engine: Engine) -> None:
+    assert "custom_checks" in inspect(real_migrations_engine).get_table_names()
+    assert _index_shapes(real_migrations_engine) == INDEXES
     command.downgrade(_cfg(), "0007")
-    assert "custom_checks" not in inspect(engine).get_table_names()
-    assert "content_rules" in inspect(engine).get_table_names()
+    assert "custom_checks" not in inspect(real_migrations_engine).get_table_names()
+    assert "content_rules" in inspect(real_migrations_engine).get_table_names()
     command.upgrade(_cfg(), "head")
-    assert "custom_checks" in inspect(engine).get_table_names()
-    assert _index_shapes(engine) == INDEXES
+    assert "custom_checks" in inspect(real_migrations_engine).get_table_names()
+    assert _index_shapes(real_migrations_engine) == INDEXES
 
 
 def test_single_alembic_head() -> None:

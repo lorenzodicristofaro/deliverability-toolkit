@@ -1,6 +1,6 @@
 """M1-19 tenant landing page `/` through the real app and middleware.
 
-DB tests run on SQLite and, when TEST_DATABASE_URL is set, on PostgreSQL (shared `db_url`
+DB tests run on SQLite and, when TEST_DATABASE_URL is set, on PostgreSQL (shared `migrated_db_url`
 fixture); the schema is built by Alembic. Sessions are created directly with
 `app.services.auth.create_session`; the setup test drives the real wizard. No network.
 """
@@ -15,8 +15,6 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from alembic import command
-from alembic.config import Config
 from argon2 import PasswordHasher
 from fastapi.testclient import TestClient
 from sqlalchemy import select
@@ -113,15 +111,14 @@ def _seed(db: Session) -> tuple[dict[str, int], dict[str, int], dict[str, int]]:
 
 
 @pytest.fixture
-def world(db_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[World]:
-    monkeypatch.setenv("DATABASE_URL", db_url)
+def world(migrated_db_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[World]:
+    monkeypatch.setenv("DATABASE_URL", migrated_db_url)
     monkeypatch.setenv("SECRET_KEY", KEY)
     monkeypatch.setenv("ENCRYPTION_KEY", KEY)
-    command.upgrade(Config(str(ROOT / "alembic.ini")), "head")
-    engine = create_db_engine(db_url)
+    engine = create_db_engine(migrated_db_url)
     db = create_session_factory(engine)()
     tenants, users, domains = _seed(db)
-    settings = Settings(database_url=db_url, secret_key=KEY, encryption_key=KEY)  # type: ignore[call-arg]
+    settings = Settings(database_url=migrated_db_url, secret_key=KEY, encryption_key=KEY)  # type: ignore[call-arg]
     application = create_app(settings)
     try:
         with TestClient(application, raise_server_exceptions=True) as client:
@@ -332,18 +329,17 @@ def test_domain_display_name_with_html_is_escaped(
 
 @pytest.fixture
 def fresh(
-    db_url: str, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    migrated_db_url: str, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> Iterator[tuple[TestClient, str]]:
-    monkeypatch.setenv("DATABASE_URL", db_url)
+    monkeypatch.setenv("DATABASE_URL", migrated_db_url)
     monkeypatch.setenv("SECRET_KEY", KEY)
     monkeypatch.setenv("ENCRYPTION_KEY", KEY)
     monkeypatch.setattr(
         web_auth, "PASSWORD_HASHER", PasswordHasher(time_cost=1, memory_cost=8, parallelism=1)
     )
-    command.upgrade(Config(str(ROOT / "alembic.ini")), "head")
     caplog.set_level(logging.DEBUG)
     application = create_app(
-        Settings(database_url=db_url, secret_key=KEY, encryption_key=KEY)  # type: ignore[call-arg]
+        Settings(database_url=migrated_db_url, secret_key=KEY, encryption_key=KEY)  # type: ignore[call-arg]
     )
     with TestClient(application) as client:
         tokens = [

@@ -1,6 +1,6 @@
 """M1-12 TenantContext and tenant-scoped repositories.
 
-Every DB test runs on SQLite and, when TEST_DATABASE_URL is set, on PostgreSQL (shared `db_url`
+Every DB test runs on SQLite and, when TEST_DATABASE_URL is set, on PostgreSQL (shared DB
 fixture); the schema is built by Alembic. Two tenants with rows: every repository method used from
 tenant A is checked never to return, change or delete tenant B rows, including malformed ids.
 """
@@ -16,8 +16,6 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from alembic import command
-from alembic.config import Config
 from sqlalchemy import Engine, bindparam, func, literal, literal_column, select, text
 from sqlalchemy.orm import Session
 
@@ -58,12 +56,11 @@ class World:
 
 
 @pytest.fixture
-def world(db_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[World]:
-    monkeypatch.setenv("DATABASE_URL", db_url)
+def world(migrated_db_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[World]:
+    monkeypatch.setenv("DATABASE_URL", migrated_db_url)
     monkeypatch.setenv("SECRET_KEY", KEY)
     monkeypatch.setenv("ENCRYPTION_KEY", KEY)
-    command.upgrade(Config(str(ROOT / "alembic.ini")), "head")
-    engine = create_db_engine(db_url)
+    engine = create_db_engine(migrated_db_url)
     session = create_session_factory(engine)()
     try:
         ta, tb = Tenant(name="Zeta A", slug="a"), Tenant(name="Alpha B", slug="b")

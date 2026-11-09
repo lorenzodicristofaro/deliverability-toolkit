@@ -47,7 +47,8 @@ jobs:
       - run: uv run ruff format --check .
       - run: uv run mypy app
       # One run covers both backends: SQLite always, PostgreSQL via TEST_DATABASE_URL (job env).
-      - run: uv run pytest -q --tb=short
+      - run: nproc  # runner CPU count, for judging whether pytest-xdist would be worth it
+      - run: uv run pytest -q --tb=short --durations=25
 
   secret-scan:
     runs-on: ubuntu-latest

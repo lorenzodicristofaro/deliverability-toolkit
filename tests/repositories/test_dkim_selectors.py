@@ -1,6 +1,6 @@
 """M5-06 dkim_selectors: migration 0006, DB constraints and the repositories.
 
-Runs on SQLite and, when TEST_DATABASE_URL is set, on PostgreSQL (shared `db_url` fixture; the
+Runs on SQLite and, when TEST_DATABASE_URL is set, on PostgreSQL (shared DB fixture; the
 PG params skip locally and run on dev CI). The schema is built by Alembic. No network.
 """
 
@@ -41,12 +41,11 @@ def _cfg() -> Config:
 
 
 @pytest.fixture
-def engine(db_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[Engine]:
-    monkeypatch.setenv("DATABASE_URL", db_url)
+def engine(migrated_db_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[Engine]:
+    monkeypatch.setenv("DATABASE_URL", migrated_db_url)
     monkeypatch.setenv("SECRET_KEY", KEY)
     monkeypatch.setenv("ENCRYPTION_KEY", KEY)
-    command.upgrade(_cfg(), "head")
-    eng = create_db_engine(db_url)
+    eng = create_db_engine(migrated_db_url)
     try:
         yield eng
     finally:
@@ -102,13 +101,13 @@ def _ids(records: Any) -> list[int]:
 # --- migration ---------------------------------------------------------------------------------
 
 
-def test_migration_upgrade_downgrade(engine: Engine) -> None:
-    assert "dkim_selectors" in inspect(engine).get_table_names()
+def test_migration_upgrade_downgrade(real_migrations_engine: Engine) -> None:
+    assert "dkim_selectors" in inspect(real_migrations_engine).get_table_names()
     command.downgrade(_cfg(), "0005")
-    assert "dkim_selectors" not in inspect(engine).get_table_names()
-    assert "content_rules" in inspect(engine).get_table_names()
+    assert "dkim_selectors" not in inspect(real_migrations_engine).get_table_names()
+    assert "content_rules" in inspect(real_migrations_engine).get_table_names()
     command.upgrade(_cfg(), "head")
-    insp = inspect(engine)
+    insp = inspect(real_migrations_engine)
     # Reading sqlite_master first refreshes the pooled SQLite connection's schema cache.
     assert "dkim_selectors" in insp.get_table_names()
     unique = {i["name"] for i in insp.get_indexes("dkim_selectors") if i["unique"]}

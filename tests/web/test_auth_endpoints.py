@@ -1,6 +1,6 @@
 """M1-15 login, logout, tenant switch and auth dependencies, through the real app and middleware.
 
-DB tests run on SQLite and, when TEST_DATABASE_URL is set, on PostgreSQL (shared `db_url`
+DB tests run on SQLite and, when TEST_DATABASE_URL is set, on PostgreSQL (shared `migrated_db_url`
 fixture); the schema is built by Alembic. A fast argon2 hasher keeps the suite quick. No network.
 """
 
@@ -15,8 +15,6 @@ from pathlib import Path
 from typing import Annotated, Any
 
 import pytest
-from alembic import command
-from alembic.config import Config
 from argon2 import PasswordHasher
 from fastapi import Depends, FastAPI, Request
 from fastapi.responses import HTMLResponse
@@ -131,12 +129,11 @@ def _add_test_routes(application: FastAPI) -> None:
 
 
 @pytest.fixture
-def world(db_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[World]:
-    monkeypatch.setenv("DATABASE_URL", db_url)
+def world(migrated_db_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[World]:
+    monkeypatch.setenv("DATABASE_URL", migrated_db_url)
     monkeypatch.setenv("SECRET_KEY", KEY)
     monkeypatch.setenv("ENCRYPTION_KEY", KEY)
     monkeypatch.setattr(web_auth, "PASSWORD_HASHER", FAST)
-    command.upgrade(Config(str(ROOT / "alembic.ini")), "head")
     original_loader = env.loader
     assert original_loader is not None
     env.loader = ChoiceLoader(
@@ -145,11 +142,11 @@ def world(db_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[World]:
             original_loader,
         ]
     )
-    engine = create_db_engine(db_url)
+    engine = create_db_engine(migrated_db_url)
     db = create_session_factory(engine)()
     tenant_a, tenant_b, users = _seed(db)
     application = create_app(
-        Settings(database_url=db_url, secret_key=KEY, encryption_key=KEY)  # type: ignore[call-arg]
+        Settings(database_url=migrated_db_url, secret_key=KEY, encryption_key=KEY)  # type: ignore[call-arg]
     )
     _add_test_routes(application)
     clock = Clock()
