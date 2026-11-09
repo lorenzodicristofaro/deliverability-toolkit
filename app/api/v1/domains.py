@@ -33,7 +33,7 @@ from app.web.deps import CurrentSession, DbDep, current_principal, tenant_ctx
 
 router = APIRouter(prefix="/domains", tags=["domains"])
 
-_MAX_ID_DIGITS = 19  # 2**63 - 1 has 19 digits
+_MAX_PAGE_DIGITS = 19  # limit / offset: 2**63 - 1 has 19 digits
 _MAX_OFFSET = 2**63 - 1  # SQL OFFSET is a signed 64-bit value on PostgreSQL and SQLite
 
 
@@ -87,7 +87,7 @@ def _domain_id(value: str) -> int | None:
 def _page_value(request: Request, raw: str | None, default: int, maximum: int | None) -> int:
     if raw is None:
         return default
-    if not raw.isascii() or not raw.isdigit() or len(raw) > _MAX_ID_DIGITS:
+    if not raw.isascii() or not raw.isdigit() or len(raw) > _MAX_PAGE_DIGITS:
         raise _error(request, 422, "api.error.invalid_request")
     value = int(raw)
     if maximum is not None and value > maximum:

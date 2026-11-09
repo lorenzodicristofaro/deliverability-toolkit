@@ -11,6 +11,11 @@ just missed). The bound is `app.repositories.base.MAX_ID`, enforced by `coerce_i
   shared parser or declared non-numeric; every route with a numeric path id has a behaviour row;
   every integer id field of a JSON body is registered; every `int()` in the web and API layers is
   a known one, so an id read by hand from a form cannot appear unnoticed. No network.
+
+Limits of the guards. They are name-based: outside the path, an id is recognised by a name or alias
+ending in `id` or `ids`, so a numeric id called `target` with no such alias is not seen. The `int()`
+allowlist works per top-level function, so another `int()` added to a listed function is not
+noticed. Only direct `int(...)` calls are seen, not `map(int, ...)` or a renamed `int`.
 """
 
 from __future__ import annotations
@@ -21,12 +26,12 @@ import inspect
 import re
 from collections.abc import Callable, Iterator
 from pathlib import Path
-from typing import Any, get_args
+from typing import Annotated, Any, get_args
 
 import pytest
-from fastapi import FastAPI
+from fastapi import Body, FastAPI, Query
 from fastapi.routing import APIRoute
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import BigInteger, Integer
 from sqlalchemy import inspect as sa_inspect
 from starlette.convertors import IntegerConvertor
@@ -310,8 +315,12 @@ def _dependants(route: APIRoute) -> Iterator[Any]:
         stack.extend(dependant.dependencies)
 
 
-def _is_id_name(name: str) -> bool:
-    return name == "id" or name == "ids" or name.endswith(("_id", "_ids"))
+def _is_id_name(name: object) -> bool:
+    """True for a name or alias of an id. Header aliases use hyphens; a missing alias is None."""
+    if not isinstance(name, str):
+        return False
+    normal = name.replace("-", "_").casefold()
+    return normal in ("id", "ids") or normal.endswith(("_id", "_ids"))
 
 
 def _holds_int(annotation: Any) -> bool:
@@ -355,11 +364,26 @@ def route_violations(leaves: list[Leaf]) -> list[str]:
                     found.append(f"{label}: path parameter {param.name} must be declared str")
                 if not any(_parses(d.call, param.name) for d in dependants):
                     found.append(f"{label}: path parameter {param.name} skips the id parser")
-            others = (*dependant.query_params, *dependant.header_params, *dependant.cookie_params)
+            others = (
+                *dependant.query_params,
+                *dependant.header_params,
+                *dependant.cookie_params,
+                *dependant.body_params,
+            )
             for param in others:
-                if _is_id_name(param.name):
+                if _is_id_name(param.name) or _is_id_name(param.alias):
                     found.append(f"{label}: {param.name} is an id outside the path")
     return found
+
+
+def int_id_fields(model: type[BaseModel]) -> set[tuple[str, str]]:
+    """The fields of `model` holding integers under the name or an alias of an id."""
+    return {
+        (model.__name__, name)
+        for name, field in model.model_fields.items()
+        if _holds_int(field.annotation)
+        and (_is_id_name(name) or _is_id_name(field.alias) or _is_id_name(field.validation_alias))
+    }
 
 
 def numeric_id_routes(leaves: list[Leaf]) -> set[tuple[str, str]]:
@@ -418,9 +442,7 @@ def test_every_integer_id_field_of_a_json_body_is_registered() -> None:
                 and value.__module__.startswith("app.")
             ):
                 continue
-            for name, field in value.model_fields.items():
-                if _is_id_name(name) and _holds_int(field.annotation):
-                    found.add((value.__name__, name))
+            found |= int_id_fields(value)
     assert found == INT_BODY_FIELDS
 
 
@@ -453,6 +475,26 @@ def _in_query(domain_id: str, tenant_id: str = "1") -> Any:
     return parse_id(domain_id), tenant_id
 
 
+def _query_alias(domain_id: str, target: Annotated[str, Query(alias="tenant_id")] = "1") -> Any:
+    return parse_id(domain_id), target
+
+
+def _body_embedded(domain_id: str, tenant_id: Annotated[int, Body(embed=True)]) -> Any:
+    return parse_id(domain_id), tenant_id
+
+
+def _body_list(domain_id: str, user_ids: Annotated[list[int], Body()]) -> Any:
+    return parse_id(domain_id), user_ids
+
+
+def _body_alias(domain_id: str, target: Annotated[int, Body(alias="tenant_id", embed=True)]) -> Any:
+    return parse_id(domain_id), target
+
+
+def _body_not_id(domain_id: str, count: Annotated[int, Body(embed=True)]) -> Any:
+    return parse_id(domain_id), count
+
+
 @pytest.mark.parametrize(
     ("path", "endpoint", "expected"),
     [
@@ -461,19 +503,72 @@ def _in_query(domain_id: str, tenant_id: str = "1") -> Any:
         ("/x/{domain_id}", _typed_int, "must be declared str"),
         ("/x/{domain_id:int}", _ok, ":int convertor"),
         ("/x/{domain_id}", _in_query, "tenant_id is an id outside the path"),
+        ("/x/{domain_id}", _query_alias, "target is an id outside the path"),
+        ("/x/{domain_id}", _body_embedded, "tenant_id is an id outside the path"),
+        ("/x/{domain_id}", _body_list, "user_ids is an id outside the path"),
+        ("/x/{domain_id}", _body_alias, "target is an id outside the path"),
+        ("/x/{domain_id}", _body_not_id, None),
     ],
-    ids=["parsed", "unparsed", "int-annotation", "int-convertor", "query-id"],
+    ids=[
+        "parsed",
+        "unparsed",
+        "int-annotation",
+        "int-convertor",
+        "query-id",
+        "query-alias",
+        "body-embedded",
+        "body-list",
+        "body-alias",
+        "body-not-id",
+    ],
 )
 def test_route_guard_detects_violations(
     path: str, endpoint: Callable[..., Any], expected: str | None
 ) -> None:
     application = FastAPI()
-    application.add_api_route(path, endpoint)
+    application.add_api_route(path, endpoint, methods=["POST"])
     found = route_violations([x for x in leaf_routes(application) if "/x/" in x.path])
     if expected is None:
         assert not found
     else:
         assert any(expected in item for item in found), found
+
+
+class _ModelAlias(BaseModel):
+    target: int = Field(alias="domain_id")
+
+
+class _ModelValidationAlias(BaseModel):
+    target: int = Field(validation_alias="domain_id")
+
+
+class _ModelName(BaseModel):
+    user_ids: list[int]
+
+
+class _ModelNotId(BaseModel):
+    count: int
+
+
+class _ModelStringId(BaseModel):
+    check_id: str
+
+
+@pytest.mark.parametrize(
+    ("model", "expected"),
+    [
+        (_ModelAlias, {("_ModelAlias", "target")}),
+        (_ModelValidationAlias, {("_ModelValidationAlias", "target")}),
+        (_ModelName, {("_ModelName", "user_ids")}),
+        (_ModelNotId, set()),
+        (_ModelStringId, set()),
+    ],
+    ids=["alias", "validation-alias", "name", "not-an-id", "string-id"],
+)
+def test_body_field_scan_detects_ids(
+    model: type[BaseModel], expected: set[tuple[str, str]]
+) -> None:
+    assert int_id_fields(model) == expected
 
 
 def test_int_call_scan_detects_a_new_conversion() -> None:
