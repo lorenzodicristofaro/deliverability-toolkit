@@ -21,4 +21,4 @@ Acceptance criteria:
 - A static or route-table test proves every route with a numeric id goes through the shared coercion, so new routes (including those from M5-18 onward) cannot reintroduce it, or the coder explains why that is not feasible.
 - No tenant information leak: for a foreign tenant the result is the same as for an unknown id.
 New i18n keys: none expected
-Status: todo
+Status: done
