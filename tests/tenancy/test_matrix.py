@@ -185,6 +185,10 @@ def _message_form(_w: World, _role: str) -> dict[str, Any]:
     return {"raw": "Subject: probe\r\nFrom: a@example.com\r\n\r\nbody"}
 
 
+def _content_empty(_w: World, _role: str) -> dict[str, Any]:
+    return {"subject": "probe"}
+
+
 def _check_ids(_w: World, _role: str) -> dict[str, Any]:
     return {"ids": ["spf"]}
 
@@ -196,6 +200,8 @@ def _check_free(_w: World, _role: str) -> dict[str, Any]:
 _DNS_OWN = {**_by_role(200, 200), "viewer": 403}  # client viewers never get raw DNS tools
 
 _MSG_OWN = {**_by_role(415, 415), "viewer": 403}  # client viewers never analyse messages
+
+_CONTENT_OWN = {**_by_role(422, 422), "viewer": 403}  # client viewers never analyse content
 
 MATRIX: dict[tuple[str, str], Entry] = {
     # session / tenant switch (app.web.auth)
@@ -244,6 +250,10 @@ MATRIX: dict[tuple[str, str], Entry] = {
     # JSON, so permitted roles stop at 415 (the content type is checked after the permission);
     # the 200 path is covered by tests/api/test_message_analyze.py.
     ("POST", "/api/v1/message/analyze"): Entry(Kind.DNS, body=_dns_lookup, own=_MSG_OWN),
+    # content analysis API (app.api.v1.content): tenant-level `content.analyze`. The matrix sends
+    # a JSON body with no html/text, so permitted roles stop at 422 (decided before the analyzer);
+    # the 200 path is covered by tests/api/test_content_analyze.py.
+    ("POST", "/api/v1/content/analyze"): Entry(Kind.DNS, body=_content_empty, own=_CONTENT_OWN),
     # DKIM SSE streams (app.web.checks_stream): check.run on the domain / dns.tools (free).
     # The free route needs `?name=`; without it permitted roles get 422 (decided before streaming).
     ("GET", "/domains/{domain_id}/authentication"): Entry(Kind.DOMAIN),
