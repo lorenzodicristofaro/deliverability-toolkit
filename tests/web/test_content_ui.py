@@ -16,6 +16,7 @@ from urllib.parse import urlencode
 
 import pytest
 from fastapi.testclient import TestClient
+from markupsafe import escape
 from sqlalchemy.orm import Session
 
 from app.core import csrf, i18n
@@ -316,14 +317,137 @@ def test_skipped_sections_are_localized(world: World) -> None:
     assert "<code>" not in skipped
 
 
-@pytest.mark.parametrize(("lang", "word"), [("en", "category"), ("it", "categoria")])
-def test_no_matched_rule_does_not_mention_a_category(world: World, lang: str, word: str) -> None:
-    """The engine lists only categories with a match, so none listed means no rule matched."""
-    html = analyze(world, "analyst", None, **{"Accept-Language": lang}).text
-    block = html.split('data-testid="content-rules"', 1)[1].split("</section>", 1)[0]
+def shown(key: str, lang: str = "en") -> str:
+    """The text as it appears in the page (autoescaped: the Italian texts have apostrophes)."""
+    return str(escape(t(key, lang)))
+
+
+def rules_block(html: str) -> str:
+    return html.split('data-testid="content-rules"', 1)[1].split("</section>", 1)[0]
+
+
+Row = tuple[str, str | None]
+
+
+def stub_rules(
+    monkeypatch: pytest.MonkeyPatch, rows: list[Row], reasons: tuple[str, ...], name: str = "rule"
+) -> None:
+    """Replace the rule outcome of a real run; `add_rule` must have added one rule."""
+    real = analyze_content
+
+    def stubbed(ctx: TenantContext, session: Any, content: ContentInput) -> ContentAnalysis:
+        result = real(ctx, session, content)
+        facts = result.rules.facts
+        assert facts is not None
+        template = facts.results[0]
+        results = tuple(
+            template.model_copy(
+                update={
+                    "rule_id": index,
+                    "name": f"{name}-{index}",
+                    "status": status,
+                    "issue": issue,
+                    "evidence": None,
+                }
+            )
+            for index, (status, issue) in enumerate(rows, start=1)
+        )
+        count = [status for status, _ in rows].count
+        changes = {
+            "results": results,
+            "evaluated_rules": count("ok") + count("matched"),
+            "matched_rules": count("matched"),
+            "error_rules": count("error"),
+            "not_evaluated_rules": count("not_evaluated"),
+            "categories": facts.categories if count("matched") else (),
+        }
+        rules = result.rules.model_copy(
+            update={"facts": facts.model_copy(update=changes), "reasons": reasons}
+        )
+        return result.model_copy(update={"rules": rules})
+
+    monkeypatch.setattr(content_web, "analyze_content", stubbed)
+
+
+OK: Row = ("ok", None)
+ERROR: Row = ("error", "timeout")
+SKIPPED: Row = ("not_evaluated", "busy")
+
+
+@pytest.mark.parametrize(
+    ("rows", "reasons", "failed"),
+    [
+        pytest.param([ERROR, ERROR], ("rules_failed",), 2, id="all_error"),
+        pytest.param([SKIPPED, SKIPPED], ("rules_failed",), 2, id="all_not_evaluated"),
+        pytest.param([OK, ERROR], ("rules_failed",), 1, id="partial_error"),
+        pytest.param([OK, SKIPPED], ("rules_failed",), 1, id="partial_not_evaluated"),
+        pytest.param([OK, ERROR], (), 1, id="error_count_alone"),
+        pytest.param([OK, SKIPPED], (), 1, id="not_evaluated_count_alone"),
+        pytest.param([OK], ("rules_input_capped",), 0, id="input_capped"),
+        pytest.param([OK], ("language_rules_skipped",), 0, id="language_skipped"),
+        pytest.param([], (), 0, id="nothing_evaluated"),
+    ],
+)
+def test_no_verdict_never_claims_no_match(
+    world: World,
+    monkeypatch: pytest.MonkeyPatch,
+    rows: list[Row],
+    reasons: tuple[str, ...],
+    failed: int,
+) -> None:
+    add_rule(world)
+    stub_rules(monkeypatch, rows, reasons)
+    block = rules_block(analyze(world, "analyst", {"text": "nothing relevant"}).text)
+    assert shown("web.content.section.not_evaluated") in block
+    assert shown("web.content.section.empty") not in block
+    for reason in reasons:
+        assert f"<code>{reason}</code>" in block
+    assert len(re.findall(r'<tr data-rule="\d+" data-status="', block)) == failed
+    assert ('data-testid="content-rules-failed"' in block) is (failed > 0)
+
+
+@pytest.mark.parametrize("lang", ["en", "it"])
+def test_no_enabled_rules_is_not_a_clean_result(world: World, lang: str) -> None:
+    block = rules_block(analyze(world, "analyst", None, **{"Accept-Language": lang}).text)
+    assert shown("web.content.section.not_evaluated", lang) in block
+    assert shown("web.content.section.empty", lang) not in block
+    assert "<code>no_enabled_rules</code>" in block
+
+
+@pytest.mark.parametrize("lang", ["en", "it"])
+def test_real_no_match_with_enabled_rules(world: World, lang: str) -> None:
+    add_rule(world)
+    block = rules_block(analyze(world, "analyst", None, **{"Accept-Language": lang}).text)
     assert "data-category=" not in block
-    assert t("web.content.section.empty", lang) in block
-    assert word not in t("web.content.section.empty", lang).lower()
+    assert shown("web.content.section.empty", lang) in block
+    assert shown("web.content.section.not_evaluated", lang) not in block
+    assert 'data-testid="content-rules-failed"' not in block
+
+
+def test_failed_rule_is_listed_once_beside_a_matched_category(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    add_rule(world)
+    stub_rules(monkeypatch, [("matched", None), ERROR, SKIPPED], ("rules_failed",))
+    block = rules_block(analyze(world, "analyst", {"text": "zebraword"}).text)
+    assert 'data-category="spam"' in block
+    assert len(re.findall(r'<tr data-rule="1"', block)) == 1
+    assert len(re.findall(r'<tr data-rule="2"', block)) == 1
+    assert len(re.findall(r'<tr data-rule="3"', block)) == 1
+    failed = block.split('data-testid="content-rules-failed"', 1)[1]
+    assert '<tr data-rule="1"' not in failed
+    assert t("checks.status.error") in failed
+    assert t("web.content.status.not_evaluated") in failed
+    assert "<code>timeout</code>" in failed
+    assert "<code>busy</code>" in failed
+
+
+def test_failed_rule_name_is_escaped(world: World, monkeypatch: pytest.MonkeyPatch) -> None:
+    add_rule(world)
+    stub_rules(monkeypatch, [ERROR], ("rules_failed",), name=HOSTILE_RULE)
+    r = analyze(world, "analyst", {"text": "nothing relevant"})
+    assert_no_hostile_markup(r.text)
+    assert "&lt;script&gt;alert(&#34;rule&#34;)&lt;/script&gt;-1" in r.text
 
 
 def test_eml_flow(world: World, spy: list[ContentInput]) -> None:

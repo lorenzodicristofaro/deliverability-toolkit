@@ -45,6 +45,10 @@
     {% if facts is none %}<p class="empty-state">{{ t("web.content.section.unavailable") }}</p>
     {% else %}
     <p>{{ t("web.content.rules.score") }}: <strong>{{ facts.score }}</strong> · {{ t("web.content.rules.matched") }}: {{ facts.matched_rules }} / {{ facts.evaluated_rules }}</p>
+    {#- `categories` lists only categories with a match, so an empty list alone proves nothing:
+        "none matched" needs every rule to have reached a verdict. -#}
+    {% set rules_verdict = facts.evaluated_rules > 0 and facts.error_rules == 0 and facts.not_evaluated_rules == 0 and not analysis.rules.reasons %}
+    {% set failed_rules = facts.results|selectattr("status", "in", ["error", "not_evaluated"])|list %}
     {% for cat in facts.categories %}
     <h3 data-category="{{ cat.category }}"><span class="dns-wrap">{{ cat.category|visible }}</span> ({{ t("web.content.col.score") }}: {{ cat.score }})</h3>
     <table>
@@ -55,7 +59,7 @@
         <th scope="col">{{ t("web.content.col.evidence") }}</th>
       </tr></thead>
       <tbody>
-      {% for r in facts.results if r.category == cat.category and r.status != "ok" %}
+      {% for r in facts.results if r.category == cat.category and r.status == "matched" %}
         <tr data-rule="{{ r.rule_id }}">
           <td class="dns-wrap">{{ r.name|visible }}</td>
           <td>{{ severity_text[r.severity] }}</td>
@@ -65,7 +69,29 @@
       {% endfor %}
       </tbody>
     </table>
-    {% else %}<p class="empty-state">{{ t("web.content.section.empty") }}</p>{% endfor %}
+    {% else %}
+    {% if rules_verdict %}<p class="empty-state" data-testid="content-rules-empty">{{ t("web.content.section.empty") }}</p>
+    {% else %}<p class="empty-state" data-testid="content-rules-not-evaluated">{{ t("web.content.section.not_evaluated") }}{% for reason in analysis.rules.reasons %} <code>{{ reason|visible }}</code>{% endfor %}</p>{% endif %}
+    {% endfor %}
+    {% if failed_rules %}
+    <h3>{{ t("web.content.rules.failed") }}</h3>
+    <table data-testid="content-rules-failed">
+      <thead><tr>
+        <th scope="col">{{ t("web.content.col.rule") }}</th>
+        <th scope="col">{{ t("web.content.col.severity") }}</th>
+        <th scope="col">{{ t("web.content.col.status") }}</th>
+      </tr></thead>
+      <tbody>
+      {% for r in failed_rules %}
+        <tr data-rule="{{ r.rule_id }}" data-status="{{ r.status }}">
+          <td class="dns-wrap">{{ r.name|visible }}</td>
+          <td>{{ severity_text[r.severity] }}</td>
+          <td class="dns-wrap">{{ status_text[r.status] }}{% if r.issue %} <code>{{ r.issue|visible }}</code>{% endif %}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
     {% endif %}
   </section>
 
