@@ -1,44 +1,34 @@
-# HANDOFF — 2026-11-09 (M5 in progress, paused at the maintainer's request)
+# HANDOFF — 2026-11-09 (M5 in progress)
 
-Resume with `/gm`. The maintainer stopped the session after M5-14's last QA round and chose to look at CI the next day.
+Resume with `/gm`. Written as a safeguard after the 5-hour usage limit was hit twice in one session.
 
 ## State
 - M1–M4 are accepted; `qa` → `main` is still pending the maintainer.
-- M5: 14 of 26 tickets are done with green CI (M5-01..M5-13 and M5-05b). M5-14 is merged but its CI result has not been checked.
-- **M5-14 needs one check.** The last push was `a9bcf03` on `dev`, and its CI had not been read when the session stopped. Find it with `gh run list --branch dev`; poll `gh run view`, because `gh run watch` fails with this token.
-  - The previous run, 42527516136 on `1ca8862`, failed with one error: teardown of `test_no_dns_or_sockets_are_used[postgresql]`. `a9bcf03` holds the fix (commit `1be90eb`, QA APPROVE). The fix could not be run on PostgreSQL locally; CI is the first real run.
-  - M5-14 is deliberately not ticked in TODO.md and its ticket is not marked done. Do both only when that CI is green.
-  - If it is red: M5-14 has already used the rounds the maintainer approved (3 QA rounds plus the CI fix), so ask the maintainer before another round.
-- `dev` local is one commit ahead of `origin/dev` (this handoff). It was not pushed, to avoid starting another CI run; it goes out with the next push.
+- M5 done with green CI: M5-01..M5-18, plus M5-05b, M5-15b, M5-15c, M5-15d (tried, no gain, reverted), M5-17a, M5-17b.
+- M5-19 (rules admin UI): branch `feature/m5-19-rules-ui`, commit 6a418fd, worktree `.claude/worktrees/agent-a83284e602b6014c2`. QA round 1 was CHANGES REQUESTED; round 2 is in progress. Merge only on APPROVE.
+- `dev` local may be ahead of `origin/dev` by bookkeeping commits, which go out with the next push.
 
-## GM decisions this session (2026-11-08/09)
-- All seeded content rules stay disabled for now; the maintainer will revisit after in-depth testing (TODO.md).
-- `subject_fake_reply_forward_prefix` needs a target field and reply context before it can be enabled; deferred out of M5-13 (TODO.md follow-up).
-- Rules engine: a regex over `max_matches` with a match and no failure is `matched`.
-- Content status: a cap hit, rule `error`, `busy` or `budget_exceeded` make the section and overall `error`. A section with no input is `not_evaluated`. One unreadable href (for example a template placeholder) is `warn` with complete=False, not `error`. Overall can be `ok` with complete=False.
-- Gmail clipping is worded as commonly reported, with no official source; no size is attributed to Google. Wire fields are `clip_risk_threshold_bytes` and `exceeds_clip_risk_threshold`.
-- `app/checks/content.py` was skipped: the Check interface takes a domain Target and has no DB handle.
+## How the work runs now (maintainer decisions 2026-11-09)
+- Sonnet → Opus: once Sonnet code fails (QA, tests or CI), all further coder work on that ticket goes to a NEW coder on Opus (docs/WORKFLOW.md section 3).
+- QA on Sonnet only for low-risk Sonnet tickets; Opus for auth, permissions, tenancy, parsers, untrusted input.
+- Coder runs relevant tests only (full suite if shared fixtures or app-wide code change); QA runs the full suite once, on the final round; GM runs it on the merge result.
+- Local PostgreSQL: container `dt-test-pg` (Docker Desktop must be running). Prefix each pytest with `TEST_DATABASE_URL=postgresql://ci:ci-throwaway-password@localhost:5432/ci_test`. One suite at a time.
+- CI runs `lint`, `test-sqlite`, `test-postgres` in parallel, about 5 min in total (was about 16). Docs-only pushes skip the tests; `secret-scan` still runs.
+- Agent worktrees start stale: give each coder the exact `dev` hash.
+- After a merge, check CI, then close the ticket and tick TODO.md.
 
-## Constraints for the next tickets
-- M5-15: `analyze_content(ctx, session, content)` is sync and blocks up to about 15 s; call it with `run_in_threadpool`. Not yet written in the M5-15 ticket. Its JSON gets frozen there.
-- M5-16: must display `complete`, since overall can be `ok` with complete=False. `rules.facts.complete` is the engine's own value and can differ from the overall one. Not yet written in the M5-16 ticket.
-
-## M5-14 follow-ups still to add to TODO.md
-- Internal parser failure surfaces as CONTENT_INPUT_CAPPED, whose remediation tells the user to fix the input (pairs with the MSG_SECTION_FAILED follow-up); raw reason codes in localized text; `{prefix}` shows the normalised "re".
-- Public visible-text API from M5-08, replacing `_VisibleText` subclassing private `_Collector`; `_lookup_charset` is private.
-- Socket guard in tests/services/test_content_analysis.py does not detect an attempt whose exception is caught and ignored; a guard recording attempts, asserted empty, would close it.
-- Visible text runs are joined by a space, so a word split across inline tags is not matched by rules.
-- ContentStructure `gmail_*` field names in app/parsers/content_html.py (internal, not on the wire).
+## GM decisions this session
+- CLI: `--tenant-id`/`--user-id` through `app/cli/tenant_scope.py` (maintainer choice); they are not authentication.
+- `dtk content`: `ok` with `complete` false exits 1, so a run without `--eml` never exits 0.
+- Seeded global rule: DELETE is 409 (disable it instead); any accepted PATCH pins it against seed updates.
+- M5-16 criteria reworded: rule results grouped by category, findings flat by severity.
 
 ## Open maintainer decisions
-- Gmail clipping and URL shorteners unverified (t.co, tinyurl.com, ow.ly, buff.ly, lnkd.in, is.gd, j.mp in seeds/url_shorteners.yaml).
+- Check GitHub branch protection: if `lint-test` is required, replace it with `lint`, `test-sqlite`, `test-postgres`.
+- Gmail clipping and URL shorteners unverified (t.co, tinyurl.com, ow.ly, buff.ly, lnkd.in, is.gd, j.mp).
 - Carried over: M4 provider samples; `qa` → `main` for M1–M4; Mailchimp/Postmark/HubSpot DKIM sources; the PSL licence; SecLists terms; HTMX under CSP.
 
-## Testing speed (maintainer request for the next session)
-The maintainer wants a leaner testing phase. Measured: CI pytest took 16 min 24 s for 22645 tests (SQLite + PostgreSQL); local takes about 2 min 30 s for 19979 tests, skipping about 2670 PostgreSQL params. The causes are not profiled yet.
-Ideas to evaluate, after measuring with `pytest --durations`: per-test `_reset_postgres` cost (transaction rollback instead), pytest-xdist, and running on PostgreSQL only the tests that depend on the database. SPEC section 7 requires both databases to be tested in CI. Also consider the QA loop: each QA round re-runs the full suite. PostgreSQL is not available locally (no docker daemon, no binaries), which is why PG-only failures appear only after the push.
-
 ## Next 3 steps
-1. Check CI on `a9bcf03`. If green, have `pm` mark M5-14 done, tick TODO.md, and add the follow-ups and M5-15/M5-16 constraints above.
-2. Review testing speed with the maintainer: measure first, then decide.
-3. M5-15, REST POST /api/v1/content/analyze, then M5-16..M5-25 in order (TODO.md).
+1. M5-19: on QA APPROVE, merge, run the gate with PostgreSQL, push, check CI, close it. Add to TODO.md Follow-ups: a broken stored rule cannot be disabled because the service re-validates its pattern on enabled-only updates; toggle and delete redirect to page 1; the localized 413 stops at 1 MiB because `register_form_cap` matches exact paths only.
+2. M5-20..M5-24 in order (TODO.md).
+3. M5-25 acceptance tests and docs/CONTENT.md (must state the `--lang`/`--output-lang` difference and that a run without `--eml` exits 1), then the M5 report and `dev` → `qa`.
