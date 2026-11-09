@@ -1,0 +1,90 @@
+{#- One ContentAnalysis. Everything is autoescaped (never |safe) and content-derived text (rule
+    names, evidence, categories, reasons) also goes through `visible`. The pasted HTML is never
+    rendered. `analysis.complete` is the overall value (the engine's own `rules.facts.complete`
+    can differ and is not shown as the result's completeness). -#}
+{% set status_text = {"ok": t("checks.status.ok"), "warn": t("checks.status.warn"), "fail": t("checks.status.fail"), "info": t("checks.status.info"), "error": t("checks.status.error"), "not_evaluated": t("web.content.status.not_evaluated")} %}
+{% set severity_text = {"critical": t("checks.severity.critical"), "high": t("checks.severity.high"), "medium": t("checks.severity.medium"), "low": t("checks.severity.low"), "info": t("checks.severity.info")} %}
+{% set section_text = {"message": t("web.content.section.message"), "body": t("web.content.section.body"), "links": t("web.content.section.links"), "subject": t("web.content.section.subject"), "unsubscribe": t("web.content.section.unsubscribe"), "rules": t("web.content.section.rules")} %}
+{% set sections = [("message", analysis.message), ("body", analysis.body), ("links", analysis.links), ("subject", analysis.subject), ("unsubscribe", analysis.unsubscribe), ("rules", analysis.rules)] %}
+<div class="check-result" data-testid="content-result" data-status="{{ analysis.status }}" data-complete="{{ "true" if analysis.complete else "false" }}">
+  <p class="dns-state dns-state-{{ "failure" if analysis.status == "error" else ("ok" if analysis.status == "ok" else "absent") }}"{% if analysis.status == "error" %} role="alert"{% endif %} data-testid="content-status">
+    <strong>{{ status_text[analysis.status] }}</strong>
+    {% if analysis.status == "error" %}<br>{{ t("checks.status.error_note") }}{% endif %}
+  </p>
+  <p data-testid="content-complete" data-complete="{{ "true" if analysis.complete else "false" }}">
+    {{ t("web.content.complete.label") }}: <strong>{{ t("web.content.complete.yes") if analysis.complete else t("web.content.complete.no") }}</strong>
+    {% if not analysis.complete %}<br>{{ t("web.content.complete.note") }}{% endif %}
+    {% if analysis.not_evaluated_sections %}<br>{{ t("web.content.complete.skipped") }}: {% for s in analysis.not_evaluated_sections %}<code>{{ s|visible }}</code> {% endfor %}{% endif %}
+  </p>
+
+  <section data-testid="content-sections">
+    <h2>{{ t("web.content.section.sections") }}</h2>
+    <table>
+      <thead><tr>
+        <th scope="col">{{ t("web.content.col.section") }}</th>
+        <th scope="col">{{ t("web.content.col.status") }}</th>
+        <th scope="col">{{ t("web.content.col.reasons") }}</th>
+      </tr></thead>
+      <tbody>
+      {% for key, sec in sections %}
+        {% if sec is not none %}
+        <tr data-section="{{ key }}" data-status="{{ sec.status }}">
+          <td>{{ section_text[key] }}</td>
+          <td>{{ status_text[sec.status] }}</td>
+          <td class="dns-wrap">{% for r in sec.reasons %}<code>{{ r|visible }}</code> {% endfor %}</td>
+        </tr>
+        {% endif %}
+      {% endfor %}
+      </tbody>
+    </table>
+  </section>
+
+  <section data-testid="content-rules">
+    <h2>{{ t("web.content.section.rules") }}</h2>
+    {% set facts = analysis.rules.facts %}
+    {% if facts is none %}<p class="empty-state">{{ t("web.content.section.unavailable") }}</p>
+    {% else %}
+    <p>{{ t("web.content.rules.score") }}: <strong>{{ facts.score }}</strong> · {{ t("web.content.rules.matched") }}: {{ facts.matched_rules }} / {{ facts.evaluated_rules }}</p>
+    {% for cat in facts.categories %}
+    <h3 data-category="{{ cat.category }}"><span class="dns-wrap">{{ cat.category|visible }}</span> ({{ t("web.content.col.score") }}: {{ cat.score }})</h3>
+    <table>
+      <thead><tr>
+        <th scope="col">{{ t("web.content.col.rule") }}</th>
+        <th scope="col">{{ t("web.content.col.severity") }}</th>
+        <th scope="col">{{ t("web.content.col.status") }}</th>
+        <th scope="col">{{ t("web.content.col.evidence") }}</th>
+      </tr></thead>
+      <tbody>
+      {% for r in facts.results if r.category == cat.category and r.status != "ok" %}
+        <tr data-rule="{{ r.rule_id }}">
+          <td class="dns-wrap">{{ r.name|visible }}</td>
+          <td class="dns-wrap">{{ r.severity|visible }}</td>
+          <td class="dns-wrap"><code>{{ r.status|visible }}</code>{% if r.issue %} <code>{{ r.issue|visible }}</code>{% endif %}</td>
+          <td class="dns-wrap">{% if r.evidence %}<code>{{ r.evidence|visible }}</code>{% endif %}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% else %}<p class="empty-state">{{ t("web.content.section.empty") }}</p>{% endfor %}
+    {% endif %}
+  </section>
+
+  <section data-testid="content-findings">
+    <h2>{{ t("web.content.section.findings") }}</h2>
+    {% if not analysis.findings %}
+    <p class="empty-state">{{ t("checks.no_findings") }}</p>
+    {% else %}
+    <ul class="check-findings">
+    {% for f in analysis.findings %}
+      <li data-code="{{ f.code }}" data-severity="{{ f.severity }}">
+        <strong>[{{ severity_text[f.severity] }}] {{ t(f.title_key, **(f.params|finding_params)) }}</strong>
+        <p>{{ t(f.detail_key, **(f.params|finding_params)) }}</p>
+        {% if f.remediation_key %}<p>{{ t(f.remediation_key, **(f.params|finding_params)) }}</p>{% endif %}
+        {% for e in f.evidence %}<p class="dns-wrap"><code>{{ e|visible }}</code></p>{% endfor %}
+        {% if f.docs_url is https_url %}<p><a href="{{ f.docs_url }}" rel="noopener noreferrer">{{ t("checks.docs_link") }}</a></p>{% endif %}
+      </li>
+    {% endfor %}
+    </ul>
+    {% endif %}
+  </section>
+</div>
