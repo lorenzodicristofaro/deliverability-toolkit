@@ -183,6 +183,7 @@ def render(request: Request, template: str, status_code: int = 200, **context: A
         show_message_tools=message_tools_nav(request),
         show_content_tools=content_tools_nav(request),
         show_rules_tools=rules_tools_nav(request),
+        show_dkim_selector_tools=rules_tools_nav(request),
         **context,
     )
     response = HTMLResponse(html, status_code=status_code)

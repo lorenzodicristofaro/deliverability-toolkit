@@ -203,6 +203,10 @@ SELECTOR_ID_ROUTES: dict[tuple[str, str], Any] = {
     ("GET", "/api/v1/dkim-selectors/{selector_id}"): None,
     ("PATCH", "/api/v1/dkim-selectors/{selector_id}"): {"notes": "probe"},
     ("DELETE", "/api/v1/dkim-selectors/{selector_id}"): None,
+    ("GET", "/dkim-selectors/{selector_id}/edit"): None,
+    ("POST", "/dkim-selectors/{selector_id}/edit"): {"notes": "probe"},
+    ("POST", "/dkim-selectors/{selector_id}/toggle"): {"enabled": "0"},
+    ("POST", "/dkim-selectors/{selector_id}/delete"): None,
 }
 
 
@@ -221,7 +225,10 @@ def test_out_of_range_selector_id_is_an_unknown_selector(
 
     def send(selector_id: int) -> Any:
         path = template.replace("{selector_id}", str(selector_id))
-        return world.send(who, method, path, json=SELECTOR_ID_ROUTES[key])
+        payload = SELECTOR_ID_ROUTES[key]
+        if path.startswith("/api/"):
+            return world.send(who, method, path, json=payload)
+        return world.send(who, method, path, form=payload)
 
     foreign = b_selector(world)
     unknown_outcome = _outcome(send(UNKNOWN_ID))
@@ -387,6 +394,7 @@ KNOWN_INT_CALLS = {
     ("app/api/v1/message.py", "_read_capped"),  # Content-Length
     ("app/web/checks_stream.py", "dkim_events"),  # duration in ms
     ("app/web/content.py", "_read_capped"),  # Content-Length
+    ("app/web/dkim_selectors.py", "_read_capped"),  # Content-Length
     ("app/web/message.py", "_read_capped"),  # Content-Length
     ("app/web/rules.py", "_read_capped"),  # Content-Length
     ("app/web/rules.py", "_weight"),  # rule weight, 0 to 100
