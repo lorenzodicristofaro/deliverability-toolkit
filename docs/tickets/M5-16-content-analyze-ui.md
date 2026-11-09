@@ -7,8 +7,8 @@ Depends on: M5-01, M5-14, M5-15
 Parallel-safe: no (router registry and locale files)
 Model: sonnet
 Acceptance criteria:
-- Page with HTML textarea, text textarea, subject, optional .eml upload (same flow as the M4-12 message UI); results show status, findings grouped by category, evidence escaped. Pasted HTML is NEVER rendered as HTML (escaped only; an optional preview, if any, uses a sandboxed iframe with no scripts; default: no preview).
-- Uses the M5-01 localized-413 mechanism: no-JS post over 1 MiB gives the localized 413, not a CSRF 403; `data-max-bytes` equals the server constant (test).
+- Page with HTML textarea, text textarea, subject, optional .eml upload (same flow as the M4-12 message UI); results show status, rule results grouped by category, findings flat by severity, per-section status table, evidence escaped. Pasted HTML is NEVER rendered as HTML (escaped only; an optional preview, if any, uses a sandboxed iframe with no scripts; default: no preview).
+- Uses the M5-01 localized-413 mechanism: no-JS post over the decoded cap `MAX_RAW_BYTES` (2 MiB) gives the localized 413, not a CSRF 403; `data-max-bytes` equals the server constant (test).
 - Permissions: anonymous -> redirect/401 as other pages, client viewer 403, foreign/stale tenant 404; nav entry hidden when not permitted; denial does not invoke the analyzer (spy).
 - Result equals the API result for the same input (UI status/codes compare).
 - XSS test: `<script>`, `"><img onerror=...>` in html, subject, evidence snippets and rule names are escaped in the response.

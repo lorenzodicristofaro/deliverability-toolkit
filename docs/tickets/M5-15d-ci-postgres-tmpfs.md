@@ -12,4 +12,5 @@ Acceptance criteria:
 - The change is measured on dev CI against the PostgreSQL job duration from M5-15c, and the result is written in this ticket. If it is not faster, the GM reverts it.
 New i18n keys: none
 Baseline (M5-15c, run 42600956376): test-postgres pytest 270 s.
-Status: todo
+Result: test-postgres pytest 275 s with tmpfs against 270 s without (run 42602258761), not faster; reverted in 555028a per this ticket.
+Status: done
