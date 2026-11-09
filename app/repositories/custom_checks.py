@@ -15,12 +15,16 @@ frozen (read-only mappings, tuples) and `remediation_text` as a `LocalizedText`.
 listener additionally refuses changing `scope`/`tenant_id` of a persisted row anywhere in the
 process.
 
-`definition` is stored opaquely: its schema per kind is validated by the M5-22 service layer
-(any regex it carries must go through `app.core.safe_regex.compile_checked` there). Here it must
-only be a non-empty JSON object of plain JSON values, at most MAX_DEFINITION_DEPTH deep and at
-most MAX_DEFINITION_LENGTH characters once serialized with `json.dumps` (what SQLAlchemy sends on
-SQLite and PostgreSQL, so the DB CHECK sees the same length), with no NUL, surrogate or control
-characters (tab and newline allowed) in any string or key, and no NaN/infinity.
+`definition` must first be a non-empty JSON object of plain JSON values, at most
+MAX_DEFINITION_DEPTH deep and at most MAX_DEFINITION_LENGTH characters once serialized with
+`json.dumps` (what SQLAlchemy sends on SQLite and PostgreSQL, so the DB CHECK sees the same
+length), with no NUL, surrogate or control characters (tab and newline allowed) in any string or
+key, and no NaN/infinity. Then every write path, tenant and global, validates it against its kind
+with `app.core.custom_check_schema.parse_definition` (M5-22), which also runs any regex through
+`app.core.safe_regex.compile_checked`. An update that touches `kind` or `definition` validates
+the resulting pair; other updates (say, disabling a row) do not.
+
+`severity` is narrower than the column: low, medium or high (M5-22).
 
 `remediation_key` (an i18n key) is global-only: a tenant check must carry its own
 `remediation_text`, so it cannot borrow another check's text (reason "global_only", DB CHECK too).
@@ -48,6 +52,12 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.base import NEVER_SET, NO_VALUE
 
+from app.core.custom_check_schema import (
+    SEVERITIES,
+    DefinitionInvalid,
+    parse_definition,
+    validate_remediation_text,
+)
 from app.core.tenancy import TenantContext
 from app.models.custom_check import (
     KINDS,
@@ -57,10 +67,7 @@ from app.models.custom_check import (
     MAX_KEY_LENGTH,
     MAX_NAME_LENGTH,
     MAX_REMEDIATION_KEY_LENGTH,
-    MAX_REMEDIATION_LENGTH,
-    REMEDIATION_LANGUAGES,
     RESERVED_KINDS,
-    SEVERITIES,
     CustomCheck,
 )
 from app.repositories.base import DEFAULT_LIMIT, MAX_LIMIT, TenantScopeError, coerce_id
@@ -277,14 +284,18 @@ def _remediation_text(value: object) -> dict[str, str] | None:
         return None
     if isinstance(value, LocalizedText):
         value = value.as_dict()
-    if not isinstance(value, Mapping):
-        raise CustomCheckInvalid("remediation_text", "not_an_object")
-    if set(value.keys()) != set(REMEDIATION_LANGUAGES):
-        raise CustomCheckInvalid("remediation_text", "languages")
-    return {
-        lang: _paragraphs("remediation_text", value[lang], MAX_REMEDIATION_LENGTH)
-        for lang in REMEDIATION_LANGUAGES
-    }
+    try:
+        return validate_remediation_text(value)
+    except DefinitionInvalid as exc:
+        raise CustomCheckInvalid(exc.field, exc.reason) from None
+
+
+def _validate_kind_definition(kind: object, definition: object) -> None:
+    """The M5-22 schema for this kind, on every write path (compiles any regex too)."""
+    try:
+        parse_definition(kind, definition)
+    except DefinitionInvalid as exc:
+        raise CustomCheckInvalid(exc.field, exc.reason) from None
 
 
 def _clean(field: str, value: object) -> object:
@@ -460,6 +471,7 @@ class _CustomCheckStore:
         if missing:
             raise CustomCheckInvalid(sorted(missing)[0], "required")
         _check_remediation(cleaned.get("remediation_key"), cleaned.get("remediation_text"))
+        _validate_kind_definition(cleaned["kind"], cleaned["definition"])
         if self._key_taken(cleaned["check_key"]):
             raise CheckKeyTaken
         row = CustomCheck(**cleaned, **fixed)
@@ -480,6 +492,10 @@ class _CustomCheckStore:
             cleaned.get("remediation_key", row.remediation_key),
             cleaned.get("remediation_text", row.remediation_text),
         )
+        if "kind" in cleaned or "definition" in cleaned:
+            _validate_kind_definition(
+                cleaned.get("kind", row.kind), cleaned.get("definition", row.definition)
+            )
         if "check_key" in cleaned and self._key_taken(cleaned["check_key"], row.id):
             raise CheckKeyTaken
         for key, value in cleaned.items():
