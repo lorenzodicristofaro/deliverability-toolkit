@@ -11,4 +11,4 @@ Acceptance criteria:
 - Server-side permission tests posting directly as analyst, client viewer and another tenant's admin (denied; service not invoked); CSRF on all forms; XSS test on provider and notes.
 - Both locales; i18n scan passes.
 New i18n keys: web.dkim_selectors.title, .tab.global, .tab.tenant, .col.*, .action.*, .flash.* (coder lists final set) (en + it)
-Status: todo
+Status: done

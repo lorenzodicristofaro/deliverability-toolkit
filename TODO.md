@@ -131,7 +131,7 @@ Carried over from M0-07 QA:
   - [x] M5-18 content rules admin service + REST + test on sample (opus)
   - [x] M5-19 content rules admin UI
   - [x] M5-20 DKIM selectors admin service + REST + check wiring (opus)
-  - [ ] M5-21 DKIM selectors admin UI
+  - [x] M5-21 DKIM selectors admin UI
   - [ ] M5-22 custom checks schema + DNS evaluator (http_fetch rejected, deferred to M7)
   - [ ] M5-23 custom checks admin service + REST + run wiring (opus)
   - [ ] M5-24 custom checks admin UI
