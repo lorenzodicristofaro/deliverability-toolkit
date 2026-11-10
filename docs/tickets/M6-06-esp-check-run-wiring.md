@@ -12,5 +12,6 @@ Acceptance criteria:
 - A profile id stored in the DB but missing from the loaded profiles (profile removed or renamed) gives status `error` for that ESP, not a crash and not `ok`.
 - A repository or profile-load failure gives `error` for the `esp` check only; other checks in `all` still run. The existing `all` run results for domains without ESPs are byte-equal to before (regression test).
 - `DuplicateCheckError` for id `esp` cannot happen (custom checks reject the reserved id); add a test that a custom check named `esp` is rejected or documented, whichever the code already does.
+- QA (M6-04): ESP_PITFALL findings carry `params.notes_key`. Rendering (UI, API and CLI text) must look the key up in the user's language. Otherwise the detail shows only the raw pitfall code and the remediation's "Review the note" points to nothing.
 New i18n keys: none (reuse M6-04 keys; add `api.checks.error.esp_unavailable` en + it only if the coder needs it)
 Status: todo

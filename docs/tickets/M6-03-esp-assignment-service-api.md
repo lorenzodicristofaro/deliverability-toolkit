@@ -12,5 +12,9 @@ Acceptance criteria:
 - tenant_id only from TenantContext; a domain of another tenant or an invisible domain gives 404; an unknown `esp_id` gives 404 on the catalogue and 422 on PUT; hosts validated by the M6-02 rules, error shape as other APIs; duplicate PUT is idempotent (200, no second row).
 - Tenancy/permission tests per role and verb; all four routes appear in the coverage matrix (tests/tenancy/test_matrix.py); two-tenant test shows no leak through list or catalogue.
 - Instance admin without a membership gets no access (ARCHITECTURE section 4.6).
+- QA (M6-02): `DomainEspRepository.add` is idempotent and never changes stored hosts. Re-adding an assignment with different hosts must not be treated as an upsert: use `update_hosts`, or reject.
+- QA (M6-02): a concurrent duplicate add raises IntegrityError at flush. Map it to the idempotent result, or roll back, and never return a 500.
+- QA (M6-02): the service validates that `esp_id` names a loaded profile (app/esp/profile.py).
+- QA (M6-02): renaming a domain does not re-check stored hosts. Note this for whichever ticket adds renaming (not in this ticket).
 New i18n keys: api.domain_esps.error.unknown_esp, .invalid_host, .host_outside_domain, .too_many, .not_found (en + it)
 Status: todo

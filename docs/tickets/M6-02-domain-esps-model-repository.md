@@ -14,4 +14,5 @@ Acceptance criteria:
 - Tests (both backends where the suite supports it): tenancy isolation (tenant A cannot read, add to, update or remove tenant B rows), duplicate add, cascade on domain delete and tenant delete, host validation table (valid, foreign suffix, NUL, too long, uppercase, trailing dot, IDN not accepted), cap.
 - The tenancy test matrix/guards that scan repositories (tests/tenancy) stay green; add the new repository where they enumerate repositories.
 New i18n keys: none
-Status: todo
+Status: done
+Merge note: merged into local dev at f46a41e after QA APPROVE; the GM gate on 0f7803c passed the full PostgreSQL suite (28712 passed), with lint clean.

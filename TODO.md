@@ -148,7 +148,7 @@ Carried over from M0-07 QA:
 - Tickets (docs/tickets/):
   - [x] M6-00 CI: fewer billed Actions minutes (no CI on qa, path-filtered infra jobs)
   - [x] M6-01 ESP profile schema, loader, CI validation (opus)
-  - [ ] M6-02 domain_esps model, migration, repository (opus)
+  - [x] M6-02 domain_esps model, migration, repository (opus)
   - [ ] M6-03 ESP assignment service + REST + profile catalogue (opus)
   - [ ] M6-04 ESP profile check: SPF include, DKIM CNAMEs, return-path, tracking (opus)
   - [ ] M6-05 combined ESP SPF lookup budget finding (opus)
@@ -186,6 +186,7 @@ Carried over from M0-07 QA:
 - [ ] Security review checklist, dependency/license audit, v0.1.0 release
 
 ## Follow-ups (post-M1)
+- [ ] domain_esps (M6-02 QA): the 10-per-domain cap is checked by count before insert, so a concurrent add can exceed it by one (soft cap, not a security boundary).
 - [ ] ESP loader nit (M6-01 QA): app/esp/profile.py:53 imports private helpers (`_check_keys`, `_fail`, `_str`, `_date`, `_status`) from app/dns/knowledge.py; make them public (pairs with the M5-09 seed loader item).
 - [ ] Custom checks (M5-23 QA nits): "id order" (app/services/custom_checks_admin.py:172) vs "creation order" (app/api/v1/checks.py:12), pick one wording; `with_checks` DuplicateCheckError at app/api/v1/checks.py:69 would 500 the whole `all` run (unreachable today: catch it or comment why); tests/api/test_custom_checks_api.py:569 viewer run test should assert pattern/range text never appears in the response.
 - [ ] DKIM provider nits (M5-23b QA): `ProbeSelectors.providers` is a MappingProxyType in a frozen dataclass, so hashing it raises TypeError (app/services/dkim_probe_selectors.py:50-57; add `field(hash=False)` or a comment); CLI `--selector` gets seed providers implicitly via `providers=None` (app/cli/check.py:97).
