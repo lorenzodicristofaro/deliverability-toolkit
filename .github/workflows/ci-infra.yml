@@ -17,9 +17,11 @@ name: CI infra
 #   tests/integration/**               the integration-unbound test suite and its Docker helpers
 #   tests/conftest.py                  loaded by pytest for the integration tests
 #   tests/dnssec_tag.py                imported by tests/integration/test_unbound.py
+#   migrations/**                      compose smoke runs `alembic upgrade head` at container start
+#   seeds/**                           compose smoke runs the startup seed sync
 #   .github/workflows/ci-infra.yml     this workflow itself
-# Deliberately NOT listed: app/, locales/, seeds/, migrations/ (the image COPYs them, but the test
-# jobs cover their behaviour and listing them would run these jobs on nearly every code push).
+# Deliberately NOT listed: app/, locales/ (the image COPYs them, but the test jobs cover their
+# behaviour and listing them would run these jobs on nearly every code push).
 # tests/conftest.py is listed because the integration tests load it.
 # A new file the Docker jobs depend on must be added here.
 on:
@@ -34,6 +36,8 @@ on:
       - "pyproject.toml"
       - "uv.lock"
       - "alembic.ini"
+      - "migrations/**"
+      - "seeds/**"
       - "tests/integration/**"
       - "tests/conftest.py"
       - "tests/dnssec_tag.py"
@@ -49,6 +53,8 @@ on:
       - "pyproject.toml"
       - "uv.lock"
       - "alembic.ini"
+      - "migrations/**"
+      - "seeds/**"
       - "tests/integration/**"
       - "tests/conftest.py"
       - "tests/dnssec_tag.py"
