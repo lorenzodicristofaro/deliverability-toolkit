@@ -372,6 +372,8 @@ RAW_CASES: list[tuple[str, bytes, str]] = [
     ("not utf-8", b"name: \xff\xfe\n", "cannot parse"),
     ("huge file", b"# " + b"x" * MAX_FILE_BYTES + b"\n", "larger than"),
     ("multi document", GOOD_YAML.encode() + b"---\nid: x\n", "cannot parse"),
+    ("deep nesting", b"[" * 20000 + b"]" * 20000, "nesting too deep"),
+    ("deep nested maps", b"{a: " * 10000 + b"1" + b"}" * 10000, "nesting too deep"),
 ]
 
 

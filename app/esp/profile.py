@@ -218,6 +218,8 @@ def _load_yaml(path: Path) -> object:
         return yaml.load(text, Loader=_StrictLoader)  # noqa: S506 - SafeLoader subclass
     except (UnicodeDecodeError, yaml.YAMLError) as exc:
         raise EspProfileError(f"{path.name}: cannot parse: {exc}") from exc
+    except RecursionError:  # deeply nested flow collections still fit under the size cap
+        raise EspProfileError(f"{path.name}: cannot parse: nesting too deep") from None
 
 
 # --- field validators ---------------------------------------------------------------------------
