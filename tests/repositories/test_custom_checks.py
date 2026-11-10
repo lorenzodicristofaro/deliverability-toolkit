@@ -18,8 +18,11 @@ from sqlalchemy import Engine, and_, bindparam, inspect, or_, select, text
 from sqlalchemy.exc import DataError, IntegrityError
 from sqlalchemy.orm import Session
 
+from app.checks.custom import CustomDnsCheck
+from app.checks.models import CheckContext, Target
 from app.core.db import create_db_engine, create_session_factory
 from app.core.tenancy import TenantContext
+from app.dns.types import DnsQuestion, DnsResult, ResultState
 from app.models import CustomCheck, Tenant, User
 from app.models.custom_check import (
     MAX_DEFINITION_LENGTH,
@@ -46,12 +49,20 @@ def _cfg() -> Config:
     return Config(str(ROOT / "alembic.ini"))
 
 
+DEFINITIONS: dict[str, dict[str, Any]] = {
+    "dns_exists": {"name": "_esp.{domain}", "rrtype": "TXT"},
+    "dns_matches": {"name": "{domain}", "rrtype": "TXT", "pattern": "include:esp\\.example"},
+    "dns_value_range": {"name": "_limit.{domain}", "rrtype": "TXT", "min": 0, "max": 10},
+}
+
+
 def _check(**overrides: Any) -> dict[str, Any]:
+    kind = overrides.get("kind", "dns_matches")
     values: dict[str, Any] = {
         "check_key": "spf.include",
         "name": "SPF includes the ESP",
         "kind": "dns_matches",
-        "definition": {"rrtype": "TXT", "name": "@", "contains": "include:esp.example"},
+        "definition": dict(DEFINITIONS.get(kind, DEFINITIONS["dns_matches"])),
         "severity": "medium",
         "remediation_text": dict(TEXT),
     }
@@ -516,18 +527,39 @@ def test_records_are_immutable_and_detached(world: World) -> None:
         rec.remediation_text.en = "x"  # type: ignore[union-attr,misc]
 
 
-def test_nested_definition_is_deeply_frozen(world: World) -> None:
-    definition = {"values": [1, {"min": 0.5}], "nested": {"list": ["a"]}}
-    rec = world.repo("a").create(_check(check_key="a.nested", definition=definition))
+def _legacy_row(world: World, definition: dict[str, Any], key: str = "a.legacy") -> int:
+    """A row stored without the M5-22 schema (written before it existed, or by raw SQL)."""
+    row = CustomCheck(
+        scope="tenant",
+        tenant_id=world.tenant_a,
+        check_key=key,
+        name="Legacy",
+        kind="dns_exists",
+        definition=definition,
+        severity="low",
+        remediation_text=dict(TEXT),
+    )
+    world.session.add(row)
+    world.session.flush()
+    return row.id
+
+
+def test_nested_stored_definition_is_deeply_frozen(world: World) -> None:
+    rid = _legacy_row(world, {"values": [1, {"min": 0.5}], "nested": {"list": ["a"]}})
+    rec = world.repo("a").get(rid)
+    assert rec is not None
     with pytest.raises(TypeError):
         rec.definition["nested"]["list"] = []
     assert rec.definition["values"] == (1, {"min": 0.5})
+
+
+def test_frozen_definition_round_trips_through_update(world: World) -> None:
+    rec = world.repo("a").create(_check(check_key="a.frozen"))
     world.session.commit()
     again = world.repo("a").get(rec.id)
     assert again is not None
-    # Frozen records round-trip through update unchanged.
     same = world.repo("a").update(rec.id, {"definition": again.definition})
-    assert same is not None and json.dumps(dict(same.definition["nested"])) == '{"list": ["a"]}'
+    assert same is not None and dict(same.definition) == DEFINITIONS["dns_matches"]
 
 
 @pytest.mark.parametrize(
@@ -725,16 +757,16 @@ def _definition_of_size(size: int) -> dict[str, str]:
 
 
 VALID = [
-    ("definition", _definition_of_size(MAX_DEFINITION_LENGTH)),
-    ("definition", {"a": None, "b": True, "c": -3, "d": 1.5, "e": [], "f": {}}),
-    ("definition", {"pattern": "^v=spf1 .*include:esp\\.example", "multi": "a\n\tb"}),
-    ("definition", {"name": "sélecteur «é» 😀"}),
+    ("definition", {"name": "{domain}", "rrtype": "TXT", "pattern": "^v=spf1 .*esp\\.example"}),
+    ("definition", {"name": "a.b.{domain}", "rrtype": "MX", "pattern": "(?m)^a\n\tb"}),
+    ("definition", {"name": "_x.{domain}", "rrtype": "TXT", "pattern": "sélecteur «é» 😀"}),
     ("name", "Contrôle «ok»"),
     ("description", "Line one.\n\tLine two."),
     ("description", None),
     ("kind", "dns_exists"),
     ("kind", "dns_value_range"),
-    ("severity", "critical"),
+    ("severity", "high"),
+    ("severity", "low"),
     ("enabled", False),
     ("check_key", "a.b-c_1"),
     ("remediation_text", {"en": "😀" * MAX_REMEDIATION_LENGTH, "it": "é" * MAX_REMEDIATION_LENGTH}),
@@ -762,17 +794,172 @@ def test_valid_values_roundtrip(world: World, field: str, value: object) -> None
 
 def test_definition_size_limit_matches_db(world: World) -> None:
     # One character over the repository limit is refused before the DB with the same measure
-    # the DB CHECK uses; the exact limit (also non-ASCII, escaped by json.dumps) lands.
+    # the DB CHECK uses (non-ASCII counts as escaped by json.dumps). The exact limit passes this
+    # gate and reaches the M5-22 schema, which has its own smaller cap and refuses the key.
     repo = world.repo("a")
     with pytest.raises(CustomCheckInvalid) as err:
         repo.create(
             _check(check_key="a.big", definition=_definition_of_size(MAX_DEFINITION_LENGTH + 1))
         )
     assert err.value.reason == "too_large"
-    escaped = {"a": "é" * ((MAX_DEFINITION_LENGTH - len(json.dumps({"a": ""}))) // 6)}
-    assert len(json.dumps(escaped)) <= MAX_DEFINITION_LENGTH
-    assert repo.create(_check(check_key="a.esc", definition=escaped)).definition == escaped
-    world.session.commit()
+    with pytest.raises(CustomCheckInvalid) as err:
+        repo.create(_check(check_key="a.esc", definition={"a": "é" * MAX_DEFINITION_LENGTH}))
+    assert err.value.reason == "too_large"
+    with pytest.raises(CustomCheckInvalid) as err:
+        repo.create(
+            _check(check_key="a.max", definition=_definition_of_size(MAX_DEFINITION_LENGTH))
+        )
+    assert (err.value.field, err.value.reason) == ("definition", "unknown_key")
+
+
+# --- M5-22 schema on every write path ------------------------------------------------------------
+
+REPOS = ["tenant", "global"]
+_NAME = "definition.name"
+SCHEMA_REJECTED = [
+    ("dns_exists", {"name": "@", "rrtype": "TXT"}, _NAME, "placeholder_missing"),
+    (
+        "dns_value_range",
+        {"name": "{domain}", "rrtype": "MX", "min": 0, "max": 1},
+        "definition.rrtype",
+        "range_requires_txt",
+    ),
+    (
+        "dns_exists",
+        {"name": "{domain}.evil.example", "rrtype": "TXT"},
+        _NAME,
+        "placeholder_position",
+    ),
+    ("dns_exists", {"name": "{domain!r}", "rrtype": "TXT"}, _NAME, "bad_placeholder"),
+    ("dns_exists", {"name": "{domain}", "rrtype": "ANY"}, "definition.rrtype", "invalid_choice"),
+    ("dns_exists", {"name": "{domain}", "rrtype": "TXT", "x": 1}, "definition", "unknown_key"),
+    (
+        "dns_matches",
+        {"name": "{domain}", "rrtype": "TXT", "pattern": "(a"},
+        "definition.pattern",
+        "regex_invalid_syntax",
+    ),
+    (
+        "dns_value_range",
+        {"name": "{domain}", "rrtype": "TXT", "min": True, "max": 1},
+        "definition.min",
+        "not_a_number",
+    ),
+    (
+        "dns_value_range",
+        {"name": "{domain}", "rrtype": "TXT", "min": 2, "max": 1},
+        "definition.min",
+        "min_above_max",
+    ),
+]
+
+
+def _write_target(world: World, where: str) -> tuple[Any, Any, int]:
+    """(repository, create function, id of an existing row of that scope)."""
+    if where == "tenant":
+        repo = world.repo("a")
+        return repo, repo.create, world.checks["a1"]
+    repo = world.global_repo()
+    return repo, lambda v: repo.create(v, actor=None), world.checks["g1"]
+
+
+@pytest.mark.parametrize("where", REPOS)
+@pytest.mark.parametrize(("kind", "definition", "field", "reason"), SCHEMA_REJECTED)
+def test_schema_enforced_on_every_write_path(
+    world: World, where: str, kind: str, definition: dict[str, Any], field: str, reason: str
+) -> None:
+    repo, create, existing = _write_target(world, where)
+    before = repo.count()
+    with pytest.raises(CustomCheckInvalid) as err:
+        create(_check(check_key="w.new", kind=kind, definition=definition))
+    assert (err.value.field, err.value.reason) == (field, reason)
+    with pytest.raises(CustomCheckInvalid) as err:
+        repo.update(existing, {"kind": kind, "definition": definition})
+    assert (err.value.field, err.value.reason) == (field, reason)
+    world.session.rollback()
+    assert repo.count() == before
+    stored = repo.get(existing)
+    assert stored is not None and stored.kind == "dns_matches"
+
+
+@pytest.mark.parametrize("where", REPOS)
+def test_update_validates_the_resulting_kind_and_definition(world: World, where: str) -> None:
+    repo, _create, existing = _write_target(world, where)
+    # kind alone: the stored dns_matches definition has `pattern`, unknown to dns_exists.
+    with pytest.raises(CustomCheckInvalid) as err:
+        repo.update(existing, {"kind": "dns_exists"})
+    assert (err.value.field, err.value.reason) == ("definition", "unknown_key")
+    # definition alone: checked against the stored kind.
+    with pytest.raises(CustomCheckInvalid) as err:
+        repo.update(existing, {"definition": DEFINITIONS["dns_exists"]})
+    assert (err.value.field, err.value.reason) == ("definition.pattern", "required")
+    world.session.rollback()
+    # both together: valid.
+    updated = repo.update(existing, {"kind": "dns_exists", "definition": DEFINITIONS["dns_exists"]})
+    assert updated is not None and updated.kind == "dns_exists"
+
+
+@pytest.mark.parametrize("where", REPOS)
+def test_http_fetch_refused_on_every_write_path(world: World, where: str) -> None:
+    repo, create, existing = _write_target(world, where)
+    with pytest.raises(CustomCheckInvalid) as err:
+        create(_check(check_key="w.http", kind="http_fetch"))
+    assert (err.value.field, err.value.reason) == ("kind", "reserved")
+    with pytest.raises(CustomCheckInvalid) as err:
+        repo.update(existing, {"kind": "http_fetch"})
+    assert (err.value.field, err.value.reason) == ("kind", "reserved")
+
+
+@pytest.mark.parametrize("where", REPOS)
+@pytest.mark.parametrize("severity", ["critical", "info"])
+def test_severity_outside_the_schema_refused(world: World, where: str, severity: str) -> None:
+    repo, create, existing = _write_target(world, where)
+    with pytest.raises(CustomCheckInvalid) as err:
+        create(_check(check_key="w.sev", severity=severity))
+    assert (err.value.field, err.value.reason) == ("severity", "invalid_choice")
+    with pytest.raises(CustomCheckInvalid):
+        repo.update(existing, {"severity": severity})
+
+
+def test_unrelated_update_of_a_legacy_row_is_allowed(world: World) -> None:
+    # A row from before the schema must stay manageable: it can be disabled or deleted. The
+    # evaluator reports it as `error` meanwhile, and changing its definition is validated.
+    rid = _legacy_row(world, {"contains": "x"})
+    repo = world.repo("a")
+    updated = repo.update(rid, {"enabled": False})
+    assert updated is not None and updated.enabled is False
+    with pytest.raises(CustomCheckInvalid):
+        repo.update(rid, {"definition": {"contains": "y"}})
+    assert repo.delete(rid) is True
+
+
+class _NoRecord:
+    identity = "no-record"
+
+    async def resolve(self, question: DnsQuestion) -> DnsResult:
+        return DnsResult(question, ResultState.nxdomain)
+
+
+@pytest.mark.parametrize(("row", "text"), [("a1", TEXT), ("g2", TEXT), ("g1", None)])
+async def test_evaluator_accepts_a_real_stored_record(
+    world: World, row: str, text: dict[str, str] | None
+) -> None:
+    # Frozen definition and LocalizedText, exactly what the repository hands to M5-23.
+    rec = world.repo("a").get(world.checks[row])
+    assert rec is not None
+    check = CustomDnsCheck(
+        check_key=rec.check_key,
+        kind=rec.kind,
+        definition=rec.definition,
+        severity=rec.severity,
+        remediation_text=rec.remediation_text,
+        remediation_key=rec.remediation_key,
+        scope=rec.scope,
+    )
+    result = await check.run(CheckContext(resolver=_NoRecord()), Target(domain="example.com"))
+    assert result.status == "warn"
+    assert [f.code for f in result.findings] == ["CUSTOM_CHECK_FAILED"]
+    assert result.findings[0].params.get("remediation_text") == text
 
 
 def test_none_json_is_sql_null(world: World) -> None:

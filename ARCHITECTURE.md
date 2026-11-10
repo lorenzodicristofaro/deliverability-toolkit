@@ -75,6 +75,10 @@ Rules:
 - "Could not evaluate" (timeout, SERVFAIL, refused) is `error`, never `ok`.
 - Finding codes are stable public identifiers (used by alerts, API, tests).
 - Checks never touch the DB directly; the service layer stores results.
+- Custom checks are DNS kinds only in M5 (`dns_exists`, `dns_matches`, `dns_value_range`);
+  `http_fetch` is a reserved kind refused by schema and evaluator until M7, where it goes through
+  the guarded client. The definition schema is `app/core/custom_check_schema.py`, so repositories
+  validate every write without depending on `/checks`; the evaluator is `app/checks/custom.py`.
 
 ## 4. Multi-tenancy
 

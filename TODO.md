@@ -101,7 +101,7 @@ Carried over from M0-07 QA:
 - [ ] Structural HTML/text checks, link analysis, size, List-Unsubscribe/One-Click
 - [ ] `content_rules` in DB with seed, weights, categories, language
 - [ ] Admin UI: global vs tenant rules, DKIM selectors, "test on sample" with ReDoS guard
-- [ ] Declarative custom checks (DNS/HTTP) with severity and remediation text
+- [ ] Declarative custom checks (DNS only) with severity and remediation text
 - Accept: rules editable without redeploy; regex timeout enforced by test.
 - Scope note (GM): custom checks cover DNS kinds only in M5; the HTTP-fetch kind moves to M7 (needs the guarded client). M5-22 updates this block and ARCHITECTURE.md.
 - Tickets (docs/tickets/):
@@ -146,6 +146,7 @@ Carried over from M0-07 QA:
 
 ## M7 — Monitoring
 - [ ] Guarded outbound client (SSRF protection) + tests
+- [ ] Custom check kind http_fetch via guarded client
 - [ ] DNSBL/URIBL engine with refusal detection, `dnsbl.yaml` seed
 - [ ] Scheduler, history, DNS snapshots + diff, trend charts
 - [ ] Alerts: email, webhook, Slack/Teams
