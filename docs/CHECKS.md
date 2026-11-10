@@ -54,8 +54,10 @@ A check is a class with a string `id` and `async run(ctx: CheckContext, target: 
   the seed file replaces the global rows. Free checks (`/api/v1/checks/free`, `/tools/dkim/stream`)
   and the CLI `check` have no tenant and always use the seed file. The list is resolved before any
   DNS query, and the database connection is released first. Admins may keep at most 50 rows per
-  tenant and 200 global rows. A client viewer sees the tenant's selector names in the DKIM result
-  of an assigned domain (names only, never provider or notes): they are probed against public DNS.
+  tenant and 200 global rows. Every role that can see a domain, client viewer included, gets each
+  selector's name and provider in the DKIM result (maintainer decision 2026-11-10, M5-23b); `notes`
+  never leaves the admin surfaces. Inside a tenant, an enabled tenant row's non-empty provider wins
+  over a same-name global row; free checks and the CLI show seed providers.
 - `data["report_destinations"]` (DMARC) lists each report URI with its authorization state.
   `data["selectors"]` (DKIM) lists each probed selector with state `found`, `not_found` or `error`.
 

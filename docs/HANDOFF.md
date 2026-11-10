@@ -23,7 +23,7 @@ Resume with `/gm`. Written as a safeguard: the 5-hour usage limit has been hit t
 - Seeded global rule: DELETE is 409 (disable it instead); any accepted PATCH pins it against seed updates.
 - M5-16 criteria reworded: rule results grouped by category, findings flat by severity.
 - DKIM selectors: tenant-scoped surfaces probe enabled global plus tenant rows; free checks and CLI `check` stay on the seed. Caps: 50 per tenant, 200 global, 250 merged at probe time. Seed sync adopts an unseeded global row by name.
-- A client viewer sees selector names (not provider or notes) in DKIM results for an assigned domain. The maintainer may overrule this.
+- DKIM results show selector name and provider to every role, notes never (maintainer decision 2026-11-10, M5-23b).
 
 ## Open maintainer decisions
 - SPEC §5 still lists HTTP custom checks; `http_fetch` is deferred to M7 (M5-22). The wording needs the maintainer.

@@ -29,4 +29,4 @@ Acceptance criteria:
 - Free route and CLI `check` output unchanged.
 - Unit tests stay offline; ruff, mypy and the relevant tests green, including the PostgreSQL params if local PG is up.
 New i18n keys: only if the row template needs a visible provider label, e.g. web.checks.dkim.provider (en + it); no hardcoded text. The coder lists the final keys in the PR.
-Status: in-review
+Status: done

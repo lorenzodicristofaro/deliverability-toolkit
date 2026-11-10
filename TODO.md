@@ -134,7 +134,7 @@ Carried over from M0-07 QA:
   - [x] M5-21 DKIM selectors admin UI
   - [x] M5-22 custom checks schema + DNS evaluator (http_fetch rejected, deferred to M7)
   - [x] M5-23 custom checks admin service + REST + run wiring (opus)
-  - [ ] M5-23b DKIM provider visible to client viewers (opus)
+  - [x] M5-23b DKIM provider visible to client viewers (opus)
   - [ ] M5-24 custom checks admin UI
   - [ ] M5-25 acceptance tests + docs/CONTENT.md
 
@@ -172,6 +172,7 @@ Carried over from M0-07 QA:
 
 ## Follow-ups (post-M1)
 - [ ] Custom checks (M5-23 QA nits): "id order" (app/services/custom_checks_admin.py:172) vs "creation order" (app/api/v1/checks.py:12), pick one wording; `with_checks` DuplicateCheckError at app/api/v1/checks.py:69 would 500 the whole `all` run (unreachable today: catch it or comment why); tests/api/test_custom_checks_api.py:569 viewer run test should assert pattern/range text never appears in the response.
+- [ ] DKIM provider nits (M5-23b QA): `ProbeSelectors.providers` is a MappingProxyType in a frozen dataclass, so hashing it raises TypeError (app/services/dkim_probe_selectors.py:50-57; add `field(hash=False)` or a comment); CLI `--selector` gets seed providers implicitly via `providers=None` (app/cli/check.py:97).
 - [ ] DKIM selectors (M5-20 QA): seed sync adoption at app/services/seed_sync.py:232 silently replaces the admin's provider and record_type (only `enabled` and `notes` survive); add one log line per adoption (id only) and assert those fields in tests/services/test_seed_sync.py:274. Free checks and CLI `check` stay on the seed, so a global selector edit does not affect them. A list near the 250 cap can hit the API's 15 s `CHECK_TIMEOUT` (`error`) where SSE has 60 s. Maintainer decision 2026-11-10 (overrules the earlier GM decision): a client viewer sees the selector name and the provider (not notes, which stay admin-only) in DKIM results for its assigned domain; see M5-23b.
 - [ ] Rules admin UI (M5-19 QA): a broken stored rule cannot be disabled by toggle or by an unchanged edit, because the service re-validates its pattern on enabled-only updates (toggle gives a 422; a tenant row can be deleted, a broken seeded global row can only be edited with a replacement pattern). Toggle, delete and error responses return to page 1. Every list view reads all rows (about 0.65 s at 10003 rows on SQLite, no per-tenant cap). The localized 413 stops at 1 MiB because `register_form_cap` matches exact paths only. `/rules/test` has no language input (the page says so).
 - [ ] Rules admin (M5-18 QA): a tenant admin can fill the process-wide 4-slot regex pool through `/rules/test` and push other tenants' analyses to `busy`/`not_evaluated` (same exposure as `/content/analyze`; pairs with the safe_regex per-tenant fairness and rate-limit items). app/services/content_rules_admin.py imports private helpers (`_clean_values`, `_text`, `_evidence`, `_find_keyword`, `_fold`, `_keyword_is_valid`); make them public. GM decisions: DELETE of a seeded global row is 409 (disable it instead; a tombstone would need a migration); any accepted PATCH on a seeded row pins it against seed updates, even with unchanged values.
