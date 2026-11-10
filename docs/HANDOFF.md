@@ -1,12 +1,13 @@
-# HANDOFF — 2026-11-10 (M5 accepted)
+# HANDOFF — 2026-11-10 (M6 in progress)
 
-Resume with `/gm`. Written as a safeguard: the 5-hour usage limit has been hit three times on this milestone.
+Resume with `/gm`. Written after the 5-hour usage limit hit two coders mid-start (M6-07, M6-13b); nothing of theirs was committed.
 
 ## State
-- M1–M5 are accepted (M5 on 2026-11-10, report docs/reports/M5.md); `qa` → `main` is pending the maintainer for M1–M5.
-- `dev` promoted to `qa` at 101d43b (tree identical to dev 3bb1eb8, dev CI 42846313400 green). qa CI run 42848145136 was left running (token cannot cancel).
-- Local-only until the Actions minutes renew on 2026-12-21 (maintainer decision 2026-11-10): no pushes; commit locally; the local PostgreSQL suite is the gate. Then batched pushes (docs/WORKFLOW.md push policy). M6-00 (CI minutes) must be verified by the first push after 2026-12-21.
-- M6-00 (CI minutes) merged locally (b94793e). Local `dev` is ahead of origin by several commits; they go out with the first push after 2026-12-21. The rest of M6 (ESP profiles) is not split yet.
+- M1–M5 accepted; `qa` → `main` pending the maintainer for M1–M5.
+- Local-only until 2026-12-21 (no pushes). Local `dev` is the gate with the full PostgreSQL suite.
+- M6 done on local dev (d0c38e6, last gate 29779 passed): M6-00, 01, 02, 03, 04, 05, 06, 06b, 06c, 12, 13.
+- M6 open: M6-13b (DKIM detection probes bounded + fail-fast; must merge before M6-08..10), M6-07 (ESPs tab UI, Sonnet coder, Opus QA), M6-08/09/10 (real vendor profiles, serialize: locales), M6-11 (acceptance tests).
+- Maintainer decision 2026-11-10: client viewers read ESP data on assigned domains (assigned + detected ESPs + full `esp` result), no writes; SPEC §3 updated.
 
 ## How the work runs now (maintainer decisions 2026-11-09)
 - Sonnet → Opus: once Sonnet code fails (QA, tests or CI), all further coder work on that ticket goes to a NEW coder on Opus (docs/WORKFLOW.md section 3).
@@ -32,6 +33,6 @@ Resume with `/gm`. Written as a safeguard: the 5-hour usage limit has been hit t
 - Carried over: M4 provider samples; `qa` → `main` for M1–M4; Mailchimp/Postmark/HubSpot DKIM sources; the PSL licence; SecLists terms; HTMX under CSP.
 
 ## Next 3 steps
-1. `pm` splits M6 (ESP profiles) into tickets after M6-00; GM reviews them. ESP facts need official sources, otherwise `unverified` and ask the maintainer.
-2. Work locally only: merge each ticket into local `dev` with the full PostgreSQL suite as the gate; no pushes before 2026-12-21.
-3. Maintainer items: SPEC §5 wording (http_fetch moved to M7), the branch protection check, unverified seeds and shorteners, `qa` → `main` for M1–M5.
+1. Run M6-13b (opus) and M6-07 (sonnet, QA opus) in parallel from dev d0c38e6; merge each with a full PostgreSQL gate.
+2. Then M6-08, 09, 10 one at a time (official sources only; unverified → ask the maintainer), then M6-11.
+3. Milestone end: full suite on dev, report docs/reports/M6.md; maintainer items in TODO.md (ESP overrides deferred, Italian profile notes review, flaky timing tests).
