@@ -467,27 +467,64 @@ def test_esp_with_dkim_in_ids_body(world: World) -> None:
     assert ids_of(r) == ["dkim", "esp"]
 
 
-def test_client_viewer_gets_no_esp_result(world: World) -> None:
-    assign_esp(world, "assigned", "example-esp")
-    r = call(world, "viewer", "POST", dpath(world, "assigned", "/all"))
-    assert ids_of(r) == sorted(CHECKS)
-    assert "example-esp" not in r.text and "Example ESP" not in r.text
-    forbidden = {"detail": t("api.error.forbidden", "en")}
-    single = call(world, "viewer", "POST", dpath(world, "assigned", "/esp"))
-    assert (single.status_code, single.json()) == (403, forbidden)
-    many = call(world, "viewer", "POST", dpath(world, "assigned", ""), json={"ids": ["spf", "esp"]})
-    assert (many.status_code, many.json()) == (403, forbidden)
+ESP_ROUTES = {"/all": None, "/esp": None, "": {"ids": ["spf", "esp"]}}
 
 
-def test_viewer_run_never_reads_esp_assignments(
-    world: World, monkeypatch: pytest.MonkeyPatch
+def _esp_of(response: Any) -> dict[str, Any]:
+    body = response.json()
+    return body if isinstance(body, dict) else next(x for x in body if x["check_id"] == "esp")
+
+
+@pytest.mark.parametrize("tail", list(ESP_ROUTES))
+def test_client_viewer_gets_the_full_esp_result(
+    world: World, monkeypatch: pytest.MonkeyPatch, tail: str
 ) -> None:
-    def fail(*_a: Any, **_k: Any) -> Any:
-        raise AssertionError("ESP assignments read for a client viewer")
+    """M6-06c: on its assigned domain a client viewer gets the same `esp` result as an analyst
+    (notes, hostnames, evidence, findings; no redaction), in `all`, by id and in `ids`."""
+    real = checks_api._context
 
-    monkeypatch.setattr(checks_api, "resolve_esp_run", fail)
-    r = call(world, "viewer", "POST", dpath(world, "assigned", "/all"))
-    assert ids_of(r) == sorted(CHECKS)
+    def fixed(*args: Any, **kw: Any) -> CheckContext:
+        return real(*args, **kw).model_copy(update={"clock": lambda: FIXED})
+
+    monkeypatch.setattr(checks_api, "_context", fixed)
+    assign_esp(
+        world,
+        "assigned",
+        "example-esp",
+        return_path_host="bounce.assigned.example",
+        tracking_host="t.assigned.example",
+    )
+    path = dpath(world, "assigned", tail)
+    viewer = call(world, "viewer", "POST", path, json=ESP_ROUTES[tail])
+    analyst = call(world, "analyst", "POST", path, json=ESP_ROUTES[tail])
+    assert viewer.status_code == analyst.status_code == 200
+    assert viewer.content == analyst.content
+    esp = _esp_of(viewer)
+    assert [s["id"] for s in esp["data"]["esps"]] == ["example-esp"]
+    assert "bounce.assigned.example" in viewer.text and "t.assigned.example" in viewer.text
+
+
+@pytest.mark.parametrize("tail", list(ESP_ROUTES))
+@pytest.mark.parametrize("which", ["unassigned", "other"])
+def test_client_viewer_esp_on_unassigned_or_foreign_domain_is_404(
+    world: World, tail: str, which: str
+) -> None:
+    """Two tenants: tenant B's domain (with an assignment) and tenant A's unassigned domain stay
+    404 for the viewer of tenant A, with no ESP data in the body."""
+    assign_esp(world, "other", "example-esp", return_path_host=B_HOST)
+    assign_esp(world, "unassigned", "example-esp", return_path_host="bounce.unassigned.example")
+    r = call(world, "viewer", "POST", dpath(world, which, tail), json=ESP_ROUTES[tail])
+    assert (r.status_code, r.json()) == (404, {"detail": t("api.error.not_found", "en")})
+    assert "example-esp" not in r.text and "bounce." not in r.text
+    assert B_SECRET_NAME not in r.text
+
+
+@pytest.mark.parametrize("tail", list(ESP_ROUTES))
+def test_client_viewer_check_run_toggle_still_denies_esp(world: World, tail: str) -> None:
+    assign_esp(world, "assigned", "example-esp")
+    set_toggles(world, "viewer", {"check.run": False})
+    r = call(world, "viewer", "POST", dpath(world, "assigned", tail), json=ESP_ROUTES[tail])
+    assert (r.status_code, r.json()) == (403, {"detail": t("api.error.forbidden", "en")})
 
 
 def test_tenant_b_assignment_never_reaches_tenant_a_run(world: World) -> None:

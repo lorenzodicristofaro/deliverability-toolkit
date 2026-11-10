@@ -14,7 +14,7 @@ from types import MappingProxyType
 from typing import Any
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
@@ -160,14 +160,17 @@ DOMAIN_VERBS = ("list", "assign", "remove")
 
 # Decided by `can()` and the principal alone: no repository is built.
 DENIED_BEFORE_REPOSITORY = [
-    # Client viewers get nothing, even on their assigned domain.
-    *[("viewer", "a", v, EspForbidden, None) for v in VERBS],
+    # Client viewers read but never write: on their assigned domain the write denial needs no
+    # lookup (their `domain.read` is their own assignment).
+    *[("viewer", "a", v, EspForbidden, None) for v in ("assign", "remove")],
     # Unassigned domain for a viewer: invisible, like the other domain routes.
     *[("viewer", "a2", v, EspNotFound, None) for v in DOMAIN_VERBS],
     # The instance admin flag adds nothing inside a tenant: no active tenant here.
     *[("root", "a", v, EspNotFound, None) for v in VERBS],
-    # Per-user toggles deny as elsewhere.
+    # Per-user toggles deny as elsewhere, client viewers included.
     ("owner", "a", "catalogue", EspForbidden, {"domain.list": False}),
+    ("viewer", "a", "catalogue", EspForbidden, {"domain.list": False}),
+    ("viewer", "a", "list", EspNotFound, {"domain.read": False}),
     *[("owner", "a", v, EspNotFound, {"domain.read": False}) for v in DOMAIN_VERBS],
 ]
 
@@ -212,7 +215,7 @@ def test_analyst_write_is_forbidden_and_never_reaches_the_esp_repository(
     assert touched == []
 
 
-@pytest.mark.parametrize("who", ["owner", "admin", "analyst"])
+@pytest.mark.parametrize("who", ["owner", "admin", "analyst", "viewer"])
 def test_readers_list_and_see_the_catalogue(world: World, who: str) -> None:
     world.service("owner").assign(world.domains["a"], ESP, return_path_host="bounce.a.example")
     records = world.service(who).list_for_domain(world.domains["a"])
@@ -233,7 +236,7 @@ def test_writers_assign_and_remove(world: World, who: str) -> None:
 
 
 @pytest.mark.parametrize("verb", DOMAIN_VERBS)
-@pytest.mark.parametrize("who", ["owner", "admin", "analyst"])
+@pytest.mark.parametrize("who", ["owner", "admin", "analyst", "viewer"])
 def test_domain_of_another_tenant_is_not_found(world: World, verb: str, who: str) -> None:
     world.b_service().assign(world.domains["b"], ESP, return_path_host=SECRET_HOST)
     before = world.rows()
@@ -575,6 +578,29 @@ def test_run_repository_failure_is_error(
     run = resolve_esp_run(_ctx(world), world.db, world.domains["a"], _unexpected)
     assert run.assigned is True
     assert "domain_esps.assignments_unreadable" in [r.__dict__.get("event") for r in caplog.records]
+
+
+def test_run_real_statement_failure_leaves_rollback_to_the_caller(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A real failed statement (no monkeypatched exception): the run is `error`-ready, and after
+    the caller's rollback the session works again (on PostgreSQL the transaction was aborted)."""
+    repo = DomainEspRepository(_ctx(world), world.db)
+    repo.add(world.domains["a"], ESP)
+    world.db.commit()
+
+    def broken(self: DomainEspRepository, _domain_id: object) -> Any:
+        return self._session.execute(text("SELECT * FROM m6_06c_no_such_table")).all()
+
+    with monkeypatch.context() as patch:
+        patch.setattr(DomainEspRepository, "list_for_domain", broken)
+        failed = resolve_esp_run(_ctx(world), world.db, world.domains["a"], _unexpected)
+    assert failed.assigned is True
+    assert isinstance(failed.check, service_module._UnavailableEspCheck)
+    world.db.rollback()
+    again = resolve_esp_run(_ctx(world), world.db, world.domains["a"], lambda: PROFILES)
+    assert again.assigned is True
+    assert not isinstance(again.check, service_module._UnavailableEspCheck)
 
 
 @pytest.mark.parametrize("lang", ["en", "it"])

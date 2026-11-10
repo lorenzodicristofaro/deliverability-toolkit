@@ -11,7 +11,8 @@
 The rules are in `app.services.domain_esps`. Status codes (401, 403, 404, 409, 413 and 415 bodies
 are `{"detail": <i18n>}`):
 - 401 anonymous (mutations first need a valid CSRF token, else the CSRF middleware answers 403);
-- 403 client viewers on every route, and readers without `domain.update` on writes;
+- 403 readers without `domain.update` on writes (client viewers read the catalogue and the
+  assignments of their assigned domains, M6-06c, but never write);
 - 404 no active tenant; a domain that is missing, foreign, malformed or (viewer) unassigned; an
   assignment that does not exist (DELETE);
 - 413 body over MAX_BODY_BYTES; 415 a non-empty body that is not `application/json`;
