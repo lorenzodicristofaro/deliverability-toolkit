@@ -5,6 +5,7 @@
 <h1 data-testid="auth-title">{{ t("checks.auth.title", domain=display_name|visible) }}</h1>
 <nav class="tabs" aria-label="{{ t('checks.tab.label') }}">
   <a href="/domains/{{ domain_id }}/authentication" aria-current="page" data-testid="tab-authentication">{{ t("checks.tab.authentication") }}</a>
+  <a href="/domains/{{ domain_id }}/esps" data-testid="tab-esps">{{ t("web.domain.esps.title") }}</a>
   <a href="/domains/{{ domain_id }}/authentication" data-testid="run-again">{{ t("checks.run_again") }}</a>
 </nav>
 {% for result in results %}

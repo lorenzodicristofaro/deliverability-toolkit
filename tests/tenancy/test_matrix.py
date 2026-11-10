@@ -263,6 +263,10 @@ def _rule_form(_w: World, _role: str) -> dict[str, Any]:
     }  # incomplete on purpose: a permitted role gets a 422, nothing is stored
 
 
+def _esp_form(_w: World, _role: str) -> dict[str, Any]:
+    return {"esp_id": "example-esp"}
+
+
 def _toggle(_w: World, _role: str) -> dict[str, Any]:
     return {"enabled": "0"}
 
@@ -424,6 +428,11 @@ MATRIX: dict[tuple[str, str], Entry] = {
     # The free route needs `?name=`; without it permitted roles get 422 (decided before streaming).
     ("GET", "/domains/{domain_id}/authentication"): Entry(Kind.DOMAIN),
     ("GET", "/domains/{domain_id}/authentication/dkim/stream"): Entry(Kind.DOMAIN),
+    # ESPs tab (app.web.domain_esps, M6-07): read = domain.read (client viewers on assigned
+    # domains, read-only); writes need domain.update. Per role: tests/web/test_domain_esps_ui.py.
+    ("GET", "/domains/{domain_id}/esps"): Entry(Kind.DOMAIN),
+    ("POST", "/domains/{domain_id}/esps"): Entry(Kind.DOMAIN, body=_esp_form),
+    ("POST", "/domains/{domain_id}/esps/{esp_id}/remove"): Entry(Kind.DOMAIN),
     ("GET", "/tools/dkim/stream"): Entry(Kind.DNS, own={**_by_role(422, 422), "viewer": 403}),
     # ESP API (app.api.v1.domain_esps). The catalogue is tenant-level, public profile data with
     # no tenant content: every member reads it, client viewers included (M6-06c). The domain
