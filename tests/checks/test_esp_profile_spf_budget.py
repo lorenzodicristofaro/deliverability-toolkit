@@ -223,6 +223,32 @@ CASES: list[
         None,
     ),
     (
+        "permerror_subnode_multiple_records_over",
+        ["alpha", "beta"],
+        _zone(
+            f"v=spf1 {_inc('alpha', 'beta')} include:_p.{D} -all",
+            {"alpha": 5, "beta": 5},
+            {(f"_p.{D}", "TXT"): ["v=spf1 -all", "v=spf1 ip4:192.0.2.0/24 -all"]},
+        ),
+        frozenset(),
+        {OVER},
+        "fail",
+        (OVER, "Alpha, Beta", 13),
+    ),
+    (
+        "permerror_subnode_syntax_error_under",
+        ["alpha", "beta"],
+        _zone(
+            f"v=spf1 {_inc('alpha', 'beta')} include:_p.{D} -all",
+            {"alpha": 1, "beta": 1},
+            {(f"_p.{D}", "TXT"): ["v=spf1 ip4:not-an-address -all"]},
+        ),
+        frozenset(),
+        set(),
+        "ok",
+        None,
+    ),
+    (
         "near_limit_9",
         ["alpha", "beta"],
         _zone(f"v=spf1 {_inc('alpha', 'beta')} -all", {"alpha": 4, "beta": 3}),
