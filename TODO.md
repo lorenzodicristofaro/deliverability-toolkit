@@ -161,7 +161,7 @@ Carried over from M0-07 QA:
   - [ ] M6-09 profiles: MailUp/TeamSystem + up to two Italian ESPs (official docs only)
   - [ ] M6-10 profiles: Google Workspace, Microsoft 365, Brevo (official docs only)
   - [ ] M6-11 acceptance: sample domains produce expected findings, docs/CHECKS.md
-  - [ ] M6-12 contributor guide docs/ESP_PROFILES.md
+  - [x] M6-12 contributor guide docs/ESP_PROFILES.md
 
 ## M7 — Monitoring
 - [ ] Guarded outbound client (SSRF protection) + tests
