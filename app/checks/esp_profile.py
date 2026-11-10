@@ -39,6 +39,24 @@ evidence its unverified fields; one `ESP_PITFALL` (info) per verified static pit
 code, notes key and declared severity in `params` (pitfalls have no condition, so they are advice
 and never raise the status).
 
+Combined SPF lookup budget (M6-05, SPEC 4.2), evaluated once per run when two or more profiles
+have verified `spf.includes`. It reuses `SpfTree.lookup_count` (no recount) and the SPF check's
+`NEAR_LOOKUP_THRESHOLD`, and only adds ESP attribution to `SPF_TOO_MANY_LOOKUPS` /
+`SPF_NEAR_LOOKUP_LIMIT`:
+
+- "Attributed" ESPs have at least one include host among the tree's include/redirect targets;
+  nothing fires unless two or more are attributed (one ESP is the SPF check's business).
+- Tree truncated or over `LOOKUP_LIMIT`: `ESP_SPF_COMBINED_OVER_LIMIT` (high), params `esps`,
+  `count`, `limit`, evidence the ESP names. A truncated count is a lower bound (as for
+  `SPF_RESOLUTION_TRUNCATED`): the limit is exceeded, but the attribution may be incomplete.
+- Count from `NEAR_LOOKUP_THRESHOLD` to `LOOKUP_LIMIT` on a tree with no DNS failure:
+  `ESP_SPF_COMBINED_NEAR_LIMIT` (low).
+- A DNS failure in the tree or truncation makes the run `error` (count and attribution are lower
+  bounds, so "within budget" cannot be stated); an `ESP_DNS_ERROR` with part `spf.lookups` is
+  added unless an `spf.includes` part already reported one. A permerror record (several SPF
+  records, syntax error) is not a reason for `error` here: receivers stop at it, and the SPF
+  check and the include part report it.
+
 No assigned profile: one `ESP_NONE_ASSIGNED` info finding. `CheckResult` derives `ok` from an
 empty finding list and accepts no other status for it, so "info with no findings" cannot be
 expressed without changing the shared model.
@@ -55,7 +73,8 @@ from typing import Any, Final, Literal
 
 from app.checks.dnsutil import classify, fetch_cname, fetch_txt
 from app.checks.models import CheckContext, CheckResult, Finding, Severity, Target, finding
-from app.checks.spf_tree import SpfTree, resolve_spf
+from app.checks.spf import NEAR_LOOKUP_THRESHOLD
+from app.checks.spf_tree import LOOKUP_LIMIT, SpfTree, resolve_spf
 from app.core.domain_names import InvalidDomainName, to_ascii_domain, to_dns_name
 from app.dns.types import DnsQuestion
 from app.esp.profile import DkimSelector, EspProfile, RecordExpectation
@@ -75,6 +94,8 @@ CODES: tuple[str, ...] = (
     "ESP_PITFALL",
     "ESP_NONE_ASSIGNED",
     "ESP_DNS_ERROR",
+    "ESP_SPF_COMBINED_OVER_LIMIT",
+    "ESP_SPF_COMBINED_NEAR_LIMIT",
 )
 
 MAX_CNAME_HOPS: Final = 8
@@ -202,6 +223,51 @@ async def _spf(run: _Run, esp: EspProfile) -> dict[str, Any]:
     elif any(i["state"] == "missing" for i in includes):
         state = "missing"
     return _part(state, includes=includes)
+
+
+async def _spf_budget(run: _Run, profiles: Sequence[EspProfile]) -> None:
+    """Combined lookup budget over the ESPs with verified SPF includes (module docstring)."""
+    eligible = [p for p in profiles if p.spf_includes and p.is_verified("spf.includes")]
+    if len(eligible) < 2:
+        return
+    tree, _ = await run.spf_tree()
+    if tree is None:  # already reported per ESP by the include part
+        return
+    targets = _spf_targets(tree)
+    names = [p.name for p in eligible if any(h in targets for h in p.spf_includes)]
+    count = tree.lookup_count
+    params: dict[str, Any] = {"esps": ", ".join(names), "count": count, "limit": LOOKUP_LIMIT}
+    incomplete = bool(tree.errors) or tree.truncated
+    if len(names) >= 2:
+        if tree.truncated or tree.lookup_limit_exceeded:
+            run.findings.append(finding("ESP_SPF_COMBINED_OVER_LIMIT", "high", params, names))
+        elif not incomplete and count >= NEAR_LOOKUP_THRESHOLD:
+            run.findings.append(finding("ESP_SPF_COMBINED_NEAR_LIMIT", "low", params, names))
+    if not incomplete:
+        return
+    run.evaluated = False
+    if any(
+        f.code == "ESP_DNS_ERROR" and f.params.get("part") == "spf.includes" for f in run.findings
+    ):
+        return
+    if tree.errors:
+        name, rdtype, failure = tree.errors[0]
+        state = str(failure)
+    else:
+        name, rdtype, state = run.domain, "TXT", "truncated"
+    run.findings.append(
+        finding(
+            "ESP_DNS_ERROR",
+            "low",
+            {
+                "esp": ", ".join(p.name for p in eligible),
+                "part": "spf.lookups",
+                "name": name,
+                "rdtype": rdtype,
+                "state": state,
+            },
+        )
+    )
 
 
 # --- DKIM ---------------------------------------------------------------------------------------
@@ -470,6 +536,7 @@ class EspProfileCheck:
                     await _profile(run, p, self._hosts.get(p.id, EspHosts()))
                     for p in self._profiles
                 ]
+                await _spf_budget(run, self._profiles)
                 findings, data, evaluated = run.findings, {"esps": sections}, run.evaluated
         return CheckResult.build(
             check_id=self.id,
