@@ -152,8 +152,9 @@ Carried over from M0-07 QA:
   - [x] M6-03 ESP assignment service + REST + profile catalogue (opus)
   - [x] M6-04 ESP profile check: SPF include, DKIM CNAMEs, return-path, tracking (opus)
   - [x] M6-05 combined ESP SPF lookup budget finding (opus)
-  - [ ] M6-06 wire ESP check into domain runs (opus)
-  - [ ] M6-07 domain page ESPs tab
+  - [ ] M6-06 wire ESP check into domain runs + broken-profiles handling (opus)
+  - [ ] M6-06b localized rendering of ESP finding params (opus, depends on M6-06)
+  - [ ] M6-07 domain page ESPs tab (depends on M6-06, M6-06b)
   - [ ] M6-08 profiles: SendGrid, Amazon SES, Mailgun (official docs only)
   - [ ] M6-09 profiles: MailUp/TeamSystem + up to two Italian ESPs (official docs only)
   - [ ] M6-10 profiles: Google Workspace, Microsoft 365, Brevo (official docs only)
