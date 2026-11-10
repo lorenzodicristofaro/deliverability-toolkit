@@ -22,8 +22,9 @@ assigned profiles. Read only: it never assigns anything. DNS goes through `ctx.r
   the status from being `ok`. The first query that is not evaluated (timeout, SERVFAIL, invalid
   name, ...) stops probing: no new query starts, the ones in flight finish and are reported,
   `data["detection"]["dkim_stopped"]` is true and the result is `error`. `dkim_queries` counts
-  the queries started. Findings and data follow (profile id, selector) order, never completion
-  order.
+  the queries started; `truncated` is then false and no `ESP_DETECTION_TRUNCATED` is added
+  (the failure, not the cap, ended probing). Findings and data follow (profile id, selector)
+  order, never completion order.
 - `data["detection"]["spf"]`: None (no candidate with verified includes), "ok", "partial" (every
   such candidate matched, but the tree had a DNS failure, was truncated or holds a permerror
   record: the hits stand, the tree is incomplete; the status follows the hit findings), "error"
@@ -184,6 +185,10 @@ async def detect(
         dkim_hits.setdefault(p.id, []).append(
             {"selector": sel.name, "name": name, "target": target}
         )
+
+    if stopped:  # the result is `error` on the failure; the cap is not what ended probing
+        truncated = False
+        unprobed = []
 
     detected: list[dict[str, Any]] = []
     for p in ordered:

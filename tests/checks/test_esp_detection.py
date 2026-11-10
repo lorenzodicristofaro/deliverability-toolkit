@@ -432,12 +432,18 @@ WIDE = _p(
 WIDE_NAMES = [f"s{i:02d}._domainkey.{D}" for i in range(N_SELECTORS)]
 
 
+HANG_GUARD_S = 5.0
+
+
 class GatedDns(FakeDns):
     """`failing` names answer at once and open the gate; every other name waits for the gate,
     which also opens once `open_at` queries are in flight."""
 
-    def __init__(self, zone: Zone, failing: set[str], open_at: int = 0) -> None:
+    def __init__(
+        self, zone: Zone, failing: set[str], open_at: int = 0, guard_s: float = HANG_GUARD_S
+    ) -> None:
         super().__init__(zone)
+        self.guard_s = guard_s
         self.failing = failing
         self.open_at = open_at
         self.gate = asyncio.Event()
@@ -449,7 +455,9 @@ class GatedDns(FakeDns):
             if question.name in self.failing or self.in_flight == self.open_at:
                 self.gate.set()
             else:
-                await self.gate.wait()
+                # Hang guard only (no pytest-timeout): a gate that never opens fails the test
+                # instead of hanging CI. No assertion depends on it.
+                await asyncio.wait_for(self.gate.wait(), timeout=self.guard_s)
             return await super().resolve(question)
         finally:
             self.in_flight -= 1
@@ -498,6 +506,25 @@ async def test_dkim_failures_in_flight_are_all_reported_in_order(
     errors = [f.params["name"] for f in r.findings if f.code == "ESP_DNS_ERROR"]
     assert errors == first
     assert r.status == "error" and r.data["detection"]["dkim_queries"] == 4
+
+
+async def test_gate_that_never_opens_fails_instead_of_hanging() -> None:
+    """The hang guard of GatedDns works: nothing opens the gate, the run raises."""
+    zone: Zone = {(n, "CNAME"): ResultState.timeout for n in WIDE_NAMES}
+    dns = GatedDns(zone, set(), open_at=0, guard_s=0.01)
+    with pytest.raises(TimeoutError):
+        await EspProfileCheck([], {}, [WIDE]).run(_ctx(dns), Target(domain=D))
+
+
+async def test_stop_on_failure_drops_truncation(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Over the cap and stopped on a failure: `error` only, no ESP_DETECTION_TRUNCATED."""
+    monkeypatch.setattr(esp_detection, "MAX_DETECTION_DKIM_QUERIES", 1)
+    r, _ = await _run({SPF: ["v=spf1 -all"], A1: ResultState.servfail}, CANDIDATES)
+    detection = r.data["detection"]
+    assert detection["dkim_stopped"] is True
+    assert detection["truncated"] is False and detection["unprobed"] == []
+    assert "ESP_DETECTION_TRUNCATED" not in _codes(r)
+    assert r.status == "error"
 
 
 class ReorderingDns(FakeDns):
