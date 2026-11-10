@@ -98,11 +98,12 @@ Carried over from M0-07 QA:
   - [x] M4-14 acceptance tests + docs/HEADERS.md
 
 ## M5 — Content analyzer + admin rules
-- [ ] Structural HTML/text checks, link analysis, size, List-Unsubscribe/One-Click
-- [ ] `content_rules` in DB with seed, weights, categories, language
-- [ ] Admin UI: global vs tenant rules, DKIM selectors, "test on sample" with ReDoS guard
-- [ ] Declarative custom checks (DNS only) with severity and remediation text
+- [x] Structural HTML/text checks, link analysis, size, List-Unsubscribe/One-Click
+- [x] `content_rules` in DB with seed, weights, categories, language
+- [x] Admin UI: global vs tenant rules, DKIM selectors, "test on sample" with ReDoS guard
+- [x] Declarative custom checks (DNS only) with severity and remediation text
 - Accept: rules editable without redeploy; regex timeout enforced by test.
+  Status: **accepted 2026-11-10** — tests/content/test_acceptance_m5.py; full suite green on PostgreSQL locally and in dev CI. Report: docs/reports/M5.md
 - Scope note (GM): custom checks cover DNS kinds only in M5; the HTTP-fetch kind moves to M7 (needs the guarded client). M5-22 updates this block and ARCHITECTURE.md.
 - Tickets (docs/tickets/):
   - [x] M5-01 CSRF form cap vs localized 413 (opus)
@@ -136,7 +137,7 @@ Carried over from M0-07 QA:
   - [x] M5-23 custom checks admin service + REST + run wiring (opus)
   - [x] M5-23b DKIM provider visible to client viewers (opus)
   - [x] M5-24 custom checks admin UI
-  - [ ] M5-25 acceptance tests + docs/CONTENT.md
+  - [x] M5-25 acceptance tests + docs/CONTENT.md
 
 ## M6 — ESP profiles
 - [ ] YAML schema + CI validation, loader, per-domain ESP assignment
