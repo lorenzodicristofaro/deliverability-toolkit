@@ -633,6 +633,7 @@
   "message.summary.subject": "Oggetto",
   "message.summary.to_count": "Destinatari To",
   "nav.tools.content": "Analisi contenuto",
+  "nav.tools.custom_checks": "Controlli personalizzati",
   "nav.tools.dkim_selectors": "Selector DKIM",
   "nav.tools.dns": "Strumenti DNS",
   "nav.tools.dns.propagation": "Propagazione",

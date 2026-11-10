@@ -979,3 +979,86 @@ def test_pages_render_in_both_languages(world: World, lang: str) -> None:
     assert bad.status_code == 422
     expected = "Gravità" if lang == "it" else "Severity"
     assert expected in bad.text
+
+
+def test_result_keeps_the_line_breaks_of_a_remediation_text() -> None:
+    html = render_result(with_text({"en": "Step one.\nStep two.\n<b>three</b>"}))
+    assert re.search(
+        r'<p class="remediation-text" data-testid="remediation-text">'
+        r"Step one\.\nStep two\.\n&lt;b&gt;three&lt;/b&gt;</p>",
+        html,
+    )
+    css = (Path(__file__).parents[2] / "app/web/static/app.css").read_text(encoding="utf-8")
+    assert re.search(r"\.remediation-text \{[^}]*white-space: pre-line;", css)
+
+
+# --- nav link -----------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("who", "visible"),
+    [
+        ("owner", True),
+        ("admin", True),
+        ("analyst", True),
+        ("root", True),
+        ("lonely_admin", True),
+        ("viewer", False),
+    ],
+)
+def test_nav_link_follows_the_rules_read_gate(world: World, who: str, visible: bool) -> None:
+    r = get(world, who, "/")
+    assert r.status_code == 200
+    assert ('data-testid="nav-custom-checks"' in r.text) is visible
+    assert ('href="/custom-checks"' in r.text) is visible
+
+
+def test_nav_link_is_absent_for_anonymous(world: World) -> None:
+    r = world.client.get("/login", headers=HTML)
+    assert 'data-testid="nav-custom-checks"' not in r.text
+    assert 'href="/custom-checks"' not in r.text
+
+
+@pytest.mark.parametrize(
+    ("lang", "label"), [("en", "Custom checks"), ("it", "Controlli personalizzati")]
+)
+def test_nav_link_label_is_localized(world: World, lang: str, label: str) -> None:
+    r = get(world, "owner", "/", **{"Accept-Language": lang})
+    link = r.text.split('data-testid="nav-custom-checks">')[1].split("</a>")[0]
+    assert link == label == t("nav.tools.custom_checks", lang)
+
+
+# --- dry run on the unassigned domain (rules.read contract, M5-23) ------------------------------
+# "Unassigned" restricts only the client viewer (DomainAccess); an analyst sees every domain of
+# the tenant (tests/web/test_domains_ui.py matrix), so its dry run there runs as on any domain.
+
+
+def test_analyst_dry_run_on_the_unassigned_domain_follows_domain_visibility(
+    world: World, spy: list[str], zone: Zone
+) -> None:
+    r = send(
+        world,
+        "analyst",
+        "/custom-checks/test?scope=tenant",
+        form(domain_id=world.domains["unassigned"]),
+    )
+    assert r.status_code == 200
+    assert 'data-testid="custom-test-result"' in r.text
+    assert "prepare_test" in spy
+    assert count(world) == 0
+
+
+def test_viewer_dry_run_on_the_unassigned_domain_is_refused_without_dns(
+    world: World, spy: list[str], zone: Zone
+) -> None:
+    r = send(
+        world,
+        "viewer",
+        "/custom-checks/test?scope=tenant",
+        form(domain_id=world.domains["unassigned"]),
+    )
+    assert r.status_code == 403
+    assert 'data-testid="custom-test-result"' not in r.text
+    assert spy == []
+    assert zone.queries == []
+    assert count(world) == 0

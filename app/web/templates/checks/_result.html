@@ -21,7 +21,7 @@
           params.remediation_text (escaped by autoescape, never unescaped), or a catalogue key in
           remediation_key (global rows); a built-in finding has the key only. -#}
       {% set rem = f.params.get("remediation_text") if f.params is mapping else none %}
-      {% if rem is mapping %}<p class="dns-wrap" data-testid="remediation-text">{{ rem.get(lang) or rem.get("en") or "" }}</p>
+      {% if rem is mapping %}<p class="remediation-text" data-testid="remediation-text">{{ rem.get(lang) or rem.get("en") or "" }}</p>
       {% elif f.remediation_key %}<p>{{ t(f.remediation_key, **(f.params|finding_params)) }}</p>{% endif %}
       {% for e in f.evidence %}<p class="dns-wrap"><code>{{ e|visible }}</code></p>{% endfor %}
       {% if f.docs_url is https_url %}<p><a href="{{ f.docs_url }}" rel="noopener noreferrer">{{ t("checks.docs_link") }}</a></p>{% endif %}

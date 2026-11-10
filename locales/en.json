@@ -633,6 +633,7 @@
   "message.summary.subject": "Subject",
   "message.summary.to_count": "To recipients",
   "nav.tools.content": "Content analysis",
+  "nav.tools.custom_checks": "Custom checks",
   "nav.tools.dkim_selectors": "DKIM selectors",
   "nav.tools.dns": "DNS tools",
   "nav.tools.dns.propagation": "Propagation",
