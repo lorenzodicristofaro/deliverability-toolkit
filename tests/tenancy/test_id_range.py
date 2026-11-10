@@ -78,6 +78,10 @@ def _check_ids(_w: World) -> dict[str, list[str]]:
     return {"ids": ["spf"]}
 
 
+def _esp_hosts(_w: World) -> dict[str, None]:
+    return {"return_path_host": None}
+
+
 Payload = Callable[[World], Any] | None
 
 # (method, route path) -> request payload. Must list every route with a numeric path id.
@@ -95,6 +99,9 @@ ID_ROUTES: dict[tuple[str, str], Payload] = {
     ("PUT", "/api/v1/domains/{domain_id}/access"): _access,
     ("POST", "/api/v1/domains/{domain_id}/checks"): _check_ids,
     ("POST", "/api/v1/domains/{domain_id}/checks/{check_id}"): None,
+    ("GET", "/api/v1/domains/{domain_id}/esps"): None,
+    ("PUT", "/api/v1/domains/{domain_id}/esps/{esp_id}"): _esp_hosts,
+    ("DELETE", "/api/v1/domains/{domain_id}/esps/{esp_id}"): None,
 }
 
 
@@ -108,7 +115,11 @@ def _outcome(response: Any) -> tuple[int, str | None, str]:
 
 def _call(world: World, who: str, key: tuple[str, str], domain_id: int) -> Any:
     method, template = key
-    path = template.replace("{domain_id}", str(domain_id)).replace("{check_id}", "all")
+    path = (
+        template.replace("{domain_id}", str(domain_id))
+        .replace("{check_id}", "all")
+        .replace("{esp_id}", "example-esp")
+    )
     payload = ID_ROUTES[key]
     body = None if payload is None else payload(world)
     if path.startswith("/api/"):
@@ -462,7 +473,10 @@ def test_every_id_column_of_the_migrated_schema_is_integer(world: World) -> None
 # --- guards ------------------------------------------------------------------------------------
 
 # Path parameters that are not database ids, with the reason. Anything else must be parsed.
-NON_NUMERIC_PATH_PARAMS = {"check_id": "name of a registered check ('spf', 'all'), never a row"}
+NON_NUMERIC_PATH_PARAMS = {
+    "check_id": "name of a registered check ('spf', 'all'), never a row",
+    "esp_id": "ESP profile slug ('example-esp'), never a row",
+}
 # The functions that apply MAX_ID to text. `_domain_id` delegates to `parse_id` in both layers
 # (test_parse_id runs them through the same table).
 ID_PARSERS = {"parse_id", "_domain_id"}
