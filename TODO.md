@@ -153,8 +153,8 @@ Carried over from M0-07 QA:
   - [x] M6-04 ESP profile check: SPF include, DKIM CNAMEs, return-path, tracking (opus)
   - [x] M6-05 combined ESP SPF lookup budget finding (opus)
   - [x] M6-06 wire ESP check into domain runs + broken-profiles handling (opus)
-  - [ ] M6-06b localized rendering of ESP finding params (opus, depends on M6-06)
-  - [ ] M6-06c client viewers read ESP data on assigned domains (opus, depends on M6-06; maintainer decision 2026-11-10)
+  - [x] M6-06b localized rendering of ESP finding params (opus, depends on M6-06)
+  - [x] M6-06c client viewers read ESP data on assigned domains (opus, depends on M6-06; maintainer decision 2026-11-10)
   - [ ] M6-13 detect ESPs configured in DNS but not assigned (opus, depends on M6-06, M6-04/05)
   - [ ] M6-07 domain page ESPs tab (depends on M6-06, M6-06b, M6-06c, M6-13; client viewers read-only)
   - [ ] M6-08 profiles: SendGrid, Amazon SES, Mailgun (official docs only)
@@ -189,6 +189,12 @@ Carried over from M0-07 QA:
 - [ ] Security review checklist, dependency/license audit, v0.1.0 release
 
 ## Follow-ups (post-M1)
+- [ ] Finding rendering leftovers (M6-06b QA):
+  - Localize DNS state tokens (`{state}`, e.g. `timeout`) in one place for all checks; ESP_DNS_ERROR still shows them raw.
+  - ESP_DNS_ERROR for an invalid domain reads "of -" because app/checks/esp_profile.py:523 sends `esp: "-"`; give that case its own detail text or drop "of {esp}".
+  - Once `esp.*` note keys exist, add a catalogue test that note texts use only `{esp}` (app/checks/finding_text.py:67 formats with `esp` only).
+  - Add a `<script>` selector/esp case to the web safety test (tests/checks/test_finding_text.py:423) so HTML escaping is pinned.
+  - Timing flake: tests/parsers/test_message.py::test_fold_bomb_is_bounded_and_fast failed once under load (same pattern as test_received.py).
 - [ ] ESP tests nit (M6-05 QA): tests/checks/test_esp_profile_spf_budget.py:16 imports private helpers (`_ctx`, `_assert_params_cover_placeholders`) from tests/checks/test_esp_profile.py; move them to a shared helper/conftest.
 - [ ] ESP API nits (M6-03 QA): no test turns off `domain.update` for an owner and expects 403 on PUT/DELETE (tests/services/test_domain_esps_service.py:161-164 covers the list and read toggles only). PUT runs `check_write` twice (app/api/v1/domain_esps.py:167 and app/services/domain_esps.py:427), which is harmless but costs a second domain lookup.
 - [ ] domain_esps (M6-02 QA): the 10-per-domain cap is checked by count before insert, so a concurrent add can exceed it by one (soft cap, not a security boundary).

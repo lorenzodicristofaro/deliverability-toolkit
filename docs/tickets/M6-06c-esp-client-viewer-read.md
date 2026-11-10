@@ -20,4 +20,4 @@ Acceptance criteria:
 - SPEC section 3 flag for the GM: it says client viewers "cannot see other ESP data". The decision reads this as "cannot see ESP data of other domains". The coder does not edit SPEC.md; the GM decides whether to clarify the wording.
 - QA (M6-06): `resolve_esp_run` (app/services/domain_esps.py:409-415) says it never raises, but after a SQLAlchemyError a PostgreSQL session is left in an aborted transaction; use `db.begin_nested()` or state in the docstring that the caller must roll back. Optional: a PostgreSQL test with a real statement failure instead of a monkeypatched OperationalError (tests/api/test_checks_api.py:551).
 New i18n keys: none expected
-Status: todo
+Status: done (merged into local dev after QA APPROVE; GM gate on the combined M6-06b+06c merge: full PostgreSQL suite green, lint clean)

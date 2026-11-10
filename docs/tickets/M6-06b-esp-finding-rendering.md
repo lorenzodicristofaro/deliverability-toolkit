@@ -13,5 +13,6 @@ Acceptance criteria:
 - QA (M6-05): rendering localizes the ESP finding part names (`spf.includes`, `spf.lookups`, etc.), which now appear raw in the ESP_DNS_ERROR detail.
 - QA (M6-05): the `spf.lookups` error puts a joined ESP list ("Alpha, Beta") into `{esp}`, so the text must read correctly with several ESPs (test with two or more).
 - Unknown tokens fall back to the raw value without crashing; tests are table-driven, en + it, no network.
+- GM decision: the API keeps returning keys + raw params (shared contract); localization happens in the CLI and web renderers via app/checks/finding_text.py `display_params`.
 New i18n keys: en + it for the reason tokens (SPF permerror reasons, DKIM mismatch reasons) and the part labels (`spf.includes`, `spf.lookups`, etc.); names chosen by the coder following existing key conventions
-Status: todo
+Status: done (merged into local dev after QA APPROVE; GM gate on the combined M6-06b+06c merge: full PostgreSQL suite green, lint clean)
