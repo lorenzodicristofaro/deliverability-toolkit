@@ -32,6 +32,7 @@ from app.repositories.custom_checks import CustomCheckRepository, GlobalCustomCh
 from app.repositories.dkim_selectors import DkimSelectorRepository, GlobalDkimSelectorRepository
 from app.repositories.domain import DomainRepository
 from app.repositories.domain_access import DomainAccessRepository
+from app.repositories.domain_esps import DomainEspRepository
 from app.repositories.membership import UserMembershipsRepository, UserTenantMembership
 from app.repositories.principal import principal_from_models
 from app.repositories.tenant import CurrentTenantRepository, TenantMembershipRepository
@@ -46,6 +47,7 @@ class TenantRepositories:
     memberships: TenantMembershipRepository
     domains: DomainRepository
     domain_access: DomainAccessRepository
+    domain_esps: DomainEspRepository
     content_rules: ContentRuleRepository
     dkim_selectors: DkimSelectorRepository
     custom_checks: CustomCheckRepository
@@ -61,6 +63,7 @@ def repo_for(ctx: TenantContext, session: Session) -> TenantRepositories:
         memberships=TenantMembershipRepository(ctx, session),
         domains=DomainRepository(ctx, session),
         domain_access=DomainAccessRepository(ctx, session),
+        domain_esps=DomainEspRepository(ctx, session),
         content_rules=ContentRuleRepository(ctx, session),
         dkim_selectors=DkimSelectorRepository(ctx, session),
         custom_checks=CustomCheckRepository(ctx, session),
@@ -73,6 +76,7 @@ __all__ = [
     "CustomCheckRepository",
     "DkimSelectorRepository",
     "DomainAccessRepository",
+    "DomainEspRepository",
     "DomainRepository",
     "GlobalContentRuleRepository",
     "GlobalCustomCheckRepository",
