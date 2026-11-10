@@ -13,4 +13,4 @@ Acceptance criteria:
 - Detected-not-assigned ESPs (ESP_DETECTED_NOT_ASSIGNED findings) are listed in their own section of the tab with the evidence and the hint, for every role that can read the tab.
 - Tests: render per role (including client viewer read-only: no forms or buttons that mutate, detected ESPs shown), tenant isolation (tenant B domain id gives 404), CSRF missing gives the standard error, XSS payload in a hostname or DNS evidence is escaped.
 New i18n keys: web.domain.esps.title, .empty, .attach, .remove, .run, .host_return_path, .host_tracking, .unverified, .sources, .error (en + it)
-Status: done
+Status: done (merged into local dev after QA APPROVE; DNS-evidence XSS regression test moved to TODO follow-ups; GM gate full PostgreSQL suite on the combined merge)

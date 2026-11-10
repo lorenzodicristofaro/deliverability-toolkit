@@ -15,4 +15,4 @@ Acceptance criteria:
 - Fold-in (M6-13 QA): the detection cache is separate from the assigned part, so a selector shared with an assigned ESP is queried twice (esp_detection.py:135). Share the cache if cheap; if it needs a signature change beyond the two files in scope, drop it and record it as a follow-up instead.
 - No network in tests; existing M6-13 tests stay green.
 New i18n keys: none
-Status: todo
+Status: done (merged into local dev at 5ff9dcc after QA APPROVE round 2; GM gate full PostgreSQL suite on the combined merge)

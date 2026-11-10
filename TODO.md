@@ -156,8 +156,8 @@ Carried over from M0-07 QA:
   - [x] M6-06b localized rendering of ESP finding params (opus, depends on M6-06)
   - [x] M6-06c client viewers read ESP data on assigned domains (opus, depends on M6-06; maintainer decision 2026-11-10)
   - [x] M6-13 detect ESPs configured in DNS but not assigned (opus, depends on M6-06, M6-04/05)
-  - [ ] M6-13b bounded, fail-fast DKIM detection probes (opus, depends on M6-13; M6-08..10 depend on it)
-  - [ ] M6-07 domain page ESPs tab (depends on M6-06, M6-06b, M6-06c, M6-13; client viewers read-only)
+  - [x] M6-13b bounded, fail-fast DKIM detection probes (opus, depends on M6-13; M6-08..10 depend on it)
+  - [x] M6-07 domain page ESPs tab (depends on M6-06, M6-06b, M6-06c, M6-13; client viewers read-only)
   - [ ] M6-08 profiles: SendGrid, Amazon SES, Mailgun (official docs only)
   - [ ] M6-09 profiles: MailUp/TeamSystem + up to two Italian ESPs (official docs only)
   - [ ] M6-10 profiles: Google Workspace, Microsoft 365, Brevo (official docs only)
@@ -190,6 +190,8 @@ Carried over from M0-07 QA:
 - [ ] Security review checklist, dependency/license audit, v0.1.0 release
 
 ## Follow-ups (post-M1)
+- [ ] ESPs tab (M6-07 QA): should-fix test gap: tests/web/test_domain_esps_ui.py:295-311 has no regression test for hostile DNS evidence (an SPF include or CNAME target carrying `"><script>` from a fake-DNS zone, asserted escaped in `esps-detected` and the per-ESP group); QA checked it by hand and it is escaped. Nits: removing an already-removed assignment shows the full 404 page (app/web/domain_esps.py:291), a redirect with a notice is friendlier; the M6-07 ticket says app/web/__init__.py but routers register in app/main.py. Per-user rate limiting of DNS-running GETs is a project-wide gap (app/api/v1/checks.py:33).
+- [ ] ESP detection cache (M6-13b): the assigned-ESP part (app/checks/esp_profile.py) and detection keep separate DNS caches, so a selector shared with an assigned ESP is queried twice; sharing needs a change to `detect`'s signature.
 - [ ] Finding rendering leftovers (M6-06b QA):
   - Localize DNS state tokens (`{state}`, e.g. `timeout`) in one place for all checks; ESP_DNS_ERROR still shows them raw.
   - ESP_DNS_ERROR for an invalid domain reads "of -" because app/checks/esp_profile.py:523 sends `esp: "-"`; give that case its own detail text or drop "of {esp}".
