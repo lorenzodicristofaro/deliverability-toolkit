@@ -255,6 +255,10 @@ CUSTOM_CHECK_ID_ROUTES: dict[tuple[str, str], Any] = {
     ("GET", "/api/v1/custom-checks/{custom_check_id}"): None,
     ("PATCH", "/api/v1/custom-checks/{custom_check_id}"): {"name": "probe"},
     ("DELETE", "/api/v1/custom-checks/{custom_check_id}"): None,
+    ("GET", "/custom-checks/{custom_check_id}/edit"): None,
+    ("POST", "/custom-checks/{custom_check_id}/edit"): {"name": "probe"},
+    ("POST", "/custom-checks/{custom_check_id}/toggle"): {"enabled": "0"},
+    ("POST", "/custom-checks/{custom_check_id}/delete"): None,
 }
 
 
@@ -462,6 +466,7 @@ KNOWN_INT_CALLS = {
     ("app/api/v1/message.py", "_read_capped"),  # Content-Length
     ("app/web/checks_stream.py", "dkim_events"),  # duration in ms
     ("app/web/content.py", "_read_capped"),  # Content-Length
+    ("app/web/custom_checks.py", "_read_capped"),  # Content-Length
     ("app/web/dkim_selectors.py", "_read_capped"),  # Content-Length
     ("app/web/message.py", "_read_capped"),  # Content-Length
     ("app/web/rules.py", "_read_capped"),  # Content-Length

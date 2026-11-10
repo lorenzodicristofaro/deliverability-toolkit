@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+{% block title %}{{ t("web.custom_checks.title") }} · {{ app_name }}{% endblock %}
+{% macro check_table(rows, section) %}
+{% set kind_text = {"dns_exists": t("web.custom_checks.kind.dns_exists"), "dns_matches": t("web.custom_checks.kind.dns_matches"), "dns_value_range": t("web.custom_checks.kind.dns_value_range"), "http_fetch": t("web.custom_checks.kind.http_fetch")} %}
+{% set severity_text = {"low": t("checks.severity.low"), "medium": t("checks.severity.medium"), "high": t("checks.severity.high")} %}
+<table data-testid="custom-{{ section }}">
+  <thead><tr>
+    <th scope="col">{{ t("web.custom_checks.col.check_key") }}</th>
+    <th scope="col">{{ t("web.custom_checks.col.name") }}</th>
+    <th scope="col">{{ t("web.custom_checks.col.kind") }}</th>
+    <th scope="col">{{ t("web.custom_checks.col.severity") }}</th>
+    <th scope="col">{{ t("web.custom_checks.col.enabled") }}</th>
+    <th scope="col">{{ t("web.custom_checks.col.actions") }}</th>
+  </tr></thead>
+  <tbody>
+  {% for row in rows %}
+    {% set r = row.record %}
+    <tr data-check="{{ r.id }}">
+      <td class="dns-wrap"><code>{{ r.check_key|visible }}</code></td>
+      <td class="dns-wrap">{{ r.name|visible }}</td>
+      <td>{{ kind_text.get(r.kind, r.kind|visible) }}</td>
+      <td>{{ severity_text.get(r.severity, r.severity|visible) }}</td>
+      <td>{{ t("web.custom_checks.enabled.yes") if r.enabled else t("web.custom_checks.enabled.no") }}</td>
+      <td>
+        {% if row.can_edit %}
+        <a href="/custom-checks/{{ r.id }}/edit?scope={{ scope }}">{{ t("web.custom_checks.action.edit") }}</a>
+        <form class="inline" method="post" action="/custom-checks/{{ r.id }}/toggle?scope={{ scope }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <input type="hidden" name="enabled" value="{{ "0" if r.enabled else "1" }}">
+          <button type="submit">{{ t("web.custom_checks.action.disable") if r.enabled else t("web.custom_checks.action.enable") }}</button>
+        </form>
+        <form class="inline" method="post" action="/custom-checks/{{ r.id }}/delete?scope={{ scope }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button type="submit">{{ t("web.custom_checks.action.delete") }}</button>
+        </form>
+        {% endif %}
+      </td>
+    </tr>
+  {% else %}
+    <tr><td colspan="6" class="empty-state">{{ t("web.custom_checks.empty") }}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endmacro %}
+{% block content %}
+<h1>{{ t("web.custom_checks.title") }}</h1>
+<p>{{ t("web.custom_checks.intro") }}</p>
+<p>
+  {% if show_tenant_tab %}<a href="/custom-checks?scope=tenant" {% if scope == "tenant" %}aria-current="page"{% endif %} data-testid="tab-tenant">{{ t("web.custom_checks.tab.tenant") }}</a>{% endif %}
+  {% if show_global_tab %}{% if show_tenant_tab %} · {% endif %}<a href="/custom-checks?scope=global" {% if scope == "global" %}aria-current="page"{% endif %} data-testid="tab-global">{{ t("web.custom_checks.tab.global") }}</a>{% endif %}
+  {% if can_manage %} · <a href="/custom-checks/new?scope={{ scope }}" data-testid="custom-new">{{ t("web.custom_checks.action.new") }}</a>{% endif %}
+</p>
+{% if flash %}<p class="dns-state dns-state-ok" role="status" data-testid="custom-flash">{{ t(flash) }}</p>{% endif %}
+{% if error %}<p class="form-error" role="alert" data-testid="custom-error">{{ t(error) }}</p>{% endif %}
+
+{% if scope == "tenant" %}
+{% if tenant_rows or not has_tenant_rows %}
+<section>
+  <h2>{{ t("web.custom_checks.section.tenant") }}</h2>
+  {{ check_table(tenant_rows, "tenant") }}
+</section>
+{% endif %}
+{% if global_rows or not has_global_rows %}
+<section>
+  <h2>{{ t("web.custom_checks.section.global") }}</h2>
+  <p>{{ t("web.custom_checks.global_readonly") }}</p>
+  {{ check_table(global_rows, "global") }}
+</section>
+{% endif %}
+{% else %}
+<section>
+  <h2>{{ t("web.custom_checks.section.global") }}</h2>
+  {{ check_table(global_rows, "global") }}
+</section>
+{% endif %}
+{% if last_page > 1 %}
+<p data-testid="custom-pages">
+  {% if page > 1 %}<a href="/custom-checks?scope={{ scope }}&amp;page={{ page - 1 }}" data-testid="custom-page-prev">{{ t("web.custom_checks.page.prev") }}</a> · {% endif %}
+  <span data-testid="custom-page-status">{{ t("web.custom_checks.page.status", page=page, pages=last_page) }}</span>
+  {% if page < last_page %} · <a href="/custom-checks?scope={{ scope }}&amp;page={{ page + 1 }}" data-testid="custom-page-next">{{ t("web.custom_checks.page.next") }}</a>{% endif %}
+</p>
+{% endif %}
+{% endblock %}

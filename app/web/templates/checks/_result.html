@@ -4,7 +4,7 @@
 {% set title_text = {"spf": t("checks.spf.title"), "dmarc": t("checks.dmarc.title"), "dkim": t("checks.dkim.title")} %}
 {% set severity_text = {"critical": t("checks.severity.critical"), "high": t("checks.severity.high"), "medium": t("checks.severity.medium"), "low": t("checks.severity.low"), "info": t("checks.severity.info")} %}
 <section class="check-result" data-testid="check-{{ result.check_id }}" data-status="{{ result.status }}">
-  <h2>{{ title_text[result.check_id] }}</h2>
+  <h2>{{ title_text.get(result.check_id) or t("web.custom_checks.result_title") }}</h2>
   <p class="dns-state dns-state-{{ "failure" if result.status == "error" else ("ok" if result.status == "ok" else "absent") }}"{% if result.status == "error" %} role="alert"{% endif %} data-testid="status-{{ result.check_id }}">
     <strong>{{ status_text[result.status] }}</strong>
     {% if result.status == "error" %}<br>{{ t("checks.status.error_note") }}{% endif %}
@@ -17,7 +17,12 @@
     <li data-code="{{ f.code }}" data-severity="{{ f.severity }}">
       <strong>[{{ severity_text[f.severity] }}] {{ t(f.title_key, **(f.params|finding_params)) }}</strong>
       <p>{{ t(f.detail_key, **(f.params|finding_params)) }}</p>
-      {% if f.remediation_key %}<p>{{ t(f.remediation_key, **(f.params|finding_params)) }}</p>{% endif %}
+      {#- A custom check carries its own remediation as plain text per language in
+          params.remediation_text (escaped by autoescape, never unescaped), or a catalogue key in
+          remediation_key (global rows); a built-in finding has the key only. -#}
+      {% set rem = f.params.get("remediation_text") if f.params is mapping else none %}
+      {% if rem is mapping %}<p class="dns-wrap" data-testid="remediation-text">{{ rem.get(lang) or rem.get("en") or "" }}</p>
+      {% elif f.remediation_key %}<p>{{ t(f.remediation_key, **(f.params|finding_params)) }}</p>{% endif %}
       {% for e in f.evidence %}<p class="dns-wrap"><code>{{ e|visible }}</code></p>{% endfor %}
       {% if f.docs_url is https_url %}<p><a href="{{ f.docs_url }}" rel="noopener noreferrer">{{ t("checks.docs_link") }}</a></p>{% endif %}
     </li>

@@ -12,4 +12,4 @@ Acceptance criteria:
 - Server-side permission tests (analyst, client viewer, other-tenant admin direct posts denied; service not invoked); CSRF; XSS test on name, regex, remediation text and evidence.
 - Both locales; i18n scan passes.
 New i18n keys: web.custom_checks.title, .tab.global, .tab.tenant, .field.*, .kind.*, .kind.http_fetch_unavailable, .test.*, .flash.* (coder lists final set) (en + it)
-Status: todo
+Status: in-review
