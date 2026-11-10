@@ -21,6 +21,7 @@ from sqlalchemy import func, select
 
 from app.api.v1 import checks as api_checks
 from app.api.v1 import custom_checks as custom_api
+from app.api.v1.domain_esps import esp_profiles
 from app.checks.models import CheckContext
 from app.core import i18n
 from app.core.config import Settings
@@ -31,13 +32,16 @@ from app.models import CustomCheck, User
 from app.services import custom_checks_admin as admin
 from tests.api.test_domains import KEY, World, _seed, call
 from tests.checks.test_acceptance_m3 import (
+    DOMAIN_ALL,
     REGISTERED,
     Make,
     Scripted,
     clock,
     healthy,
     maker,
+    no_esp_profiles,
     via_service,
+    without_esp,
 )
 from tests.dns.conftest import _no_network_in_dns_tests  # noqa: F401
 
@@ -100,6 +104,7 @@ def rig(migrated_db_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[Rig]:
     application = create_app(settings)
     holder: list[Rig] = []
     application.dependency_overrides[api_checks._resolver] = lambda: holder[0].resolver()
+    application.dependency_overrides[esp_profiles] = no_esp_profiles
     monkeypatch.setattr(api_checks, "CheckContext", partial(CheckContext, clock=clock))
     monkeypatch.setattr(custom_api, "CheckContext", partial(CheckContext, clock=clock))
     try:
@@ -526,7 +531,7 @@ def run_all(w: World, who: str = "analyst", which: str = "assigned", tenant: str
 
 def test_built_in_only_run_is_byte_equal_to_m3(rig: Rig) -> None:
     expected = via_service(maker("healthy"), REGISTERED, single=False)
-    assert run_all(rig.world).text == expected
+    assert without_esp(run_all(rig.world).text) == expected  # M6-13: `esp` is domain-only
 
 
 def test_other_tenants_and_disabled_checks_leave_the_run_byte_equal(rig: Rig) -> None:
@@ -536,7 +541,7 @@ def test_other_tenants_and_disabled_checks_leave_the_run_byte_equal(rig: Rig) ->
     make(w, "root", query=GLOBAL_Q, check_key="global.off", enabled=False)
     expected = via_service(maker("healthy"), REGISTERED, single=False)
     response = run_all(w)
-    assert response.text == expected
+    assert without_esp(response.text) == expected
     assert "b.secret" not in response.text
 
 
@@ -545,14 +550,15 @@ def test_run_adds_global_and_own_checks_after_the_built_ins(rig: Rig) -> None:
     make(w, "root", query=GLOBAL_Q, check_key="shared")
     make(w, check_key="own", definition={"name": "{domain}", "rrtype": "TXT"})
     make(w, "b_owner", tenant="b", check_key="b.secret")
-    results = run_all(w).json()
+    response = run_all(w)
+    results = response.json()
     assert [r["check_id"] for r in results] == [
-        *REGISTERED,
+        *DOMAIN_ALL,
         "custom:global:shared",
         "custom:tenant:own",
     ]
     built_in = json.loads(via_service(maker("healthy"), REGISTERED, single=False))
-    assert results[: len(REGISTERED)] == built_in
+    assert json.loads(without_esp(response.text))[: len(REGISTERED)] == built_in
     by_id = {r["check_id"]: r for r in results}
     assert by_id["custom:global:shared"]["status"] == "warn"  # _acme.assigned.example: nxdomain
     assert by_id["custom:tenant:own"]["status"] == "ok"  # assigned.example has a TXT record
@@ -563,7 +569,7 @@ def test_tenant_b_run_has_its_own_checks_only(rig: Rig) -> None:
     make(w, check_key="a.secret")
     make(w, "b_owner", tenant="b", check_key="b.own")
     ids = [r["check_id"] for r in run_all(w, "b_owner", "other", "b").json()]
-    assert ids == [*REGISTERED, "custom:tenant:b.own"]
+    assert ids == [*DOMAIN_ALL, "custom:tenant:b.own"]
 
 
 def test_viewer_run_on_an_assigned_domain_includes_custom_results(rig: Rig) -> None:

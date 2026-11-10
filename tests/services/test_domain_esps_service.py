@@ -516,10 +516,34 @@ class _NxResolver:
         return DnsResult(question=question, state=ResultState.nxdomain, rcode=3)
 
 
-def test_run_without_assignment_never_loads_profiles(world: World) -> None:
-    run = resolve_esp_run(_ctx(world), world.db, world.domains["a"], _unexpected)
+async def test_run_without_assignment_detects_over_every_loaded_profile(world: World) -> None:
+    """M6-13: with no assignment the profiles are loaded (detection candidates); nothing found
+    on an all-NXDOMAIN zone is the single ESP_NONE_ASSIGNED info result."""
+    run = resolve_esp_run(_ctx(world), world.db, world.domains["a"], lambda: PROFILES)
     assert run.assigned is False
     assert run.check.id == "esp"
+    result = await _run(run, "a.example")
+    assert [f.code for f in result.findings] == ["ESP_NONE_ASSIGNED"]
+    assert result.status == "info"
+    assert result.data["detection"]["detected"] == []
+
+
+async def test_run_candidates_exclude_assigned_profiles(world: World) -> None:
+    DomainEspRepository(_ctx(world), world.db).add(world.domains["a"], ESP)
+    world.db.commit()
+    run = resolve_esp_run(_ctx(world), world.db, world.domains["a"], lambda: PROFILES)
+    result = await _run(run, "a.example")
+    assert [s["id"] for s in result.data["esps"]] == [ESP]
+    assert "ESP_NONE_ASSIGNED" not in {f.code for f in result.findings}
+    assert "ESP_DETECTED_NOT_ASSIGNED" not in {f.code for f in result.findings}
+
+
+async def test_run_without_assignment_and_broken_profiles_is_error(world: World) -> None:
+    run = resolve_esp_run(_ctx(world), world.db, world.domains["a"], _broken)
+    assert run.assigned is False
+    result = await _run(run, "a.example")
+    assert result.status == "error"
+    assert [f.code for f in result.findings] == ["CHECK_INTERNAL_ERROR"]
 
 
 def test_run_of_tenant_a_never_sees_tenant_b_assignments(world: World) -> None:
@@ -560,6 +584,7 @@ async def test_run_outcomes(
     else:
         assert result.status == "error"
         assert codes <= found
+    assert "ESP_NONE_ASSIGNED" not in found  # something is assigned, even if not loaded
     assert result.data.get("unavailable") == unavailable
 
 
