@@ -15,23 +15,31 @@ from typing import Any
 
 import pytest
 from sqlalchemy import func, select
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
+from app.checks.models import CheckContext, CheckResult, Target
 from app.core.db import create_db_engine, create_session_factory
+from app.core.i18n import t
 from app.core.permissions import MembershipGrant, Principal
 from app.core.tenancy import TenantContext
-from app.esp.profile import read_esp_profiles
+from app.dns.types import DnsQuestion, DnsResult, ResultState
+from app.esp.profile import EspProfileError, read_esp_profiles
 from app.models import Domain, MembershipRole, Tenant, User
 from app.models.domain_esp import DomainEsp
 from app.repositories.domain_esps import MAX_ESPS_PER_DOMAIN, DomainEspRepository
 from app.services import domain_esps as service_module
 from app.services.domain_esps import (
+    PROFILES_UNAVAILABLE_KEY,
     DomainEspService,
     EspConflict,
     EspFieldInvalid,
     EspForbidden,
     EspNotFound,
+    EspProfilesUnavailable,
+    EspRun,
     field_key,
+    resolve_esp_run,
 )
 from tests.support.socket_guard import db_endpoint, install
 
@@ -444,3 +452,134 @@ def test_audit_logs_ids_only(world: World, caplog: pytest.LogCaptureFixture) -> 
 def test_row_count(world: World) -> None:
     """Sanity: the fixture starts empty (guards the row-based assertions above)."""
     assert int(world.db.scalar(select(func.count()).select_from(DomainEsp)) or 0) == 0
+
+
+# --- broken profiles and domain runs (M6-06) ----------------------------------------------------
+
+
+def _broken() -> Any:
+    raise EspProfileError("profile directory not found")
+
+
+def _unexpected() -> Any:
+    raise AssertionError("profiles loaded for a domain without ESPs")
+
+
+def _with_profiles(service: DomainEspService, source: Any) -> DomainEspService:
+    service._profiles = source
+    return service
+
+
+@pytest.mark.parametrize("verb", ["catalogue", "names", "assign"])
+def test_broken_profiles_raise_unavailable(
+    world: World, verb: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    """`names` is the profile lookup of the list route (the list itself reads only the DB)."""
+    caplog.set_level("WARNING", logger="app.domain_esps")
+    service = _with_profiles(world.service("owner"), _broken)
+    with pytest.raises(EspProfilesUnavailable) as exc:
+        if verb == "names":
+            service.profile_names()
+        else:
+            _invoke(service, verb, world.domains["a"])
+    assert (exc.value.status, exc.value.key) == (503, PROFILES_UNAVAILABLE_KEY)
+    assert [r.__dict__.get("event") for r in caplog.records] == ["domain_esps.profiles_unreadable"]
+    assert world.rows() == []
+
+
+def test_broken_profiles_still_allow_remove(world: World) -> None:
+    world.service("owner").assign(world.domains["a"], ESP)
+    _with_profiles(world.service("owner"), _broken).remove(world.domains["a"], ESP)
+    assert world.rows() == []
+
+
+def _ctx(world: World, tenant: str = "a") -> TenantContext:
+    if tenant == "b":
+        return TenantContext(world.tenant_b, world.users["b_owner"])
+    return TenantContext(world.tenant_a, world.users["owner"])
+
+
+async def _run(run: EspRun, domain: str) -> CheckResult:
+    ctx = CheckContext(resolver=_NxResolver())
+    return await run.check.run(ctx, Target(domain=domain))
+
+
+class _NxResolver:
+    """Every name is NXDOMAIN: no network."""
+
+    identity = "nx"
+
+    async def resolve(self, question: DnsQuestion) -> DnsResult:
+        return DnsResult(question=question, state=ResultState.nxdomain, rcode=3)
+
+
+def test_run_without_assignment_never_loads_profiles(world: World) -> None:
+    run = resolve_esp_run(_ctx(world), world.db, world.domains["a"], _unexpected)
+    assert run.assigned is False
+    assert run.check.id == "esp"
+
+
+def test_run_of_tenant_a_never_sees_tenant_b_assignments(world: World) -> None:
+    world.b_service().assign(world.domains["b"], ESP, return_path_host=SECRET_HOST)
+    # Tenant A asking for tenant B's domain id gets nothing, not B's row.
+    foreign = resolve_esp_run(_ctx(world), world.db, world.domains["b"], lambda: PROFILES)
+    assert foreign.assigned is False
+    own_a = resolve_esp_run(_ctx(world), world.db, world.domains["a"], lambda: PROFILES)
+    assert own_a.assigned is False
+    own_b = resolve_esp_run(_ctx(world, "b"), world.db, world.domains["b"], lambda: PROFILES)
+    assert own_b.assigned is True
+
+
+RUN_CASES = [
+    # (assigned esp ids, profile source, expected code set, unavailable)
+    ((ESP,), lambda: PROFILES, None, None),
+    ((ESP, "gone-esp"), lambda: PROFILES, {"ESP_PROFILE_UNAVAILABLE"}, ["gone-esp"]),
+    (("gone-esp",), lambda: PROFILES, {"ESP_PROFILE_UNAVAILABLE"}, ["gone-esp"]),
+    ((ESP,), _broken, {"CHECK_INTERNAL_ERROR"}, None),
+    ((ESP,), lambda: (*PROFILES, PROFILES[0]), None, None),  # duplicate from a raw source
+]
+
+
+@pytest.mark.parametrize(("esp_ids", "source", "codes", "unavailable"), RUN_CASES)
+async def test_run_outcomes(
+    world: World, esp_ids: tuple[str, ...], source: Any, codes: Any, unavailable: Any
+) -> None:
+    repo = DomainEspRepository(_ctx(world), world.db)
+    for esp_id in esp_ids:
+        repo.add(world.domains["a"], esp_id)
+    world.db.commit()
+    run = resolve_esp_run(_ctx(world), world.db, world.domains["a"], source)
+    assert run.assigned is True
+    result = await _run(run, "a.example")
+    found = {f.code for f in result.findings}
+    if codes is None:
+        assert "ESP_PROFILE_UNAVAILABLE" not in found and "CHECK_INTERNAL_ERROR" not in found
+    else:
+        assert result.status == "error"
+        assert codes <= found
+    assert result.data.get("unavailable") == unavailable
+
+
+def test_run_repository_failure_is_error(
+    world: World, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    class Broken:
+        def list_for_domain(self, _domain_id: object) -> Any:
+            raise OperationalError("SELECT", {}, Exception("connection lost"))
+
+    class Repos:
+        domain_esps = Broken()
+
+    monkeypatch.setattr(service_module, "repo_for", lambda _ctx, _db: Repos())
+    caplog.set_level("WARNING", logger="app.domain_esps")
+    run = resolve_esp_run(_ctx(world), world.db, world.domains["a"], _unexpected)
+    assert run.assigned is True
+    assert "domain_esps.assignments_unreadable" in [r.__dict__.get("event") for r in caplog.records]
+
+
+@pytest.mark.parametrize("lang", ["en", "it"])
+def test_run_finding_keys_exist_in_both_languages(lang: str) -> None:
+    for code in service_module.CODES:
+        for part in ("title", "detail", "remediation"):
+            key = f"finding.{code}.{part}"
+            assert t(key, lang) != key

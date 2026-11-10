@@ -3,19 +3,25 @@
 Routes (all POST, so the CSRF rules are those of `/api/v1/domains`):
 - `/domains/{domain_id}/checks/{check_id}`: one check, or `all` (every registered check, then the
   enabled custom checks of the active tenant and the global ones, M5-23);
+  the domain routes also know `esp` (M6-06, `app.services.domain_esps.resolve_esp_run`): the
+  domain's assigned ESPs, read through the tenant repository. It is part of `all` only when the
+  domain has an assignment (sorted among the built-ins); requested by id with no assignment it is
+  the `ESP_NONE_ASSIGNED` info result. Client viewers get no `esp` result: `all` leaves it out and
+  requesting it is a 403. The free route does not know `esp`;
 - `/domains/{domain_id}/checks`: body `{"ids": [...]}`;
 - `/checks/free`: body `{"name": ..., "ids": [...]}`, no tenant data.
 
 The response body is the `CheckResult` wire JSON of the M3-02 service, byte for byte
 (`model_dump_json`), so the API and the CLI print the same thing. A single check answers with one
 object; `all` and `ids` answer with an array of objects in request order (`all`: the built-in
-checks sorted by id, then the custom checks in creation order; with no enabled custom check it is
-exactly the pre-M5 answer).
+checks sorted by id, then the custom checks in creation order; with no enabled custom check and no
+assigned ESP it is exactly the pre-M5 answer).
 
 Status codes (bodies are `{"detail": <i18n>}`, never echoing user input):
 - 401 anonymous (mutations first need a valid CSRF token, else the middleware answers 403);
 - 404 no active tenant; a domain that is missing, foreign, malformed or (client viewer) unassigned;
-- 403 the principal lacks `check.run` on a visible domain, or `dns.tools` on the free route;
+- 403 the principal lacks `check.run` on a visible domain, or `dns.tools` on the free route; a
+  client viewer asking for `esp`;
 - 413 body over MAX_BODY_BYTES; 415 not `application/json`;
 - 422 malformed body, unknown or duplicate check id, too many ids, invalid domain name;
 - 200 whenever the checks ran: a DNS failure is DATA (status `error`) in the body.
@@ -41,6 +47,7 @@ from starlette.concurrency import run_in_threadpool
 
 from app.api.v1._common import Body, _error, _parse, _Strict
 from app.api.v1.dns_tools import Backend
+from app.api.v1.domain_esps import esp_profiles
 from app.api.v1.domains import _domain_id
 from app.checks.dkim import DkimCheck
 from app.checks.models import CheckContext, CheckResult
@@ -57,11 +64,8 @@ from app.services.checks import (
     run_checks,
 )
 from app.services.custom_checks_admin import run_checks_for
-from app.services.dkim_probe_selectors import (
-    registry_for,
-    resolve_and_release,
-    resolve_probe_selectors,
-)
+from app.services.dkim_probe_selectors import registry_for, resolve_probe_selectors
+from app.services.domain_esps import ESP_CHECK_ID, ProfileSource, esp_withheld, resolve_esp_run
 from app.services.domains import DomainService, DomainServiceError, DomainView
 from app.web.deps import CurrentSession, DbDep, tenant_ctx
 
@@ -91,17 +95,19 @@ def _resolver(backend: Backend) -> Resolver:
 
 
 ResolverDep = Annotated[Resolver, Depends(_resolver)]
+ProfilesDep = Annotated[ProfileSource, Depends(esp_profiles)]
 
 
 # --- access -------------------------------------------------------------------------------------
 
 
 class _CheckTarget:
-    __slots__ = ("ctx", "view")
+    __slots__ = ("ctx", "esp_withheld", "view")
 
-    def __init__(self, ctx: TenantContext, view: DomainView) -> None:
+    def __init__(self, ctx: TenantContext, view: DomainView, esp_withheld: bool) -> None:
         self.ctx = ctx
         self.view = view
+        self.esp_withheld = esp_withheld
 
 
 def _check_target(
@@ -118,7 +124,7 @@ def _check_target(
         raise _error(request, exc.status, exc.key) from None
     if not can(auth.principal, Action.CHECK_RUN, DomainResource(ctx.tenant_id, view.id)):
         raise _error(request, 403, "api.error.forbidden")
-    return _CheckTarget(ctx, view)
+    return _CheckTarget(ctx, view, esp_withheld(auth.principal, ctx.tenant_id))
 
 
 CheckTarget = Annotated[_CheckTarget, Depends(_check_target)]
@@ -152,8 +158,10 @@ def _json(results: Sequence[CheckResult], *, many: bool) -> Response:
     return Response(content=content, media_type="application/json")
 
 
-def _validate_ids(request: Request, ids: Sequence[str]) -> list[str]:
+def _validate_ids(request: Request, ids: Sequence[str], *, esp: bool = False) -> list[str]:
     known = set(default_registry().all_ids())
+    if esp:
+        known.add(ESP_CHECK_ID)
     if len(set(ids)) != len(ids) or any(i not in known for i in ids):
         raise _invalid(request)
     return list(ids)
@@ -177,20 +185,37 @@ def _context(
     )
 
 
-def _prepare(ctx: TenantContext, db: Session, ids: Sequence[str]) -> CheckRegistry | None:
-    """The registry of a domain run (None: no DKIM, the default one); ends the transaction."""
-    if DkimCheck.id in ids:
-        return registry_for(resolve_and_release(ctx, db))
-    db.rollback()
-    return None
-
-
-def _prepare_all(ctx: TenantContext, db: Session) -> tuple[CheckRegistry, list[str]]:
-    """The registry and ids of `all`: built-ins (DKIM on the tenant's selectors) plus the tenant's
-    custom checks; ends the transaction."""
+def _prepare(
+    access: _CheckTarget, db: Session, ids: Sequence[str], profiles: ProfileSource
+) -> CheckRegistry | None:
+    """The registry of a domain run (None: no DKIM and no ESP, the default one); ends the
+    transaction."""
     try:
-        registry = registry_for(resolve_probe_selectors(ctx, db))
-        custom = run_checks_for(ctx, db)
+        registry = None
+        if DkimCheck.id in ids:
+            registry = registry_for(resolve_probe_selectors(access.ctx, db))
+        if ESP_CHECK_ID in ids:
+            esp = resolve_esp_run(access.ctx, db, access.view.id, profiles)
+            registry = (registry or default_registry()).with_checks([esp.check])
+    finally:
+        db.rollback()
+    return registry
+
+
+def _prepare_all(
+    access: _CheckTarget, db: Session, profiles: ProfileSource
+) -> tuple[CheckRegistry, list[str]]:
+    """The registry and ids of `all`: built-ins (DKIM on the tenant's selectors, `esp` when the
+    domain has an assigned ESP and the caller may see it) plus the tenant's custom checks; ends
+    the transaction. The ESP assignments are read last, so a failure there cannot affect the
+    other reads."""
+    try:
+        registry = registry_for(resolve_probe_selectors(access.ctx, db))
+        custom = run_checks_for(access.ctx, db)
+        if not access.esp_withheld:
+            esp = resolve_esp_run(access.ctx, db, access.view.id, profiles)
+            if esp.assigned:
+                registry = registry.with_checks([esp.check])
     finally:
         db.rollback()
     return registry.with_checks(custom), [*registry.all_ids(), *(c.id for c in custom)]
@@ -219,13 +244,20 @@ async def _run_many(
     responses={200: {"model": CheckResult | list[CheckResult]}},
 )
 async def run_domain_check(
-    request: Request, access: CheckTarget, db: DbDep, resolver: ResolverDep, check_id: str
+    request: Request,
+    access: CheckTarget,
+    db: DbDep,
+    resolver: ResolverDep,
+    profiles: ProfilesDep,
+    check_id: str,
 ) -> Response:
     ctx = _context(resolver, access.ctx.tenant_id, access.view.id)
     if check_id == ALL:
-        everything, ids = await run_in_threadpool(_prepare_all, access.ctx, db)
+        everything, ids = await run_in_threadpool(_prepare_all, access, db, profiles)
         return await _run_many(request, ids, access.view.name, ctx, everything)
-    registry = await run_in_threadpool(_prepare, access.ctx, db, [check_id])
+    if check_id == ESP_CHECK_ID and access.esp_withheld:
+        raise _error(request, 403, "api.error.forbidden")
+    registry = await run_in_threadpool(_prepare, access, db, [check_id], profiles)
     try:
         result = await run_check(check_id, access.view.name, ctx, registry=registry)
     except (UnknownCheck, InvalidTarget):
@@ -240,12 +272,19 @@ async def run_domain_check(
     openapi_extra=_body_doc(IdsIn),
 )
 async def run_domain_checks(
-    request: Request, access: CheckTarget, db: DbDep, body: Body, resolver: ResolverDep
+    request: Request,
+    access: CheckTarget,
+    db: DbDep,
+    body: Body,
+    resolver: ResolverDep,
+    profiles: ProfilesDep,
 ) -> Response:
     payload = _parse(request, IdsIn, body)
-    ids = _validate_ids(request, payload.ids)
+    ids = _validate_ids(request, payload.ids, esp=True)
+    if ESP_CHECK_ID in ids and access.esp_withheld:
+        raise _error(request, 403, "api.error.forbidden")
     ctx = _context(resolver, access.ctx.tenant_id, access.view.id)
-    registry = await run_in_threadpool(_prepare, access.ctx, db, ids)
+    registry = await run_in_threadpool(_prepare, access, db, ids, profiles)
     return await _run_many(request, ids, access.view.name, ctx, registry)
 
 

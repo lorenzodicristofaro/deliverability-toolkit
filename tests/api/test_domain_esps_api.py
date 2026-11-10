@@ -407,6 +407,64 @@ def test_list_names_null_for_a_profile_no_longer_loaded(world: World) -> None:
 
 @pytest.mark.parametrize("lang", ["en", "it"])
 def test_error_keys_exist_in_both_languages(lang: str) -> None:
-    for name in ("unknown_esp", "invalid_host", "host_outside_domain", "too_many", "not_found"):
+    names = ("unknown_esp", "invalid_host", "host_outside_domain", "too_many", "not_found")
+    for name in (*names, "profiles_unavailable"):
         key = f"api.domain_esps.error.{name}"
         assert t(key, lang) != key
+
+
+# --- broken profile directory (M6-06) -----------------------------------------------------------
+
+MALFORMED = FIXTURES.parent / "malformed"
+UNAVAILABLE = {"detail": t("api.domain_esps.error.profiles_unavailable", "en")}
+BROKEN_SOURCES = {
+    "missing_dir": lambda: load_esp_profiles(FIXTURES.parent / "no-such-dir"),
+    "malformed_files": lambda: load_esp_profiles(MALFORMED),
+}
+
+
+def _break_profiles(w: World, source: ProfileSource) -> None:
+    w.client.app.dependency_overrides[esp_profiles] = lambda: source  # type: ignore[attr-defined]
+
+
+@pytest.mark.parametrize("source", BROKEN_SOURCES)
+@pytest.mark.parametrize("route", ["catalogue", "list", "put"])
+def test_broken_profiles_are_a_localized_503(
+    world: World, route: str, source: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    assert assign(world).status_code == 201
+    _break_profiles(world, BROKEN_SOURCES[source])
+    caplog.set_level("WARNING", logger="app.domain_esps")
+    method, url = {
+        "catalogue": ("GET", CATALOGUE),
+        "list": ("GET", esps(world)),
+        "put": ("PUT", one(world)),
+    }[route]
+    response = call(world, "owner", method, url)
+    assert response.status_code == 503
+    assert response.json() == UNAVAILABLE
+    events = [r.__dict__.get("event") for r in caplog.records]
+    assert "domain_esps.profiles_unreadable" in events
+    assert len(rows(world.db)) == 1
+
+
+def test_broken_profiles_503_is_in_italian_too(world: World) -> None:
+    _break_profiles(world, BROKEN_SOURCES["missing_dir"])
+    response = call(world, "owner", "GET", CATALOGUE, headers={"Accept-Language": "it"})
+    assert response.status_code == 503
+    assert response.json() == {"detail": t("api.domain_esps.error.profiles_unavailable", "it")}
+
+
+@pytest.mark.parametrize(
+    ("who", "status"), [("anon", 401), ("viewer", 403), ("analyst", 403), ("root", 404)]
+)
+def test_broken_profiles_do_not_change_denials(world: World, who: str, status: int) -> None:
+    _break_profiles(world, BROKEN_SOURCES["missing_dir"])
+    assert call(world, who, "PUT", one(world)).status_code == status
+
+
+def test_broken_profiles_still_allow_delete(world: World) -> None:
+    assert assign(world).status_code == 201
+    _break_profiles(world, BROKEN_SOURCES["malformed_files"])
+    assert call(world, "owner", "DELETE", one(world)).status_code == 204
+    assert rows(world.db) == []

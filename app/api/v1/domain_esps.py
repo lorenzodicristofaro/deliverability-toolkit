@@ -15,6 +15,9 @@ are `{"detail": <i18n>}`):
 - 404 no active tenant; a domain that is missing, foreign, malformed or (viewer) unassigned; an
   assignment that does not exist (DELETE);
 - 413 body over MAX_BODY_BYTES; 415 a non-empty body that is not `application/json`;
+- 503 `api.domain_esps.error.profiles_unavailable` when the ESP profiles cannot be loaded (broken
+  profile directory, logged as a warning) on the catalogue, the list and PUT, after the
+  permission and domain checks; DELETE does not need the profiles;
 - 422 a malformed body (`{"detail": <i18n>}`, as the domains API), or a rejected field as
   `{key, message, field, reason}` (unknown esp_id, invalid host, host outside the domain, too
   many ESPs), never echoing the rejected value.
@@ -154,9 +157,10 @@ def list_esp_profiles(request: Request, service: Service) -> dict[str, Any]:
 def list_domain_esps(request: Request, service: Service, domain_id: str) -> dict[str, Any]:
     try:
         records = service.list_for_domain(_domain_id(domain_id))
+        names = service.profile_names()
     except DomainEspError as exc:
         _raise(request, exc)
-    return _items(records, service.profile_names())
+    return _items(records, names)
 
 
 @router.put("/domains/{domain_id}/esps/{esp_id}")
@@ -172,9 +176,11 @@ def put_domain_esp(
             return_path_host=payload.return_path_host,
             tracking_host=payload.tracking_host,
         )
+        # The profiles were just loaded by `assign` (a successful load is cached).
+        names = service.profile_names()
     except DomainEspError as exc:
         _raise(request, exc)
-    content = _assignment_json(result.record, service.profile_names())
+    content = _assignment_json(result.record, names)
     return JSONResponse(content, status_code=201 if result.created else 200)
 
 
