@@ -344,6 +344,9 @@ def test_out_of_range_ids_reach_no_query_outside_the_routes(world: World, value:
     assert repos.domains.get(value) is None
     assert repos.memberships.get_by_user(value) is None
     assert repos.domain_access.domain_ids_for_user(value) == frozenset()
+    assert repos.domain_esps.list_for_domain(value) == []
+    assert repos.domain_esps.add(value, "esp") is None
+    assert repos.domain_esps.remove(value, "esp") is False
     assert memberships.get_for_tenant(value) is None
     assert revoke_session(world.db, value) is False
     assert revoke_all_sessions(world.db, value) == 0
@@ -413,11 +416,18 @@ def test_parse_id(parser: Callable[[str], int | None], raw: str, expected: int |
 
 # Id columns that are neither `*_id` nor declared keys in every model.
 _EXTRA_ID_COLUMNS = {"created_by"}
+# `*_id` columns that are not row ids, with the reason (keys are (table, column)).
+_TEXT_ID_COLUMNS = {
+    ("domain_esps", "esp_id"): "ESP profile slug; profiles live in YAML, not in a table",
+}
 
 
 def _id_columns() -> Iterator[tuple[str, Any]]:
     for table in Base.metadata.sorted_tables:
         for column in table.columns:
+            exempt = (table.name, column.name) in _TEXT_ID_COLUMNS
+            if exempt and not column.primary_key and not column.foreign_keys:
+                continue
             if (
                 column.primary_key
                 or column.foreign_keys

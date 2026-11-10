@@ -172,7 +172,10 @@ def test_migration_upgrade_downgrade(real_migrations_engine: Engine) -> None:
 def test_single_alembic_head() -> None:
     from alembic.script import ScriptDirectory
 
-    assert ScriptDirectory.from_config(_cfg()).get_heads() == ["0008"]
+    script = ScriptDirectory.from_config(_cfg())
+    assert len(script.get_heads()) == 1
+    revision = script.get_revision("0008")
+    assert revision is not None and revision.down_revision == "0007"
 
 
 def test_migration_hardcodes_model_limits() -> None:
