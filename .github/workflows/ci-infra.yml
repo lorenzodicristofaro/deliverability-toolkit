@@ -21,6 +21,7 @@ name: CI infra
 #   tests/dnssec_tag.py                imported by tests/integration/test_unbound.py
 #   migrations/**                      compose smoke runs `alembic upgrade head` at container start
 #   seeds/**                           compose smoke runs the startup seed sync
+#   profiles/**                        COPYed into the image (ESP profiles, loaded at runtime from M6)
 #   .github/workflows/ci-infra.yml     this workflow itself
 # Deliberately NOT listed: app/, locales/ (the image COPYs them, but the test jobs cover their
 # behaviour and listing them would run these jobs on nearly every code push).
@@ -40,6 +41,7 @@ on:
       - "alembic.ini"
       - "migrations/**"
       - "seeds/**"
+      - "profiles/**"
       - "tests/integration/**"
       - "tests/conftest.py"
       - "tests/support/**"
@@ -59,6 +61,7 @@ on:
       - "alembic.ini"
       - "migrations/**"
       - "seeds/**"
+      - "profiles/**"
       - "tests/integration/**"
       - "tests/conftest.py"
       - "tests/support/**"

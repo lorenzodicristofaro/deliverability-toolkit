@@ -1,0 +1,14 @@
+# Fake unverified ESP profile: return path and one selector not confirmed against official docs.
+id: other-esp
+name: Other ESP
+homepage: https://other.example.net/
+spf:
+  includes: []
+dkim:
+  selectors:
+    - { name: mx1, type: cname }
+return_path: { type: mx, optional: false }
+verified_on: 2025-06-01
+sources: ["https://other.example.net/docs/dns"]
+status: unverified
+unverified_fields: [return_path, dkim.selectors.mx1]
