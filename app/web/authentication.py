@@ -18,6 +18,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import Response
 
 from app.api.v1.checks import ResolverDep
+from app.checks.finding_text import display_params
 from app.checks.models import CheckContext
 from app.core.permissions import Action, DomainResource, can
 from app.services.checks import run_checks
@@ -31,10 +32,12 @@ router = APIRouter()
 CHECK_IDS: Final = ("spf", "dmarc")
 
 
-def finding_params(params: Any) -> dict[str, Any]:
-    """Finding params for `t()`: DNS-sourced strings are made visible-safe (control characters
-    shown as escapes); Jinja autoescape still applies to the final text."""
-    return {k: visible(v) if isinstance(v, str) else v for k, v in dict(params).items()}
+def finding_params(params: Any, code: str | None = None, lang: str | None = None) -> dict[str, Any]:
+    """Finding params for `t()`: with `code` and `lang`, known tokens become localized text
+    (`app.checks.finding_text`, M6-06b); DNS-sourced strings are made visible-safe (control
+    characters shown as escapes); Jinja autoescape still applies to the final text."""
+    values = dict(params) if code is None or lang is None else display_params(code, params, lang)
+    return {k: visible(v) if isinstance(v, str) else v for k, v in values.items()}
 
 
 def https_only(url: object) -> bool:
