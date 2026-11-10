@@ -75,6 +75,14 @@ Rules:
 - "Could not evaluate" (timeout, SERVFAIL, refused) is `error`, never `ok`.
 - Finding codes are stable public identifiers (used by alerts, API, tests).
 - Checks never touch the DB directly; the service layer stores results.
+- Custom checks are DNS kinds only in M5 (`dns_exists`, `dns_matches`, `dns_value_range`);
+  `http_fetch` is a reserved kind refused by schema and evaluator until M7, where it goes through
+  the guarded client. The definition schema is `app/core/custom_check_schema.py`, so repositories
+  validate every write without depending on `/checks`; the evaluator is `app/checks/custom.py`.
+  An `all` domain run (built in `app/api/v1/checks.py`) runs the built-ins first, then the enabled
+  global and own-tenant custom checks, read through the tenant repository; ids are
+  `custom:<scope>:<key>`. All custom checks of one run share a 12 s budget (under the 15 s API
+  deadline); a check with no budget left, or past the 50th, is `error`, never `ok`.
 
 ## 4. Multi-tenancy
 
@@ -94,7 +102,10 @@ Isolation strategy (defense in depth):
    that injects `tenant_id` into every query. Routers and services never receive
    a raw session for tenant data.
 3. A permission layer (`can(user, action, resource)`) evaluates role, domain
-   access and per-user feature toggles; used by web, API and CLI alike.
+   access and per-user feature toggles; used by web, API and CLI alike. CLI commands
+   that use tenant data go through `app/cli/tenant_scope.py` (`--tenant-id`, `--user-id`):
+   these options select who the command acts as and are not authentication, so the CLI's
+   trust boundary remains shell access. `check` and `analyze` stay tenant-less and offline.
 4. PostgreSQL deployments may additionally enable row-level security.
 5. Mandatory automated tests: for each endpoint, a user from tenant A must get
    404 on tenant B resources; a client viewer must not see unassigned domains.
@@ -197,8 +208,12 @@ profile is older than 12 months.
   private, link-local, CGNAT and cloud metadata ranges, pin the resolved IP
   to avoid DNS rebinding, enforce size/time limits, restrict redirects.
 - Input validation of domains/IPs (IDNA, length, label rules) at the edge.
-- Regex rules run in a subprocess/thread with timeout (or the `regex` module
-  with timeout) to prevent ReDoS.
+- Regex rules run through `app/core/safe_regex.py` (M5-03): `search_many` runs all
+  rules for one text in one worker subprocess with a per-rule deadline; a rule that
+  times out gets its worker killed (SIGKILL) and a fresh worker runs the rest. Caps on
+  pattern length, text size, matches, per-rule timeout, rules per call, overall call
+  time, and live workers per process (bounded wait, then `busy`, never an unbounded queue). Not a thread (cannot be stopped) and not the
+  `regex` module timeout (its docs do not say when the deadline is checked).
 - Uploaded `.eml` files and DMARC XML: size caps, zip-bomb protection, defusedxml.
 - Secrets encrypted with a key from env/file (Fernet or libsodium), rotation path documented.
 - CSRF protection for the UI, strict security headers (CSP without inline scripts),

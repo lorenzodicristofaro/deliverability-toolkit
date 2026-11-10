@@ -6,6 +6,8 @@ importing this module has no side effects and tests can use an empty ``CheckRegi
 
 from __future__ import annotations
 
+from collections.abc import Iterable
+
 from app.checks.models import Check
 
 
@@ -28,6 +30,16 @@ class CheckRegistry:
 
     def all_ids(self) -> list[str]:
         return sorted(self._checks)
+
+    def with_checks(self, extra: Iterable[Check]) -> CheckRegistry:
+        """A new registry: these checks plus `extra` (one domain run's custom checks, M5-23).
+        This registry is unchanged; a duplicate id raises ``DuplicateCheckError``."""
+        registry = CheckRegistry()
+        for check_id in self.all_ids():
+            registry.register(self._checks[check_id])
+        for check in extra:
+            registry.register(check)
+        return registry
 
 
 def load_builtin_checks(registry: CheckRegistry | None = None) -> CheckRegistry:

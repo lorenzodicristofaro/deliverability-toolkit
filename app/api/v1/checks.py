@@ -1,13 +1,16 @@
 """`/api/v1` check endpoints (M3-15). Checks run live; nothing is persisted in M3.
 
 Routes (all POST, so the CSRF rules are those of `/api/v1/domains`):
-- `/domains/{domain_id}/checks/{check_id}`: one check, or `all` (every registered check);
+- `/domains/{domain_id}/checks/{check_id}`: one check, or `all` (every registered check, then the
+  enabled custom checks of the active tenant and the global ones, M5-23);
 - `/domains/{domain_id}/checks`: body `{"ids": [...]}`;
 - `/checks/free`: body `{"name": ..., "ids": [...]}`, no tenant data.
 
 The response body is the `CheckResult` wire JSON of the M3-02 service, byte for byte
 (`model_dump_json`), so the API and the CLI print the same thing. A single check answers with one
-object; `all` and `ids` answer with an array of objects in request order (`all` is sorted by id).
+object; `all` and `ids` answer with an array of objects in request order (`all`: the built-in
+checks sorted by id, then the custom checks in creation order; with no enabled custom check it is
+exactly the pre-M5 answer).
 
 Status codes (bodies are `{"detail": <i18n>}`, never echoing user input):
 - 401 anonymous (mutations first need a valid CSRF token, else the middleware answers 403);
@@ -18,8 +21,12 @@ Status codes (bodies are `{"detail": <i18n>}`, never echoing user input):
 - 200 whenever the checks ran: a DNS failure is DATA (status `error`) in the body.
 
 The resolver comes from the `dns_backend` dependency (tests override it with a fake; no network).
-Caps: `MAX_IDS` checks per request and the service's per-request concurrency bound. There is no
-per-user rate limiting yet, so one request can still fan out many DNS queries (DKIM probe).
+Domain routes probe the DKIM selectors of the global table plus the active tenant's
+(`app.services.dkim_probe_selectors`); the free route stays on the seed list. The database
+connection is released before any DNS work.
+Caps: `MAX_IDS` checks per request, the service's per-request concurrency bound and
+`MAX_PROBE_SELECTORS`. There is no per-user rate limiting yet, so one request can still fan out
+many DNS queries (DKIM probe).
 """
 
 from __future__ import annotations
@@ -29,11 +36,15 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import Field, StrictStr
+from sqlalchemy.orm import Session
+from starlette.concurrency import run_in_threadpool
 
 from app.api.v1._common import Body, _error, _parse, _Strict
 from app.api.v1.dns_tools import Backend
 from app.api.v1.domains import _domain_id
+from app.checks.dkim import DkimCheck
 from app.checks.models import CheckContext, CheckResult
+from app.checks.registry import CheckRegistry
 from app.core.domain_names import InvalidDomainName, to_dns_name
 from app.core.permissions import Action, DomainResource, TenantResource, can
 from app.core.tenancy import TenantContext
@@ -44,6 +55,12 @@ from app.services.checks import (
     default_registry,
     run_check,
     run_checks,
+)
+from app.services.custom_checks_admin import run_checks_for
+from app.services.dkim_probe_selectors import (
+    registry_for,
+    resolve_and_release,
+    resolve_probe_selectors,
 )
 from app.services.domains import DomainService, DomainServiceError, DomainView
 from app.web.deps import CurrentSession, DbDep, tenant_ctx
@@ -160,9 +177,34 @@ def _context(
     )
 
 
-async def _run_many(request: Request, ids: list[str], name: str, ctx: CheckContext) -> Response:
+def _prepare(ctx: TenantContext, db: Session, ids: Sequence[str]) -> CheckRegistry | None:
+    """The registry of a domain run (None: no DKIM, the default one); ends the transaction."""
+    if DkimCheck.id in ids:
+        return registry_for(resolve_and_release(ctx, db))
+    db.rollback()
+    return None
+
+
+def _prepare_all(ctx: TenantContext, db: Session) -> tuple[CheckRegistry, list[str]]:
+    """The registry and ids of `all`: built-ins (DKIM on the tenant's selectors) plus the tenant's
+    custom checks; ends the transaction."""
     try:
-        results = await run_checks(ids, name, ctx)
+        registry = registry_for(resolve_probe_selectors(ctx, db))
+        custom = run_checks_for(ctx, db)
+    finally:
+        db.rollback()
+    return registry.with_checks(custom), [*registry.all_ids(), *(c.id for c in custom)]
+
+
+async def _run_many(
+    request: Request,
+    ids: list[str],
+    name: str,
+    ctx: CheckContext,
+    registry: CheckRegistry | None = None,
+) -> Response:
+    try:
+        results = await run_checks(ids, name, ctx, registry=registry)
     except (UnknownCheck, InvalidTarget):
         raise _invalid(request) from None
     return _json(results, many=True)
@@ -177,13 +219,15 @@ async def _run_many(request: Request, ids: list[str], name: str, ctx: CheckConte
     responses={200: {"model": CheckResult | list[CheckResult]}},
 )
 async def run_domain_check(
-    request: Request, access: CheckTarget, resolver: ResolverDep, check_id: str
+    request: Request, access: CheckTarget, db: DbDep, resolver: ResolverDep, check_id: str
 ) -> Response:
     ctx = _context(resolver, access.ctx.tenant_id, access.view.id)
     if check_id == ALL:
-        return await _run_many(request, default_registry().all_ids(), access.view.name, ctx)
+        everything, ids = await run_in_threadpool(_prepare_all, access.ctx, db)
+        return await _run_many(request, ids, access.view.name, ctx, everything)
+    registry = await run_in_threadpool(_prepare, access.ctx, db, [check_id])
     try:
-        result = await run_check(check_id, access.view.name, ctx)
+        result = await run_check(check_id, access.view.name, ctx, registry=registry)
     except (UnknownCheck, InvalidTarget):
         raise _invalid(request) from None
     return _json([result], many=False)
@@ -196,12 +240,13 @@ async def run_domain_check(
     openapi_extra=_body_doc(IdsIn),
 )
 async def run_domain_checks(
-    request: Request, access: CheckTarget, body: Body, resolver: ResolverDep
+    request: Request, access: CheckTarget, db: DbDep, body: Body, resolver: ResolverDep
 ) -> Response:
     payload = _parse(request, IdsIn, body)
     ids = _validate_ids(request, payload.ids)
     ctx = _context(resolver, access.ctx.tenant_id, access.view.id)
-    return await _run_many(request, ids, access.view.name, ctx)
+    registry = await run_in_threadpool(_prepare, access.ctx, db, ids)
+    return await _run_many(request, ids, access.view.name, ctx, registry)
 
 
 @router.post(
@@ -211,7 +256,7 @@ async def run_domain_checks(
     openapi_extra=_body_doc(FreeIn),
 )
 async def run_free_checks(
-    request: Request, _ctx: FreeAccess, body: Body, resolver: ResolverDep
+    request: Request, _ctx: FreeAccess, db: DbDep, body: Body, resolver: ResolverDep
 ) -> Response:
     payload = _parse(request, FreeIn, body)
     ids = _validate_ids(request, payload.ids)
@@ -219,4 +264,5 @@ async def run_free_checks(
         to_dns_name(payload.name, allow_underscore=False)
     except InvalidDomainName:
         raise _invalid(request) from None
+    await run_in_threadpool(db.rollback)  # no tenant rows here: just hold no transaction during DNS
     return await _run_many(request, ids, payload.name, _context(resolver))

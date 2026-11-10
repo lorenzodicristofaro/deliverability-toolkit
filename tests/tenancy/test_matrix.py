@@ -45,8 +45,19 @@ from app.core.security import SESSION_COOKIE_NAME
 from app.core.tenancy import TenantContext
 from app.main import create_app
 from app.repositories import repo_for
+from app.repositories.base import MAX_LIMIT
+from app.repositories.content_rules import ContentRuleRecord
+from app.repositories.custom_checks import CustomCheckRecord
+from app.repositories.dkim_selectors import DkimSelectorRecord
 from app.web import deps
-from tests.tenancy.conftest import ROLES, World, WorldMutated, assert_pristine, leaks
+from tests.tenancy.conftest import (
+    B_TENANT_NAME,
+    ROLES,
+    World,
+    WorldMutated,
+    assert_pristine,
+    leaks,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 TESTING_DOC = ROOT / "docs" / "TESTING.md"
@@ -124,6 +135,7 @@ class Kind(Enum):
     SESSION = "session"  # session only, no tenant data (logout)
     SWITCH = "switch"  # changes the active tenant
     DNS = "dns"  # raw DNS tools: tenant-level `dns.tools`, no tenant data (M2-12)
+    RULE = "rule"  # one content rule, DKIM selector or custom check by id; `own`: on tenant B's
 
 
 Body = Callable[[World, str], Any]
@@ -138,6 +150,8 @@ class Entry:
     # (role, target) -> reason: a known isolation bug, reported as a ticket and NOT fixed here.
     # The case is marked xfail(strict=True), so it fails again once the bug is fixed.
     xfail: Mapping[tuple[str, str], str] = field(default_factory=dict)
+    not_found: str = "api.error.not_found"  # i18n key of the route's 404 body
+    b_session: Mapping[str, int] = field(default_factory=dict)  # role -> status if not 404
 
 
 def _by_role(writers: int, readers: int) -> dict[str, int]:
@@ -185,6 +199,14 @@ def _message_form(_w: World, _role: str) -> dict[str, Any]:
     return {"raw": "Subject: probe\r\nFrom: a@example.com\r\n\r\nbody"}
 
 
+def _content_form(_w: World, _role: str) -> dict[str, Any]:
+    return {"text": "probe text", "subject": "probe"}
+
+
+def _content_empty(_w: World, _role: str) -> dict[str, Any]:
+    return {"subject": "probe"}
+
+
 def _check_ids(_w: World, _role: str) -> dict[str, Any]:
     return {"ids": ["spf"]}
 
@@ -196,6 +218,41 @@ def _check_free(_w: World, _role: str) -> dict[str, Any]:
 _DNS_OWN = {**_by_role(200, 200), "viewer": 403}  # client viewers never get raw DNS tools
 
 _MSG_OWN = {**_by_role(415, 415), "viewer": 403}  # client viewers never analyse messages
+
+_CONTENT_OWN = {**_by_role(422, 422), "viewer": 403}  # client viewers never analyse content
+
+_RULES_404 = "api.rules.error.not_found"
+_SELECTORS_404 = "api.dkim_selectors.error.not_found"
+_RULES_READ = {**_by_role(200, 200), "viewer": 403}  # client viewers never see rule configuration
+# Addressing a rule of tenant B: permission first (403), then the row is simply not there (404).
+_RULE_READ_ON_B = {**_by_role(404, 404), "viewer": 403}
+_RULE_WRITE_ON_B = _by_role(404, 403)
+
+
+_CUSTOM_404 = "api.custom_checks.error.not_found"
+
+
+def _custom_dry_run(w: World, _role: str) -> dict[str, Any]:
+    return {
+        "domain_id": w.domains["assigned"],
+        "kind": "dns_exists",
+        "definition": {"name": "{domain}", "rrtype": "A"},
+    }
+
+
+def _rule_sample(_w: World, _role: str) -> dict[str, Any]:
+    return {"kind": "keyword", "pattern": "probe", "sample": "probe text"}
+
+
+def _rule_form(_w: World, _role: str) -> dict[str, Any]:
+    return {
+        "name": "probe"
+    }  # incomplete on purpose: a permitted role gets a 422, nothing is stored
+
+
+def _toggle(_w: World, _role: str) -> dict[str, Any]:
+    return {"enabled": "0"}
+
 
 MATRIX: dict[tuple[str, str], Entry] = {
     # session / tenant switch (app.web.auth)
@@ -231,6 +288,9 @@ MATRIX: dict[tuple[str, str], Entry] = {
     # message analysis UI (app.web.message): tenant-level `message.analyze`
     ("GET", "/tools/message"): Entry(Kind.DNS, own=_DNS_OWN),
     ("POST", "/tools/message"): Entry(Kind.DNS, body=_message_form, own=_DNS_OWN),
+    # content analysis UI (app.web.content): tenant-level `content.analyze`
+    ("GET", "/tools/content"): Entry(Kind.DNS, own=_DNS_OWN),
+    ("POST", "/tools/content"): Entry(Kind.DNS, body=_content_form, own=_DNS_OWN),
     # DNS tools API (app.api.v1.dns_tools)
     ("POST", "/api/v1/dns/lookup"): Entry(Kind.DNS, body=_dns_lookup, own=_DNS_OWN),
     ("POST", "/api/v1/dns/reverse"): Entry(Kind.DNS, body=_dns_reverse, own=_DNS_OWN),
@@ -244,6 +304,109 @@ MATRIX: dict[tuple[str, str], Entry] = {
     # JSON, so permitted roles stop at 415 (the content type is checked after the permission);
     # the 200 path is covered by tests/api/test_message_analyze.py.
     ("POST", "/api/v1/message/analyze"): Entry(Kind.DNS, body=_dns_lookup, own=_MSG_OWN),
+    # content analysis API (app.api.v1.content): tenant-level `content.analyze`. The matrix sends
+    # a JSON body with no html/text, so permitted roles stop at 422 (decided before the analyzer);
+    # the 200 path is covered by tests/api/test_content_analyze.py.
+    ("POST", "/api/v1/content/analyze"): Entry(Kind.DNS, body=_content_empty, own=_CONTENT_OWN),
+    # content rules API (app.api.v1.rules), tenant path. The global path needs no tenant, so it is
+    # covered per role and verb by tests/api/test_rules_api.py.
+    ("GET", "/api/v1/rules"): Entry(Kind.COLLECTION, own=_RULES_READ, not_found=_RULES_404),
+    ("POST", "/api/v1/rules"): Entry(
+        Kind.COLLECTION, body=_smuggle_json, smuggle=_by_role(422, 403), not_found=_RULES_404
+    ),
+    ("POST", "/api/v1/rules/test"): Entry(
+        Kind.DNS, body=_rule_sample, own=_by_role(200, 403), not_found=_RULES_404
+    ),
+    ("GET", "/api/v1/rules/{rule_id}"): Entry(Kind.RULE, own=_RULE_READ_ON_B, not_found=_RULES_404),
+    ("PATCH", "/api/v1/rules/{rule_id}"): Entry(
+        Kind.RULE, body=_rename, own=_RULE_WRITE_ON_B, not_found=_RULES_404
+    ),
+    ("DELETE", "/api/v1/rules/{rule_id}"): Entry(
+        Kind.RULE, own=_RULE_WRITE_ON_B, not_found=_RULES_404
+    ),
+    # DKIM selectors API (app.api.v1.dkim_selectors), tenant path. The global path needs no
+    # tenant, so it is covered per role and verb by tests/api/test_dkim_selectors_api.py.
+    ("GET", "/api/v1/dkim-selectors"): Entry(
+        Kind.COLLECTION, own=_RULES_READ, not_found=_SELECTORS_404
+    ),
+    ("POST", "/api/v1/dkim-selectors"): Entry(
+        Kind.COLLECTION, body=_smuggle_json, smuggle=_by_role(422, 403), not_found=_SELECTORS_404
+    ),
+    ("GET", "/api/v1/dkim-selectors/{selector_id}"): Entry(
+        Kind.RULE, own=_RULE_READ_ON_B, not_found=_SELECTORS_404
+    ),
+    ("PATCH", "/api/v1/dkim-selectors/{selector_id}"): Entry(
+        Kind.RULE, body=_rename, own=_RULE_WRITE_ON_B, not_found=_SELECTORS_404
+    ),
+    ("DELETE", "/api/v1/dkim-selectors/{selector_id}"): Entry(
+        Kind.RULE, own=_RULE_WRITE_ON_B, not_found=_SELECTORS_404
+    ),
+    # custom checks API (app.api.v1.custom_checks), tenant path: same permissions as the content
+    # rules API. The global path needs no tenant, so it is covered per role and verb by
+    # tests/api/test_custom_checks_api.py. `/test` (dry run) needs `rules.read` and `check.run` on
+    # the domain of its body, here an assigned tenant A domain.
+    ("GET", "/api/v1/custom-checks"): Entry(
+        Kind.COLLECTION, own=_RULES_READ, not_found=_CUSTOM_404
+    ),
+    ("POST", "/api/v1/custom-checks"): Entry(
+        Kind.COLLECTION, body=_smuggle_json, smuggle=_by_role(422, 403), not_found=_CUSTOM_404
+    ),
+    ("POST", "/api/v1/custom-checks/test"): Entry(
+        Kind.DNS, body=_custom_dry_run, own=_RULES_READ, not_found=_CUSTOM_404
+    ),
+    ("GET", "/api/v1/custom-checks/{custom_check_id}"): Entry(
+        Kind.RULE, own=_RULE_READ_ON_B, not_found=_CUSTOM_404
+    ),
+    ("PATCH", "/api/v1/custom-checks/{custom_check_id}"): Entry(
+        Kind.RULE, body=_rename, own=_RULE_WRITE_ON_B, not_found=_CUSTOM_404
+    ),
+    ("DELETE", "/api/v1/custom-checks/{custom_check_id}"): Entry(
+        Kind.RULE, own=_RULE_WRITE_ON_B, not_found=_CUSTOM_404
+    ),
+    # content rules UI (app.web.rules). Reads need `rules.read`, every other route `rules.manage`
+    # on the tenant path; the global tab is covered by tests/web/test_rules_ui.py. `POST /rules`
+    # (create) and `/rules/test` take no rule id; the permitted roles stop at 422 / 200.
+    # With no usable tenant, an instance admin lands on the global tab (no tenant B data).
+    ("GET", "/rules"): Entry(Kind.COLLECTION, own=_RULES_READ, b_session={"instance_admin": 200}),
+    ("GET", "/rules/new"): Entry(Kind.COLLECTION, own=_by_role(200, 403)),
+    ("POST", "/rules"): Entry(Kind.DNS, body=_rule_form, own=_by_role(422, 403)),
+    ("POST", "/rules/{rule_id}/edit"): Entry(Kind.RULE, body=_rule_form, own=_RULE_WRITE_ON_B),
+    ("GET", "/rules/test"): Entry(Kind.DNS, own=_by_role(200, 403)),
+    ("POST", "/rules/test"): Entry(Kind.DNS, body=_rule_sample, own=_by_role(200, 403)),
+    ("GET", "/rules/{rule_id}/edit"): Entry(Kind.RULE, own=_RULE_WRITE_ON_B),
+    ("POST", "/rules/{rule_id}/toggle"): Entry(Kind.RULE, body=_toggle, own=_RULE_WRITE_ON_B),
+    ("POST", "/rules/{rule_id}/delete"): Entry(Kind.RULE, own=_RULE_WRITE_ON_B),
+    # DKIM selectors UI (app.web.dkim_selectors): same permissions as the content rules UI.
+    ("GET", "/dkim-selectors"): Entry(
+        Kind.COLLECTION, own=_RULES_READ, b_session={"instance_admin": 200}
+    ),
+    ("GET", "/dkim-selectors/new"): Entry(Kind.COLLECTION, own=_by_role(200, 403)),
+    ("POST", "/dkim-selectors"): Entry(Kind.DNS, body=_rule_form, own=_by_role(422, 403)),
+    ("POST", "/dkim-selectors/{selector_id}/edit"): Entry(
+        Kind.RULE, body=_rule_form, own=_RULE_WRITE_ON_B
+    ),
+    ("GET", "/dkim-selectors/{selector_id}/edit"): Entry(Kind.RULE, own=_RULE_WRITE_ON_B),
+    ("POST", "/dkim-selectors/{selector_id}/toggle"): Entry(
+        Kind.RULE, body=_toggle, own=_RULE_WRITE_ON_B
+    ),
+    ("POST", "/dkim-selectors/{selector_id}/delete"): Entry(Kind.RULE, own=_RULE_WRITE_ON_B),
+    # custom checks UI (app.web.custom_checks): same permissions as the content rules UI; the dry
+    # run (`/test`) needs `rules.read`, so permitted roles stop at 422 (no domain in the body).
+    # The global tab is covered by tests/web/test_custom_checks_ui.py.
+    ("GET", "/custom-checks"): Entry(
+        Kind.COLLECTION, own=_RULES_READ, b_session={"instance_admin": 200}
+    ),
+    ("GET", "/custom-checks/new"): Entry(Kind.COLLECTION, own=_by_role(200, 403)),
+    ("POST", "/custom-checks"): Entry(Kind.DNS, body=_rule_form, own=_by_role(422, 403)),
+    ("POST", "/custom-checks/test"): Entry(Kind.DNS, body=_rule_form, own=_CONTENT_OWN),
+    ("POST", "/custom-checks/{custom_check_id}/edit"): Entry(
+        Kind.RULE, body=_rule_form, own=_RULE_WRITE_ON_B
+    ),
+    ("GET", "/custom-checks/{custom_check_id}/edit"): Entry(Kind.RULE, own=_RULE_WRITE_ON_B),
+    ("POST", "/custom-checks/{custom_check_id}/toggle"): Entry(
+        Kind.RULE, body=_toggle, own=_RULE_WRITE_ON_B
+    ),
+    ("POST", "/custom-checks/{custom_check_id}/delete"): Entry(Kind.RULE, own=_RULE_WRITE_ON_B),
     # DKIM SSE streams (app.web.checks_stream): check.run on the domain / dns.tools (free).
     # The free route needs `?name=`; without it permitted roles get 422 (decided before streaming).
     ("GET", "/domains/{domain_id}/authentication"): Entry(Kind.DOMAIN),
@@ -275,6 +438,7 @@ TARGETS: dict[Kind, tuple[str, ...]] = {
     Kind.SESSION: ("own", "b_session"),
     Kind.SWITCH: ("own", "b_session"),
     Kind.DNS: ("own", "b_session"),
+    Kind.RULE: ("b_rule", "b_session"),
 }
 
 
@@ -453,10 +617,10 @@ def _expected(case: Case) -> int:
         return 404  # every role, every verb, every cross-tenant or unassigned target
     if entry.kind is Kind.COLLECTION:
         if case.target == "b_session":
-            return 404
+            return entry.b_session.get(case.role, 404)
         table = entry.own if case.target == "own" else entry.smuggle
         return table[case.role]
-    if entry.kind is Kind.DNS:
+    if entry.kind in (Kind.DNS, Kind.RULE):
         return 404 if case.target == "b_session" else entry.own[case.role]
     if entry.kind is Kind.LANDING:
         return 200
@@ -465,7 +629,73 @@ def _expected(case: Case) -> int:
     return 404  # SWITCH: tenant B is not a membership of any tenant A user
 
 
+def b_rule(w: World) -> ContentRuleRecord:
+    """Tenant B's private content rule, created on first use. Its name holds a tenant B secret, so
+    `leaks` catches it in any response or log line. The world baseline does not cover rules."""
+    w.db.expire_all()
+    repository = repo_for(TenantContext(w.tenants["b"], w.users["b_owner"]), w.db).content_rules
+    for existing in repository.list(limit=MAX_LIMIT):
+        if existing.scope == "tenant":
+            return existing
+    created = repository.create(
+        {
+            "name": f"{B_TENANT_NAME} private rule",
+            "kind": "keyword",
+            "pattern": "b-private-pattern",
+            "weight": 1,
+            "category": "spam",
+            "severity": "low",
+            "title": "B private title",
+        }
+    )
+    w.db.commit()
+    return created
+
+
+def b_selector(w: World) -> DkimSelectorRecord:
+    """Tenant B's private DKIM selector, created on first use. Its notes hold a tenant B secret, so
+    `leaks` catches it in any response or log line. The world baseline does not cover selectors."""
+    w.db.expire_all()
+    repository = repo_for(TenantContext(w.tenants["b"], w.users["b_owner"]), w.db).dkim_selectors
+    for existing in repository.list(limit=MAX_LIMIT):
+        if existing.scope == "tenant":
+            return existing
+    created = repository.create(
+        {"selector": "b-private", "notes": f"{B_TENANT_NAME} private selector"}
+    )
+    w.db.commit()
+    return created
+
+
+def b_custom_check(w: World) -> CustomCheckRecord:
+    """Tenant B's private custom check, created on first use. Its name holds a tenant B secret, so
+    `leaks` catches it in any response or log line. The world baseline does not cover these."""
+    w.db.expire_all()
+    repository = repo_for(TenantContext(w.tenants["b"], w.users["b_owner"]), w.db).custom_checks
+    for existing in repository.list(limit=MAX_LIMIT):
+        if existing.scope == "tenant":
+            return existing
+    created = repository.create(
+        {
+            "check_key": "b.private",
+            "name": f"{B_TENANT_NAME} private check",
+            "kind": "dns_exists",
+            "definition": {"name": "_b-private.{domain}", "rrtype": "TXT"},
+            "severity": "low",
+            "remediation_text": {"en": "B private", "it": "B privato"},
+        }
+    )
+    w.db.commit()
+    return created
+
+
 def _path(w: World, case: Case) -> str:
+    if "{custom_check_id}" in case.leaf.path:
+        return case.leaf.path.replace("{custom_check_id}", str(b_custom_check(w).id))
+    if "{rule_id}" in case.leaf.path:
+        return case.leaf.path.replace("{rule_id}", str(b_rule(w).id))
+    if "{selector_id}" in case.leaf.path:
+        return case.leaf.path.replace("{selector_id}", str(b_selector(w).id))
     target_domain = {
         "b_domain": "secret",
         "b_session": "secret",
@@ -506,6 +736,17 @@ def _check_case(world: World, logs: pytest.LogCaptureFixture, case: Case) -> Non
     entry = case.entry
     assert entry is not None
     before_a, before_b = world.state("a"), world.state("b")
+    rule_before = b_rule(world) if case.leaf.path.startswith(("/api/v1/rules", "/rules")) else None
+    custom_before = (
+        b_custom_check(world)
+        if case.leaf.path.startswith(("/api/v1/custom-checks", "/custom-checks"))
+        else None
+    )
+    selector_before = (
+        b_selector(world)
+        if case.leaf.path.startswith(("/api/v1/dkim-selectors", "/dkim-selectors"))
+        else None
+    )
     tenant = "b" if case.target.startswith("b_session") else "a"
     fresh = entry.kind in (Kind.SESSION, Kind.SWITCH)  # these consume/rotate the session
     body = entry.body(world, case.role) if entry.body is not None else None
@@ -525,10 +766,16 @@ def _check_case(world: World, logs: pytest.LogCaptureFixture, case: Case) -> Non
     if case.role == "anon" and response.status_code == 303:
         assert response.headers["location"].startswith("/login?next=")
     if api and response.status_code == 404:
-        assert response.json() == {"detail": t("api.error.not_found", "en")}
+        assert response.json() == {"detail": t(entry.not_found, "en")}
 
     after_b = world.state("b")
     assert after_b == before_b, "tenant B changed"
+    if rule_before is not None:
+        assert b_rule(world) == rule_before, "tenant B's rule changed"
+    if custom_before is not None:
+        assert b_custom_check(world) == custom_before, "tenant B's custom check changed"
+    if selector_before is not None:
+        assert b_selector(world) == selector_before, "tenant B's selector changed"
     after_a = world.state("a")
     if case.target == "smuggle" and response.status_code == 303:
         # The UI create ignores the smuggled tenant_id: the domain lands in tenant A only.

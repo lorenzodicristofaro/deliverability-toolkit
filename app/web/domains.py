@@ -30,6 +30,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from app.core.domain_names import MAX_INPUT_LENGTH
 from app.core.permissions import Action, DomainResource, Principal, TenantResource, can
 from app.core.tenancy import TenantContext
+from app.repositories.base import parse_id
 from app.services.domains import (
     DomainService,
     DomainServiceError,
@@ -43,7 +44,6 @@ from app.web.templating import read_form, render
 
 router = APIRouter()
 
-_MAX_ID_DIGITS: Final = 19
 _CONTROL_CATEGORIES: Final = frozenset({"Cc", "Cs"})
 NAME_FIELD: Final = "name"
 
@@ -146,9 +146,7 @@ WebDep = Annotated[Web, Depends(_web)]
 
 def _domain_id(value: str) -> int | None:
     """Path id as a positive int; anything else is None (answered as 404, like a missing id)."""
-    if not value.isascii() or not value.isdigit() or len(value) > _MAX_ID_DIGITS:
-        return None
-    return int(value)
+    return parse_id(value)
 
 
 def clean_field(form: dict[str, list[str]], field: str) -> str | None:

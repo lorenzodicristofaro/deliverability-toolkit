@@ -3,6 +3,9 @@
 {% if kind == "row" %}
 <div class="dkim-row dkim-row-{{ row.state }}" data-testid="dkim-row" data-selector="{{ row.selector|visible }}" data-state="{{ row.state }}">
   <h4 class="dns-wrap">{{ row.selector|visible }}</h4>
+  {% if row.provider %}
+  <p class="dkim-provider">{{ t("checks.dkim.row.provider") }} <span class="dns-wrap" data-testid="dkim-provider">{{ row.provider|visible }}</span></p>
+  {% endif %}
   <p class="dns-state dns-state-{{ "ok" if row.state == "found" else ("absent" if row.state == "not_found" else "failure") }}"{% if row.state == "error" %} role="alert"{% endif %}>
     {{ {"found": t("checks.dkim.row.found"), "not_found": t("checks.dkim.row.not_found"), "error": t("checks.dkim.row.error")}[row.state] }}
     {% if row.reason %}<code class="dns-reason">{{ row.reason|visible }}</code>{% endif %}
@@ -22,7 +25,7 @@
 {% else %}
 <div class="dkim-done" data-testid="dkim-done" data-complete="{{ "1" if complete else "0" }}" data-status="{{ status }}">
   <p>{{ t("checks.dkim.done", probed=summary.probed, found=summary.found, not_found=summary.not_found, errors=summary.errors) }}</p>
-  {% if not complete %}<p role="alert">{{ t("checks.dkim.deadline") }}</p>{% endif %}
+  {% if deadline %}<p role="alert">{{ t("checks.dkim.deadline") }}</p>{% endif %}
   <ul class="dkim-findings">
   {% for f in findings %}
     <li data-code="{{ f.code }}" data-severity="{{ f.severity }}">

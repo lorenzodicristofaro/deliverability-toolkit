@@ -60,7 +60,7 @@ MSG_REPLY_TO_UNUSABLE                    info     Reply-To has no usable address
 MSG_LIST_UNSUBSCRIBE_MISSING             info     no List-Unsubscribe
 MSG_LIST_UNSUBSCRIBE_NO_ONECLICK         info     List-Unsubscribe without RFC 8058 post
 MSG_ENCODED_HEADER_BROKEN                low      undecodable RFC 2047 encoded-word
-MSG_MIME_TRUNCATED                       low      MIME walk stopped at a cap
+MSG_MIME_TRUNCATED                       low      MIME walk stopped at a cap (detail)
 MSG_NO_TEXT_PART                         low      no text/plain part
 MSG_PARSER_LIMIT                         medium   input rejected or capped (error-class)
 ======================================== ======== =========================================
@@ -478,6 +478,13 @@ def _other_part(block: HeaderBlock, alignment: AlignmentReport, acc: _Acc) -> No
         acc.add("MSG_ENCODED_HEADER_BROKEN", "low", {"count": len(broken)})
 
 
+_MIME_CAP_LIMITS = (
+    ("too_many_parts", "mime_parts"),
+    ("mime_depth_exceeded", "mime_depth"),
+    ("boundary_too_long", "mime_boundary"),
+)
+
+
 def _mime_part(mime: MimeSummary, acc: _Acc) -> None:
     if mime.truncated:
         acc.add("MSG_MIME_TRUNCATED", "low")
@@ -525,8 +532,15 @@ def build_message_findings(
         limits.append("authentication_results")
     if any(w.code == TOO_MANY_WARNINGS for w in block.warnings):
         limits.append("warnings")
-    if mime is not None and any(w.code == "too_many_parts" for w in mime.warnings):
-        limits.append("mime_parts")
+    if mime is not None:
+        # One rule: any MIME cap (parts, depth, boundary length) is error-class.
+        mime_codes = {w.code for w in mime.warnings}
+        for warning_code, label in _MIME_CAP_LIMITS:
+            if warning_code in mime_codes:
+                limits.append(label)
+        if mime.truncated and not (mime_codes & {c for c, _ in _MIME_CAP_LIMITS}):
+            # The warning list is capped, so the specific cap warning may have been dropped.
+            limits.append("mime")
     if limits:
         acc.add("MSG_PARSER_LIMIT", "medium", {"limits": ", ".join(dict.fromkeys(limits))})
         acc.skip("parser")

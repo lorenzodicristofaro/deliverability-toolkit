@@ -671,3 +671,76 @@ def test_no_english_tokens_are_substituted_into_text(code: str) -> None:
     assert "not_stated" not in "".join(
         f"{EN[k]}{IT[k]}" for k in EN if k.startswith(f"finding.{code}.")
     )
+
+
+def _nested_body(depth: int) -> str:
+    """Body under boundary ``b0`` nesting multipart containers ``depth`` levels deep."""
+    head = "".join(
+        f"--b{i}\r\nContent-Type: multipart/mixed; boundary=b{i + 1}\r\n\r\n" for i in range(depth)
+    )
+    return head + f"--b{depth}\r\nContent-Type: text/plain\r\n\r\nx\r\n"
+
+
+_MANY_PARTS = (
+    "".join("--b\r\nContent-Type: text/plain\r\n\r\nx\r\n" for _ in range(250)) + "--b--\r\n"
+)
+_FEW_PARTS = "--b\r\nContent-Type: text/plain\r\n\r\nx\r\n--b--\r\n"
+_MIXED = ('Content-Type: multipart/mixed; boundary="b"',)
+
+# (id, add, body, capped limits); depth bodies replace the whole message body
+MIME_CAP_CASES = [
+    ("neither", _MIXED, _FEW_PARTS, ()),
+    ("parts", _MIXED, _MANY_PARTS, ("mime_parts",)),
+    ("depth", ('Content-Type: multipart/mixed; boundary="b0"',), _nested_body(30), ("mime_depth",)),
+    (
+        "both",
+        _MIXED,
+        _nested_body(30).replace("--b0", "--b") + _MANY_PARTS,
+        ("mime_parts", "mime_depth"),
+    ),
+    (
+        "boundary_too_long",
+        ('Content-Type: multipart/mixed; boundary="' + "b" * 100 + '"',),
+        "x",
+        ("mime_boundary",),
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    ("add", "body", "limits"),
+    [c[1:] for c in MIME_CAP_CASES],
+    ids=[c[0] for c in MIME_CAP_CASES],
+)
+def test_mime_cap_is_error_class(add: tuple[str, ...], body: str, limits: tuple[str, ...]) -> None:
+    r = run(("Content-Type",), add, body=body)
+    found = codes(r)
+    if limits == ():
+        assert r.status != "error" and "MSG_PARSER_LIMIT" not in found
+        assert "MSG_MIME_TRUNCATED" not in found
+        return
+    assert r.status == "error"
+    assert "MSG_PARSER_LIMIT" in found and "MSG_MIME_TRUNCATED" in found
+    assert "parser" in r.unevaluated
+    text = " ".join(str(f.params) for f in r.findings if f.code == "MSG_PARSER_LIMIT")
+    for label in limits or ():
+        assert label in text
+
+
+_BAD_PART = "--b\r\nContent-Type: ;;;\r\nContent-Transfer-Encoding: ???\r\n\r\nx\r\n"
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        # warnings list full before the depth cap is reached
+        "".join(_BAD_PART for _ in range(150)) + _nested_body(30).replace("--b0", "--b"),
+        # warnings list full, then the part cap
+        "".join(_BAD_PART for _ in range(250)) + "--b--\r\n",
+    ],
+    ids=["warnings_full_then_depth", "warnings_full_then_parts"],
+)
+def test_mime_cap_after_warning_list_is_full(body: str) -> None:
+    r = run(("Content-Type",), _MIXED, body=body)
+    assert r.status == "error"
+    assert "MSG_PARSER_LIMIT" in codes(r)

@@ -44,6 +44,20 @@ A check is a class with a string `id` and `async run(ctx: CheckContext, target: 
   one selector is found, the status follows the findings. If none is found and any failed, the
   status is `error`. `DKIM_NO_SELECTOR_FOUND` appears only when every selector was `not_found`.
   A probe cut short by the stream deadline is `error`.
+  An empty list (every selector disabled) probes nothing: status `error` with
+  `DKIM_NO_SELECTORS_PROBED`, never a verdict about the domain. A list cut by the probe cap is
+  incomplete: status `error` with `DKIM_SELECTORS_CAPPED`, and `data["dropped"]` gives the number.
+- **DKIM selector list.** Domain checks (REST and the SSE stream) probe the enabled global rows of
+  `dkim_selectors` plus the active tenant's enabled rows, deduplicated and sorted by name, at most
+  250 per run (`app/services/dkim_probe_selectors.py`). With only the synced seed that is exactly
+  the seed list. If the global table has no rows at all (a seed sync that failed or never ran),
+  the seed file replaces the global rows. Free checks (`/api/v1/checks/free`, `/tools/dkim/stream`)
+  and the CLI `check` have no tenant and always use the seed file. The list is resolved before any
+  DNS query, and the database connection is released first. Admins may keep at most 50 rows per
+  tenant and 200 global rows. Every role that can see a domain, client viewer included, gets each
+  selector's name and provider in the DKIM result (maintainer decision 2026-11-10, M5-23b); `notes`
+  never leaves the admin surfaces. Inside a tenant, an enabled tenant row's non-empty provider wins
+  over a same-name global row; free checks and the CLI show seed providers.
 - `data["report_destinations"]` (DMARC) lists each report URI with its authorization state.
   `data["selectors"]` (DKIM) lists each probed selector with state `found`, `not_found` or `error`.
 
@@ -124,6 +138,8 @@ module's `CODES`; `tests/checks/test_acceptance_m3.py` requires en and it text f
 | `DKIM_CNAME_LOOP` | medium | none |
 | `DKIM_CNAME_CHAIN_LONG` | low | none (we follow at most 8 hops) |
 | `DKIM_PROBE_ERRORS` | low | none |
+| `DKIM_NO_SELECTORS_PROBED` | low | none |
+| `DKIM_SELECTORS_CAPPED` | low | none |
 
 For DKIM the finding texts cite the RFCs without section numbers, so none are given here
 (`unverified`: the maintainer should add the sections after checking the RFC text).
@@ -185,7 +201,28 @@ newline (added by `typer.echo`); the REST body is the same bytes without the new
   admin and analyst; never a client viewer. Deniable with `{"dns.tools": false}`.
 - Anonymous requests get 401 (or a redirect to login in the browser); an invisible domain (missing,
   another tenant's, or unassigned to a client viewer) gets 404. A denied request sends no DNS
-  query. The CLI has no permission model: its trust boundary is shell access to the instance.
+  query. The CLI `check` and `analyze` commands have no permission model: their trust boundary is
+  shell access to the instance.
+
+### CLI commands that use tenant data
+
+`app/cli/tenant_scope.py` is for commands that need tenant data (first user: M5-17). Such a
+command requires `--tenant-id N --user-id M`; there is no default tenant and no system context. The
+helper connects with the app configuration and builds the principal and `TenantContext` the same
+way as the web layer, then runs the same `can()`. A denied command does not run.
+
+These options select who the command acts as. They are **not authentication**: anyone with shell
+access and the database configuration can name any user, and the database configuration alone
+already gives full access to the data. The trust boundary remains shell access. The permission
+check keeps the CLI consistent with the web (for example, a client viewer cannot run an action
+the web denies them); it does not protect the instance from its operator.
+
+| Code | Meaning |
+|---|---|
+| 0 | the command ran (the command may define further result codes, as `check` does) |
+| 2 | could not evaluate: missing or invalid configuration, database unreachable, schema not migrated, or a database driver error while the command runs |
+| 64 | usage error: missing option, or an id that is not a plain decimal in 1..2147483647 |
+| 77 | permission denied: unknown or inactive user, no membership in that tenant, or a role or toggle without the permission (one message for all, like the web's 404) |
 
 ## How to add a check
 

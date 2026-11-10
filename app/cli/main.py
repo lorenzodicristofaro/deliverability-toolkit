@@ -14,6 +14,7 @@ from typer.core import TyperGroup
 
 from app.cli.analyze import analyze_command
 from app.cli.check import EXIT_USAGE, check_command
+from app.cli.content import content_command
 from app.core.i18n import t
 
 
@@ -51,6 +52,7 @@ def _root() -> None:
 
 app.command("check", help=t("cli.check.help"))(check_command)
 app.command("analyze", help=t("cli.analyze.help"))(analyze_command)
+app.command("content", help=t("cli.content.help"))(content_command)
 
 
 def main() -> None:

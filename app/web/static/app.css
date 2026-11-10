@@ -119,3 +119,5 @@ main:focus { outline: none; }
 .dns-records { border-collapse: collapse; width: 100%; table-layout: fixed; }
 .dns-records th, .dns-records td { border: 1px solid var(--border); padding: 0.25rem 0.5rem; text-align: left; vertical-align: top; }
 .dns-wrap { overflow-wrap: anywhere; white-space: pre-wrap; }
+/* Custom check remediation (M5-24): plain text, line breaks kept, runs of spaces collapsed. */
+.remediation-text { overflow-wrap: anywhere; white-space: pre-line; }

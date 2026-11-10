@@ -98,11 +98,46 @@ Carried over from M0-07 QA:
   - [x] M4-14 acceptance tests + docs/HEADERS.md
 
 ## M5 — Content analyzer + admin rules
-- [ ] Structural HTML/text checks, link analysis, size, List-Unsubscribe/One-Click
-- [ ] `content_rules` in DB with seed, weights, categories, language
-- [ ] Admin UI: global vs tenant rules, DKIM selectors, "test on sample" with ReDoS guard
-- [ ] Declarative custom checks (DNS/HTTP) with severity and remediation text
+- [x] Structural HTML/text checks, link analysis, size, List-Unsubscribe/One-Click
+- [x] `content_rules` in DB with seed, weights, categories, language
+- [x] Admin UI: global vs tenant rules, DKIM selectors, "test on sample" with ReDoS guard
+- [x] Declarative custom checks (DNS only) with severity and remediation text
 - Accept: rules editable without redeploy; regex timeout enforced by test.
+  Status: **accepted 2026-11-10** — tests/content/test_acceptance_m5.py; full suite green on PostgreSQL locally and in dev CI. Report: docs/reports/M5.md
+- Scope note (GM): custom checks cover DNS kinds only in M5; the HTTP-fetch kind moves to M7 (needs the guarded client). M5-22 updates this block and ARCHITECTURE.md.
+- Tickets (docs/tickets/):
+  - [x] M5-01 CSRF form cap vs localized 413 (opus)
+  - [x] M5-02 MIME cap consistency, any capped input is error-class
+  - [x] M5-03 ReDoS-safe regex runner with enforced timeout (opus)
+  - [x] M5-04 permissions content.analyze, rules.manage global/tenant (opus)
+  - [x] M5-05 content_rules model + migration + repository (opus)
+  - [x] M5-05b content_rules index rework, SQLite planner error (opus)
+  - [x] M5-06 dkim_selectors model + migration + repository + seed sync (opus)
+  - [x] M5-07 custom_checks model + migration + repository (opus)
+  - [x] M5-08 HTML/text structural parser
+  - [x] M5-09 static link analysis + url_shorteners seed (no network)
+  - [x] M5-10 List-Unsubscribe / One-Click analysis (RFC 2369, RFC 8058)
+  - [x] M5-11 subject analysis
+  - [x] M5-12 content_rules seed + sync
+  - [x] M5-13 content rules engine (opus)
+  - [x] M5-14 content analysis service + CONTENT_* findings
+  - [x] M5-15 REST POST /api/v1/content/analyze
+  - [x] M5-15b test DB fixtures: migrate once per session (opus)
+  - [x] M5-15c test suite speed: seed sync, parallel CI jobs, docs-only pushes (opus)
+  - [x] M5-15d PostgreSQL on tmpfs in CI (measured, no gain, reverted)
+  - [x] M5-16 web UI content analyzer
+  - [x] M5-17a CLI operator tenant and user selection (opus)
+  - [x] M5-17 CLI `content`
+  - [x] M5-17b ids above 32 bits give a 500 on PostgreSQL (opus)
+  - [x] M5-18 content rules admin service + REST + test on sample (opus)
+  - [x] M5-19 content rules admin UI
+  - [x] M5-20 DKIM selectors admin service + REST + check wiring (opus)
+  - [x] M5-21 DKIM selectors admin UI
+  - [x] M5-22 custom checks schema + DNS evaluator (http_fetch rejected, deferred to M7)
+  - [x] M5-23 custom checks admin service + REST + run wiring (opus)
+  - [x] M5-23b DKIM provider visible to client viewers (opus)
+  - [x] M5-24 custom checks admin UI
+  - [x] M5-25 acceptance tests + docs/CONTENT.md
 
 ## M6 — ESP profiles
 - [ ] YAML schema + CI validation, loader, per-domain ESP assignment
@@ -113,6 +148,7 @@ Carried over from M0-07 QA:
 
 ## M7 — Monitoring
 - [ ] Guarded outbound client (SSRF protection) + tests
+- [ ] Custom check kind http_fetch via guarded client
 - [ ] DNSBL/URIBL engine with refusal detection, `dnsbl.yaml` seed
 - [ ] Scheduler, history, DNS snapshots + diff, trend charts
 - [ ] Alerts: email, webhook, Slack/Teams
@@ -136,12 +172,53 @@ Carried over from M0-07 QA:
 - [ ] Security review checklist, dependency/license audit, v0.1.0 release
 
 ## Follow-ups (post-M1)
+- [ ] Custom checks (M5-23 QA nits): "id order" (app/services/custom_checks_admin.py:172) vs "creation order" (app/api/v1/checks.py:12), pick one wording; `with_checks` DuplicateCheckError at app/api/v1/checks.py:69 would 500 the whole `all` run (unreachable today: catch it or comment why); tests/api/test_custom_checks_api.py:569 viewer run test should assert pattern/range text never appears in the response.
+- [ ] DKIM provider nits (M5-23b QA): `ProbeSelectors.providers` is a MappingProxyType in a frozen dataclass, so hashing it raises TypeError (app/services/dkim_probe_selectors.py:50-57; add `field(hash=False)` or a comment); CLI `--selector` gets seed providers implicitly via `providers=None` (app/cli/check.py:97).
+- [ ] Flaky timing test (GM, 2026-11-10): tests/parsers/test_received.py:365 `test_scanners_linear` asserts wall-clock < 1.0 s; it failed once ([keywords]) while two full suites ran at once, passes alone. Use a relative bound or an operation counter instead of wall-clock (same pattern at :384).
+- [ ] DKIM selectors (M5-20 QA): seed sync adoption at app/services/seed_sync.py:232 silently replaces the admin's provider and record_type (only `enabled` and `notes` survive); add one log line per adoption (id only) and assert those fields in tests/services/test_seed_sync.py:274. Free checks and CLI `check` stay on the seed, so a global selector edit does not affect them. A list near the 250 cap can hit the API's 15 s `CHECK_TIMEOUT` (`error`) where SSE has 60 s. Maintainer decision 2026-11-10 (overrules the earlier GM decision): a client viewer sees the selector name and the provider (not notes, which stay admin-only) in DKIM results for its assigned domain; see M5-23b.
+- [ ] Rules admin UI (M5-19 QA): a broken stored rule cannot be disabled by toggle or by an unchanged edit, because the service re-validates its pattern on enabled-only updates (toggle gives a 422; a tenant row can be deleted, a broken seeded global row can only be edited with a replacement pattern). Toggle, delete and error responses return to page 1. Every list view reads all rows (about 0.65 s at 10003 rows on SQLite, no per-tenant cap). The localized 413 stops at 1 MiB because `register_form_cap` matches exact paths only. `/rules/test` has no language input (the page says so).
+- [ ] Rules admin (M5-18 QA): a tenant admin can fill the process-wide 4-slot regex pool through `/rules/test` and push other tenants' analyses to `busy`/`not_evaluated` (same exposure as `/content/analyze`; pairs with the safe_regex per-tenant fairness and rate-limit items). app/services/content_rules_admin.py imports private helpers (`_clean_values`, `_text`, `_evidence`, `_find_keyword`, `_fold`, `_keyword_is_valid`); make them public. GM decisions: DELETE of a seeded global row is 409 (disable it instead; a tombstone would need a migration); any accepted PATCH on a seeded row pins it against seed updates, even with unchanged values.
+- [ ] Id overflow leftovers (M5-17b QA): the comment at app/cli/tenant_scope.py:45 still says `coerce_id` allows 63 bits. `app/api/v1` has no `__init__.py`, so `pkgutil.walk_packages` at tests/tenancy/test_matrix.py:95 finds none of its 6 modules and `declared_endpoints` sees 30 of 45 endpoints; no route escapes today because the main guard reads the route table, but the self-test is weaker than the test_matrix.py docstring and docs/TESTING.md:57 claim. tests/tenancy/test_id_range.py guards are name-based (limits in its docstring).
+- [ ] CLI content (M5-17 QA): make `_fail`, `read_bounded` and `InputRejected` shared public helpers (copied in app/cli/content.py, comments at :52 and :67), with the M4-13 item. `dtk analyze - <&-` gives a traceback and exit 1 because `sys.stdin` is None (app/cli/analyze.py:56; fixed for `content`). docs/CONTENT.md (M5-25) must state that `dtk content --lang` is the content language hint and `--output-lang` the output language, unlike `check` and `analyze`, and that a run without `--eml` has List-Unsubscribe `not_evaluated`, so `complete` is false and it exits 1.
+- [ ] CLI tenant scope (M5-17a QA): `_load` in app/cli/tenant_scope.py duplicates private `_build`/`_with_assigned_domains` from app/web/deps.py (a parity test guards it for tenant-level actions); extract a public `load_tenant_principal(db, user, tenant_id)` in app/repositories/principal.py. It also imports `_fail` from app/cli/check.py (shared public helper, with the M4-13 item). A driver error's class name is logged at INFO, so its cause is invisible until the CLI configures logging. A config error without `name` prints the raw key.
+- [ ] Content UI nit (M5-16 QA): matched rows in app/web/templates/content/_result.html show the raw r.status in <code>; use a localized label.
+- [ ] Test DB fixtures (M5-15b QA nits): tests/test_db_isolation.py:90 never sets `_pg.fingerprint`, so removing `_require_vetted` from `_truncate_postgres` survives locally (set a non-None fingerprint); the schema fingerprint at tests/conftest.py:31 omits constraints, defaults and nullability; the "never both fixtures" failure at tests/conftest.py:181 has no pinned test; the .github/workflows/ci.yml:39 comment still says only `db_url`; the lint-test job has no `timeout-minutes`.
+- [ ] Test collection fixtures (M5-15c QA): the `seed_table_access` failure path at tests/conftest.py:243 is not pinned (mutant `if False:` survives); add a self-test that a recorded statement fails the test. Backend selection at tests/conftest.py:202-203: build both lists in one pass so a dropped test cannot go unnoticed. `SEED_TABLE_DML` at tests/conftest.py:53 misses statements starting with `WITH` or a SQL comment (app/ has no CTEs today).
+- [ ] MAINTAINER TO CHECK (M5-15c): if GitHub branch protection requires `lint-test`, replace it with `lint`, `test-sqlite`, `test-postgres`; if required, docs-only PRs stay Pending because the CI workflow is skipped.
+- [ ] Content rule targets (M5-12, GM decision 2026-11-08): add a target field to `content_rules` (subject / body; model, migration, repository, seed schema, engine) plus reply context (In-Reply-To/References) so real replies are exempt. Until then `subject_fake_reply_forward_prefix` stays disabled, and no seeded content rule is enabled.
+- [ ] content_rules seed (M5-12 QA): before `shouting_punctuation` or `all_caps_run` is enabled, reword their en/it text. "not a requirement published by a mailbox provider" is a universal claim nothing cited supports; say instead that this tool has no official source for it (locales/en.json, locales/it.json).
+- [ ] Seed sync (M5-12 QA): move `list_seeded` into GlobalContentRuleRepository and expose a public cleaner like DKIM's `clean_global_values`, replacing the subclass and the private `_clean_values` import in app/services/seed_sync.py.
+- [ ] Seed loader (M5-12 QA): duplicate YAML keys inside an entry are last-wins in the shared loader (app/dns/knowledge.py:142, all seeds); detect them. Content rule `language` gets a format check only (`zz` passes); revisit with the first non-null language.
+- [ ] Seed sync tests nit (M5-12 QA): the non-SeedSyncError startup failure cases in tests/services/test_seed_sync.py are monkeypatched; add a real DB error case. Pattern nit: `\s*` in `subject_fake_reply_forward_prefix` also matches " re : x".
+- [ ] Dev setup (M5-12): no pre-commit hook is installed in .git/hooks, so plain commits do not run it; run `uv run pre-commit install` or document it.
+- [ ] MAINTAINER TO CONFIRM (M5-12): seeded content rules `shouting_punctuation` and `all_caps_run` have no primary source, so they are unverified and disabled. Maintainer decision 2026-11-08: all seeded content rules stay disabled for now; revisit after in-depth testing.
+- [ ] Rules engine (M5-13 QA): a regex match ending exactly at the cut of a capped part still counts as `matched` (`\bfree\b` on "freedom" cut after "free"; the part is in `capped_parts` and `complete` is False). Option: treat a match ending at the cut as unconfirmed unless another ended earlier (partial, lookaheads can depend on the unseen tail). Then fix the "score is a lower bound" wording at app/services/content_rules_engine.py:50 and :160, which is no longer strictly true.
+- [ ] Rules engine nits (M5-13 QA): `TOO_MANY_MATCHES` is reachable only for a truncated result with no spans, which the real runner does not produce (:426). Word-boundary default True misses unspaced CJK keywords; `word_boundary` is engine-wide because rows have no such column. Documented `ok` gaps: NFC/NFD, dotted İ, fullwidth and zero-width evasion.
+- [ ] safe_regex (M5-13 QA): a worker is orphaned if the parent is SIGKILLed; it kept running past the 5 s rule limit (app/core/safe_regex.py:192). Add RLIMIT_CPU or PDEATHSIG.
+- [ ] safe_regex capacity (M5-13 QA): the 4-slot worker pool is process-wide, so one tenant's slow rules can cause `busy`/`not_evaluated` for other tenants; consider per-tenant fairness alongside rate limiting.
 - [ ] tests/support/test_socket_guard.py: add a string-port case `getaddrinfo("db.test", "5432")` (psycopg passes the port as str) (QA nit).
-- [ ] MIME cap consistency (M4-14 QA): exceeding the part cap gives MSG_PARSER_LIMIT + status error, but exceeding the depth cap only gives MSG_MIME_TRUNCATED (low, warn); message_findings.py:71 says any capped input is error-class. Decide one rule, align code + HEADERS.md.
+- [x] MIME cap consistency (M4-14 QA): exceeding the part cap gives MSG_PARSER_LIMIT + status error, but exceeding the depth cap only gives MSG_MIME_TRUNCATED (low, warn); message_findings.py:71 says any capped input is error-class. Decide one rule, align code + HEADERS.md.
 - [ ] M4 i18n scanner nits (M4-14 QA): 1-2 letter text ("OK", "No") passes the 3+ letter rule; `data-*` and `label` attributes not scanned; any dotted string ending in "." passes as a key prefix. Fold-bomb corpus sample trips no cap (stress sample only).
 - [ ] CLI analyze (M4-13 QA): text output omits finding evidence (check and web UI show it; add the cli.check.evidence line); status label borrows message.arc.status (add cli.analyze.status); imports private `_fail` from app.cli.check (make a shared public helper); optional rename of key not_found to cannot_read.
-- [ ] Message UI nits (M4-12 QA): MIME table first column uses `message.col.hop`; needs a part/index key. JS `data-max-bytes` is 2 MiB but no-JS/JS form posts over 1 MiB hit the CSRF 403; cap the JS at 1 MiB or fix with the CSRF follow-up.
-- [ ] Message UI (M4-12): CSRFMiddleware rejects form bodies > 1 MiB with token-in-body as 403, so no-JS pastes above ~1 MiB encoded get 403 instead of the localized 413; fix in core/csrf (raise its form cap or return 413).
+- [ ] Message UI nits (M4-12 QA): MIME table first column uses `message.col.hop`; needs a part/index key. (JS `data-max-bytes` part closed by M5-01.)
+- [x] Message UI (M4-12): CSRFMiddleware rejects form bodies > 1 MiB with token-in-body as 403, so no-JS pastes above ~1 MiB encoded get 403 instead of the localized 413; fix in core/csrf (raise its form cap or return 413). Closed by M5-01.
+- [ ] CSRF form cap nits (M5-01 QA): Content-Length `isdigit()` accepts non-ASCII digits (use isascii()) in core/csrf.py and web/message.py; oversize opted-in post holds ~3x cap (avoid join+slice copy); test-registered BIG_PATH form cap never cleaned up.
+- [ ] safe_regex nits (M5-03 QA): search_many should re-validate CompiledRule flags/pattern (or only compile_checked may build rules — M5-13/18/22 must use compile_checked); kill+reap the child if _Worker setup fails after Popen; suppress TimeoutExpired from wait() after SIGKILL; docstring: synchronous call up to ~15s, async callers use a thread pool; fix the subprocess docs citation (project runs 3.12, "3.15.2" looks wrong); rewrap ARCHITECTURE.md:204. Worker cap is per OS process (N uvicorn workers x 4).
+- [ ] MIME warning overflow (M5-02 QA): header-block warning overflow gives limit `warnings` + error, but MIME warning overflow (too_many_warnings, parse complete) gives warn; pick one rule (check TOO_MANY_WARNINGS in mime.warnings or document in HEADERS.md). Test nit: `warnings_full_then_parts` never reaches the `mime` fallback; assert the label it gets (mime_parts).
+- [ ] content_rules tests (M5-05 QA nit): add regression tests for a tenant override of a disabled seeded global row and for an uppercase seed_key ("G.ONE" → invalid_format).
+- [ ] dkim_selectors comment nit (M5-06 QA): model:86 and migration 0006:123 blame the plain tenant_id index; the partial tenant index is the cause. Fix wording.
+- [ ] custom_checks nits (M5-07 QA): DB does not check remediation_text has exactly en+it keys (repo does; document in docstring); ints over 4300 digits raise a bare ValueError from json.dumps instead of a typed `too_large` reason; if `definition` ever becomes jsonb the length CHECK no longer matches json.dumps.
+- [ ] Seed loaders (M5-09 QA): make the private helpers public (app.dns.knowledge _check_keys/_url_list…, app.core.org_domain _psl) and move seed tests to tests/knowledge.
+- [ ] MAINTAINER TO CONFIRM (M5-09): URL shorteners unverified against official pages: t.co (help.x.com returned 403), tinyurl.com, ow.ly, buff.ly, lnkd.in, is.gd, j.mp (seeds/url_shorteners.yaml). Nit: all_aligned is None (not False) when a link is known unaligned and another is unevaluated; M5-14 should use unaligned_count.
+- [ ] Content findings (M5-14 QA): internal parser failure surfaces as CONTENT_INPUT_CAPPED, whose remediation tells the user to fix the input (pairs with the MSG_SECTION_FAILED follow-up); raw reason codes appear in localized text; `{prefix}` shows the normalised "re".
+- [ ] Content parsers (M5-14 QA): add a public visible-text API from M5-08, replacing `_VisibleText` subclassing private `_Collector`; `_lookup_charset` is private.
+- [ ] tests/services/test_content_analysis.py (M5-14 QA): the socket guard does not detect an attempt whose exception is caught and ignored; a guard recording attempts, asserted empty, would close it.
+- [ ] Content visible text (M5-14 QA): text runs are joined by a space, so a word split across inline tags is not matched by rules.
+- [ ] app/parsers/content_html.py (M5-14 QA): ContentStructure `gmail_*` field names (internal, not on the wire) should be renamed to match the clip-risk wording.
+- [ ] Content API (M5-15 QA): `db.rollback()` at app/api/v1/content.py:170 runs synchronously on the event loop; a stalled PostgreSQL connection would block the loop. Use `await run_in_threadpool(db.rollback)`; no test pins it.
+- [ ] Content analysis (M5-15 QA): `analyze_content` keeps a pooled DB connection in a transaction through rule evaluation, up to about 15 s (idle-in-transaction on PostgreSQL). Release it after loading the rules (M5-14 code).
+- [ ] M4-11 message analyze route has the same Content-Length `isdigit()` pattern fixed in M5-15 with `isascii()`; extends the existing CSRF form cap nit (M5-01 QA).
+- [ ] Subject lookalikes (M5-11 QA nits): fullwidth Latin mixed with ASCII Latin (`ｐaypal`) is not flagged (FULLWIDTH prefix stripped); Letterlike Symbols excluded so `ℎello` is not flagged. Add a width-mixing / confusable fact (consider Unicode confusables data).
 - [ ] tests/tenancy World.send: add a raw-body option so the matrix can show 200 for permitted roles on raw-body routes (M4-11 QA nit).
 - [ ] Received redaction (done in M4-10: all `@` tokens masked). Remaining: `<local>` with no domain and fullwidth ＠ stay visible; Message-ID-style hop ids become None. Also a dedicated MSG_SECTION_FAILED code (en+it) instead of reusing MSG_PARSER_LIMIT, whose "exceeded limits" text misleads for internal failures.
 - [ ] Public RFC 5322 Date parser; message_findings parses Date via parse_received_values, so a valid Date with a comment containing ";" is reported MSG_DATE_INVALID (M4-09 QA). Also rename test_authserv_mismatch_lists_ids_escaped (no longer escaped).

@@ -1,9 +1,39 @@
 name: CI
 
+# Pushes and pull requests that change only these paths skip this whole workflow; a skipped
+# workflow reports nothing, neither success nor failure. Secret scanning is in secret-scan.yml,
+# which has no path filter. docs/TESTING.md is deliberately not listed, nor `docs/**`:
+# tests/tenancy/test_matrix.py reads it. A new file under docs/ runs CI until it is listed.
 on:
   pull_request:
+    paths-ignore:
+      - "*.md"
+      - "docs/tickets/**"
+      - "docs/reports/**"
+      - "docs/CHECKS.md"
+      - "docs/DNS.md"
+      - "docs/DNS_FIXTURES.md"
+      - "docs/HANDOFF.md"
+      - "docs/HEADERS.md"
+      - "docs/RELEASE.md"
+      - "docs/SETUP.md"
+      - "docs/UNBOUND.md"
+      - "docs/WORKFLOW.md"
   push:
     branches: [dev, qa, main]
+    paths-ignore:
+      - "*.md"
+      - "docs/tickets/**"
+      - "docs/reports/**"
+      - "docs/CHECKS.md"
+      - "docs/DNS.md"
+      - "docs/DNS_FIXTURES.md"
+      - "docs/HANDOFF.md"
+      - "docs/HEADERS.md"
+      - "docs/RELEASE.md"
+      - "docs/SETUP.md"
+      - "docs/UNBOUND.md"
+      - "docs/WORKFLOW.md"
 
 # Read-only token, no secrets, nothing is pushed anywhere.
 permissions:
@@ -17,8 +47,35 @@ concurrency:
 # the SHA belongs to (tags and SHAs checked with `git ls-remote` against each official repo).
 
 jobs:
-  lint-test:
+  lint:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+      # Same commands as CLAUDE.md "Commands". `--frozen` makes CI fail if uv.lock is stale.
+      - run: uv sync --frozen
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run mypy app
+
+  # The two test jobs partition the suite with --db-backend (tests/conftest.py, docs/TESTING.md):
+  # this one runs every test except the PostgreSQL params, with no database service.
+  test-sqlite:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+      - run: uv sync --frozen
+      - run: nproc  # runner CPU count, for judging whether pytest-xdist would be worth it
+      - run: uv run pytest -q --tb=short --durations=25 --db-backend=sqlite
+
+  # Only the PostgreSQL params. --db-backend=postgresql refuses to run without TEST_DATABASE_URL,
+  # so this job cannot skip everything and pass.
+  test-postgres:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
     # Ephemeral PostgreSQL for the DB tests (same tag as compose.yaml). The credentials are
     # throwaway literals valid only for this job's service container: not secrets, not reused.
     services:
@@ -36,39 +93,14 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     env:
-      # With this set, the db_url fixture also runs every DB test on PostgreSQL (tests/conftest.py).
+      # With this set, the db_url and migrated_db_url fixtures can use PostgreSQL (tests/conftest.py).
       TEST_DATABASE_URL: postgresql://ci:ci-throwaway-password@localhost:5432/ci_test
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
-      # Same commands as CLAUDE.md "Commands". `--frozen` makes CI fail if uv.lock is stale.
       - run: uv sync --frozen
-      - run: uv run ruff check .
-      - run: uv run ruff format --check .
-      - run: uv run mypy app
-      # One run covers both backends: SQLite always, PostgreSQL via TEST_DATABASE_URL (job env).
-      - run: uv run pytest -q --tb=short
-
-  secret-scan:
-    runs-on: ubuntu-latest
-    env:
-      # Same scanner and version as the pre-commit hook (.pre-commit-config.yaml, rev v8.30.1).
-      # The official gitleaks-action needs a GITLEAKS_LICENSE secret for organization repos, so
-      # the pinned release binary is used instead. sha256 from the release's checksums file.
-      GITLEAKS_VERSION: 8.30.1
-      GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0  # scan full history, not only the tip
-      - name: Install gitleaks
-        run: |
-          curl -sSfL -o gitleaks.tar.gz \
-            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
-          echo "${GITLEAKS_SHA256}  gitleaks.tar.gz" | sha256sum --check -
-          tar -xzf gitleaks.tar.gz gitleaks
-      # The pre-commit hook only scans staged changes, so CI scans the git history instead.
-      - run: ./gitleaks git --redact --verbose .
+      - run: nproc  # runner CPU count, for judging whether pytest-xdist would be worth it
+      - run: uv run pytest -q --tb=short --durations=25 --db-backend=postgresql
 
   docker-build:
     runs-on: ubuntu-latest
@@ -113,7 +145,7 @@ jobs:
 
   # Unbound profile against the real image: DNSSEC (AD, SERVFAIL on bad signature), NXDOMAIN,
   # REFUSED from outside the subnet, DNSBL test entry, KSK-2024 anchor, root.key persistence,
-  # hardening. Run locally: `uv run pytest -m integration`. Excluded from lint-test by marker.
+  # hardening. Run locally: `uv run pytest -m integration`. Excluded from the test jobs by marker.
   # The DNSBL test skips (not fails) on a provider-side block. See docs/UNBOUND.md.
   integration-unbound:
     runs-on: ubuntu-latest

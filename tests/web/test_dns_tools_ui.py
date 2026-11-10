@@ -12,8 +12,6 @@ from collections.abc import Iterator
 from typing import Any
 
 import pytest
-from alembic import command
-from alembic.config import Config
 from fastapi.testclient import TestClient
 
 from app.api.v1.dns_tools import dns_backend
@@ -26,7 +24,7 @@ from app.main import create_app
 from app.services.dns_tools import LookupResolvers
 from app.web.dns_tools import visible
 from tests.support.dns_backend import ZONES, fake_backend
-from tests.web.test_domains_ui import KEY, ROOT, World, _seed, get, post
+from tests.web.test_domains_ui import KEY, World, _seed, get, post
 
 EVIL = "<script>alert(1)</script>"
 ZONES_UI = {
@@ -50,15 +48,14 @@ def _strict_mode() -> Iterator[None]:
 
 
 @pytest.fixture
-def world(db_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[World]:
-    monkeypatch.setenv("DATABASE_URL", db_url)
+def world(migrated_db_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[World]:
+    monkeypatch.setenv("DATABASE_URL", migrated_db_url)
     monkeypatch.setenv("SECRET_KEY", KEY)
     monkeypatch.setenv("ENCRYPTION_KEY", KEY)
-    command.upgrade(Config(str(ROOT / "alembic.ini")), "head")
-    engine = create_db_engine(db_url)
+    engine = create_db_engine(migrated_db_url)
     db = create_session_factory(engine)()
     tenant_a, tenant_b, users, domains = _seed(db)
-    settings = Settings(database_url=db_url, secret_key=KEY, encryption_key=KEY)  # type: ignore[call-arg]
+    settings = Settings(database_url=migrated_db_url, secret_key=KEY, encryption_key=KEY)  # type: ignore[call-arg]
     application = create_app(settings)
     backend, _ = fake_backend(ZONES_UI)
     application.dependency_overrides[dns_backend] = lambda: backend

@@ -21,7 +21,7 @@ from pydantic import Field, StrictInt, StrictStr
 from app.api.v1._common import Body, _error, _parse, _Strict
 from app.core.permissions import Principal
 from app.core.tenancy import TenantContext
-from app.repositories.base import DEFAULT_LIMIT, MAX_LIMIT
+from app.repositories.base import DEFAULT_LIMIT, MAX_LIMIT, parse_id
 from app.repositories.domain_access import MAX_ASSIGNMENTS
 from app.services.domains import (
     DomainAccessView,
@@ -33,7 +33,7 @@ from app.web.deps import CurrentSession, DbDep, current_principal, tenant_ctx
 
 router = APIRouter(prefix="/domains", tags=["domains"])
 
-_MAX_ID_DIGITS = 19  # 2**63 - 1 has 19 digits
+_MAX_PAGE_DIGITS = 19  # limit / offset: 2**63 - 1 has 19 digits
 _MAX_OFFSET = 2**63 - 1  # SQL OFFSET is a signed 64-bit value on PostgreSQL and SQLite
 
 
@@ -81,15 +81,13 @@ class AccessIn(_Strict):
 
 def _domain_id(value: str) -> int | None:
     """Path id as a positive int; anything else is None (answered as 404, like a missing id)."""
-    if not value.isascii() or not value.isdigit() or len(value) > _MAX_ID_DIGITS:
-        return None
-    return int(value)
+    return parse_id(value)
 
 
 def _page_value(request: Request, raw: str | None, default: int, maximum: int | None) -> int:
     if raw is None:
         return default
-    if not raw.isascii() or not raw.isdigit() or len(raw) > _MAX_ID_DIGITS:
+    if not raw.isascii() or not raw.isdigit() or len(raw) > _MAX_PAGE_DIGITS:
         raise _error(request, 422, "api.error.invalid_request")
     value = int(raw)
     if maximum is not None and value > maximum:

@@ -18,8 +18,6 @@ from urllib.parse import urlencode
 
 import pytest
 import yaml
-from alembic import command
-from alembic.config import Config
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 from typer.testing import CliRunner
@@ -71,15 +69,16 @@ def _no_sockets(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture
-def env(db_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[World, FakeServerSet]]:
-    monkeypatch.setenv("DATABASE_URL", db_url)
+def env(
+    migrated_db_url: str, monkeypatch: pytest.MonkeyPatch
+) -> Iterator[tuple[World, FakeServerSet]]:
+    monkeypatch.setenv("DATABASE_URL", migrated_db_url)
     monkeypatch.setenv("SECRET_KEY", KEY)
     monkeypatch.setenv("ENCRYPTION_KEY", KEY)
-    command.upgrade(Config(str(ROOT / "alembic.ini")), "head")
-    engine = create_db_engine(db_url)
+    engine = create_db_engine(migrated_db_url)
     db = create_session_factory(engine)()
     tenant_a, tenant_b, users, domains = _seed(db)
-    settings = Settings(database_url=db_url, secret_key=KEY, encryption_key=KEY)  # type: ignore[call-arg]
+    settings = Settings(database_url=migrated_db_url, secret_key=KEY, encryption_key=KEY)  # type: ignore[call-arg]
     application = create_app(settings)
     backend, servers = fake_backend()
     application.dependency_overrides[dns_backend] = lambda: backend
@@ -161,7 +160,9 @@ DEFECTS: dict[str, Any] = {
     "nul_byte": lambda a: a.status == "error" and a.findings[0].code == "MSG_PARSER_LIMIT",
     "line_too_long": lambda a: a.status == "error" and a.findings[0].code == "MSG_PARSER_LIMIT",
     "date_without_timezone": lambda a: "MSG_DATE_NO_TIMEZONE" in {f.code for f in a.findings},
-    "mime_depth": lambda a: "MSG_MIME_TRUNCATED" in {f.code for f in a.findings},
+    "mime_depth": lambda a: (
+        a.status == "error" and "MSG_MIME_TRUNCATED" in {f.code for f in a.findings}
+    ),
     "boundary_missing": lambda a: a.mime is not None and "missing_boundary" in a.mime.warnings,
     "bad_encoded_word": lambda a: "MSG_ENCODED_HEADER_BROKEN" in {f.code for f in a.findings},
 }
@@ -316,7 +317,7 @@ HOSTILE: dict[str, tuple[bytes, int, int, str | None, str]] = {
         "error",
         "MSG_PARSER_LIMIT",
     ),
-    "deep_mime": (_FROM + _DEEP + b"x", 200, 200, "warn", "MSG_MIME_TRUNCATED"),
+    "deep_mime": (_FROM + _DEEP + b"x", 200, 200, "error", "MSG_PARSER_LIMIT"),
     "received_10k": (_RECV * 10000 + b"\r\nbody", 200, 200, "error", "MSG_PARSER_LIMIT"),
     "received_200": (_FROM + _RECV * 200 + b"\r\nbody", 200, 200, "error", "MSG_PARSER_LIMIT"),
     "rfc2047_junk": (

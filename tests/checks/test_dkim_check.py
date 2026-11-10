@@ -153,7 +153,8 @@ async def test_all_not_found_gives_no_selector_found() -> None:
 async def test_empty_selector_list_is_error() -> None:
     r = await _run("dkim_cases.yaml", "mixallnx.example.com", [])
     assert r.status == "error"
-    assert r.findings == ()
+    assert _codes(r) == {"DKIM_NO_SELECTORS_PROBED"}  # says nothing was probed, no verdict
+    assert r.data["probed"] == 0
 
 
 # --- DNS failures (recorded zones) --------------------------------------------------------
@@ -368,3 +369,98 @@ def test_codes_have_complete_i18n_with_matching_placeholders() -> None:
             k = f"finding.{code}.{part}"
             assert en.get(k) and it.get(k), k
             assert i18n.placeholders(en[k]) == i18n.placeholders(it[k]), k
+
+
+# --- the caller's list: empty, or cut by a cap (M5-20) ----------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("selectors", "dropped"),
+    [(["sel"], 1), (["sel", "other"], 5)],
+    ids=["one", "many"],
+)
+async def test_dropped_selectors_make_the_result_incomplete(
+    selectors: list[str], dropped: int
+) -> None:
+    r = await DkimCheck(selectors, dropped=dropped).run(
+        _ctx(_Map({})), Target(domain="a.example.com")
+    )
+    assert r.status == "error"
+    assert _codes(r) == {"DKIM_SELECTORS_CAPPED"}  # never DKIM_NO_SELECTOR_FOUND
+    assert r.data["dropped"] == dropped
+    capped = next(f for f in r.findings if f.code == "DKIM_SELECTORS_CAPPED")
+    assert capped.params == {"probed": len(selectors), "dropped": dropped}
+
+
+async def test_nothing_dropped_leaves_the_result_shape_unchanged() -> None:
+    r = await DkimCheck(["sel"]).run(_ctx(_Map({})), Target(domain="a.example.com"))
+    assert set(r.data) == {"enumerable", "probed", "found", "selectors"}
+    assert _codes(r) == {"DKIM_NO_SELECTOR_FOUND"}
+
+
+# --- provider (M5-23b) ---------------------------------------------------------------------------
+
+SELECTOR_KEYS = {"selector", "provider", "state", "key_type", "bits", "chain", "reason"}
+_NONE = {"sel": None, "other": None, "bad": None}
+
+
+@pytest.mark.parametrize(
+    ("providers", "expected"),
+    [
+        ({"sel": "acme", "other": "zeta"}, {**_NONE, "sel": "acme", "other": "zeta"}),
+        ({}, _NONE),
+        ({"sel": ""}, _NONE),  # empty value: no provider
+        ({"unprobed": "x"}, _NONE),
+        ({"sel": '<b>&"x'}, {**_NONE, "sel": '<b>&"x'}),  # data as stored; templates escape
+    ],
+    ids=["mapped", "empty-map", "empty-value", "unprobed-name", "hostile-value"],
+)
+async def test_results_carry_the_mapped_provider(
+    providers: dict[str, str], expected: dict[str, str | None]
+) -> None:
+    names = ["sel", "other", "bad"]
+    resolver = load_zones(ZONES / "dkim_cases.yaml").resolver()
+    ctx = _ctx(resolver)
+    streamed = [r async for r in probe_selectors(ctx, "mixfound.example.com", names, providers)]
+    assert {r.selector: r.provider for r in streamed} == expected
+    r = await DkimCheck(names, providers=providers).run(ctx, Target(domain="mixfound.example.com"))
+    assert {s["selector"]: s["provider"] for s in r.data["selectors"]} == expected
+    for s in r.data["selectors"]:
+        assert set(s) == SELECTOR_KEYS  # never notes
+
+
+async def test_provider_does_not_change_the_verdict() -> None:
+    resolver = load_zones(ZONES / "dkim_cases.yaml").resolver()
+    target = Target(domain="d1024.example.com")
+    a = await DkimCheck(["sel"], providers={}).run(_ctx(resolver), target)
+    b = await DkimCheck(["sel"], providers={"sel": "p"}).run(_ctx(resolver), target)
+    assert (a.status, a.findings) == (b.status, b.findings)
+
+
+async def test_without_a_map_the_seed_providers_are_used() -> None:
+    from app.checks.dkim_selectors import list_selectors
+
+    seed = list_selectors()
+    assert any(s.provider for s in seed) and any(s.provider is None for s in seed)
+    r = await DkimCheck().run(_ctx(_Map({})), Target(domain="a.example.com"))
+    assert {s["selector"]: s["provider"] for s in r.data["selectors"]} == {
+        s.name: s.provider for s in seed
+    }
+    # Explicit names (CLI --selector) still get the seed provider of a seed name.
+    named = next(s for s in seed if s.provider)
+    r2 = await DkimCheck([named.name, "adhoc"]).run(_ctx(_Map({})), Target(domain="a.example.com"))
+    assert {s["selector"]: s["provider"] for s in r2.data["selectors"]} == {
+        named.name: named.provider,
+        "adhoc": None,
+    }
+
+
+async def test_seed_notes_never_reach_a_result() -> None:
+    from app.checks.dkim_selectors import list_selectors
+
+    r = await DkimCheck().run(_ctx(_Map({})), Target(domain="a.example.com"))
+    text = r.model_dump_json()
+    long_notes = [s.notes for s in list_selectors() if len(s.notes) > 12]
+    assert long_notes
+    for notes in long_notes:
+        assert notes not in text
