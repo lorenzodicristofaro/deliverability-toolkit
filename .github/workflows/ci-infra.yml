@@ -16,6 +16,8 @@ name: CI infra
 #   alembic.ini                        COPYed into the image, the container runs alembic on start
 #   tests/integration/**               the integration-unbound test suite and its Docker helpers
 #   tests/conftest.py                  loaded by pytest for the integration tests
+#   tests/support/**                   imported by tests/conftest.py (tests.support.dns_zones)
+#   tests/__init__.py                  makes `tests` a package for those imports
 #   tests/dnssec_tag.py                imported by tests/integration/test_unbound.py
 #   migrations/**                      compose smoke runs `alembic upgrade head` at container start
 #   seeds/**                           compose smoke runs the startup seed sync
@@ -40,6 +42,8 @@ on:
       - "seeds/**"
       - "tests/integration/**"
       - "tests/conftest.py"
+      - "tests/support/**"
+      - "tests/__init__.py"
       - "tests/dnssec_tag.py"
       - ".github/workflows/ci-infra.yml"
   push:
@@ -57,6 +61,8 @@ on:
       - "seeds/**"
       - "tests/integration/**"
       - "tests/conftest.py"
+      - "tests/support/**"
+      - "tests/__init__.py"
       - "tests/dnssec_tag.py"
       - ".github/workflows/ci-infra.yml"
 
