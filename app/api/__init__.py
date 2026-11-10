@@ -11,6 +11,7 @@ from app.api.v1.content import router as content_router
 from app.api.v1.custom_checks import router as custom_checks_router
 from app.api.v1.dkim_selectors import router as dkim_selectors_router
 from app.api.v1.dns_tools import router as dns_tools_router
+from app.api.v1.domain_esps import router as domain_esps_router
 from app.api.v1.domains import router as domains_router
 from app.api.v1.message import router as message_router
 from app.api.v1.rules import router as rules_router
@@ -24,5 +25,6 @@ api_router.include_router(content_router)
 api_router.include_router(rules_router)
 api_router.include_router(dkim_selectors_router)
 api_router.include_router(custom_checks_router)
+api_router.include_router(domain_esps_router)
 
 __all__ = ["api_router"]

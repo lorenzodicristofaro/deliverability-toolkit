@@ -49,8 +49,10 @@ from app.repositories.base import MAX_LIMIT
 from app.repositories.content_rules import ContentRuleRecord
 from app.repositories.custom_checks import CustomCheckRecord
 from app.repositories.dkim_selectors import DkimSelectorRecord
+from app.repositories.domain_esps import DomainEspRecord
 from app.web import deps
 from tests.tenancy.conftest import (
+    B_DOMAINS,
     B_TENANT_NAME,
     ROLES,
     World,
@@ -240,6 +242,14 @@ def _custom_dry_run(w: World, _role: str) -> dict[str, Any]:
     }
 
 
+_ESPS_404 = "api.domain_esps.error.not_found"
+B_ESP = "b-private-esp"  # tenant B's assignment; `{esp_id}` in ESP paths
+
+
+def _esp_hosts(_w: World, _role: str) -> dict[str, Any]:
+    return {"return_path_host": None, "tracking_host": None}
+
+
 def _rule_sample(_w: World, _role: str) -> dict[str, Any]:
     return {"kind": "keyword", "pattern": "probe", "sample": "probe text"}
 
@@ -412,6 +422,18 @@ MATRIX: dict[tuple[str, str], Entry] = {
     ("GET", "/domains/{domain_id}/authentication"): Entry(Kind.DOMAIN),
     ("GET", "/domains/{domain_id}/authentication/dkim/stream"): Entry(Kind.DOMAIN),
     ("GET", "/tools/dkim/stream"): Entry(Kind.DNS, own={**_by_role(422, 422), "viewer": 403}),
+    # ESP API (app.api.v1.domain_esps). The catalogue is tenant-level and holds no tenant data;
+    # client viewers get nothing ESP-related (403 on their own tenant, like the rules). The
+    # domain routes answer 404 for every role on a foreign or unassigned domain; the per-role
+    # table on tenant A's own domains is tests/api/test_domain_esps_api.py.
+    ("GET", "/api/v1/esp-profiles"): Entry(Kind.DNS, own=_RULES_READ, not_found=_ESPS_404),
+    ("GET", "/api/v1/domains/{domain_id}/esps"): Entry(Kind.DOMAIN, not_found=_ESPS_404),
+    ("PUT", "/api/v1/domains/{domain_id}/esps/{esp_id}"): Entry(
+        Kind.DOMAIN, body=_esp_hosts, not_found=_ESPS_404
+    ),
+    ("DELETE", "/api/v1/domains/{domain_id}/esps/{esp_id}"): Entry(
+        Kind.DOMAIN, not_found=_ESPS_404
+    ),
 }
 
 # Public routes by (method, path): a new method on an exempt path is NOT exempt. Keep this
@@ -689,6 +711,22 @@ def b_custom_check(w: World) -> CustomCheckRecord:
     return created
 
 
+def b_esp(w: World) -> DomainEspRecord:
+    """Tenant B's ESP assignment on its secret domain, created on first use. Its host holds the
+    secret domain name, so `leaks` catches it in any response or log line. The world baseline
+    does not cover ESP assignments."""
+    w.db.expire_all()
+    repository = repo_for(TenantContext(w.tenants["b"], w.users["b_owner"]), w.db).domain_esps
+    secret = w.domains["secret"]
+    for existing in repository.list_for_domain(secret):
+        if existing.esp_id == B_ESP:
+            return existing
+    created = repository.add(secret, B_ESP, return_path_host=f"bounce.{B_DOMAINS['secret']}")
+    assert created is not None
+    w.db.commit()
+    return created
+
+
 def _path(w: World, case: Case) -> str:
     if "{custom_check_id}" in case.leaf.path:
         return case.leaf.path.replace("{custom_check_id}", str(b_custom_check(w).id))
@@ -696,6 +734,10 @@ def _path(w: World, case: Case) -> str:
         return case.leaf.path.replace("{rule_id}", str(b_rule(w).id))
     if "{selector_id}" in case.leaf.path:
         return case.leaf.path.replace("{selector_id}", str(b_selector(w).id))
+    if "{esp_id}" in case.leaf.path:
+        case_path = case.leaf.path.replace("{esp_id}", b_esp(w).esp_id)
+    else:
+        case_path = case.leaf.path
     target_domain = {
         "b_domain": "secret",
         "b_session": "secret",
@@ -703,7 +745,7 @@ def _path(w: World, case: Case) -> str:
         "unassigned": "unassigned",
         "-": "secret",
     }.get(case.target, "secret")
-    return case.leaf.path.replace("{domain_id}", str(w.domains[target_domain]))
+    return case_path.replace("{domain_id}", str(w.domains[target_domain]))
 
 
 def _listed_ids(case: Case, response: Any) -> set[int]:
@@ -747,6 +789,7 @@ def _check_case(world: World, logs: pytest.LogCaptureFixture, case: Case) -> Non
         if case.leaf.path.startswith(("/api/v1/dkim-selectors", "/dkim-selectors"))
         else None
     )
+    esp_before = b_esp(world) if "/esps" in case.leaf.path else None
     tenant = "b" if case.target.startswith("b_session") else "a"
     fresh = entry.kind in (Kind.SESSION, Kind.SWITCH)  # these consume/rotate the session
     body = entry.body(world, case.role) if entry.body is not None else None
@@ -776,6 +819,8 @@ def _check_case(world: World, logs: pytest.LogCaptureFixture, case: Case) -> Non
         assert b_custom_check(world) == custom_before, "tenant B's custom check changed"
     if selector_before is not None:
         assert b_selector(world) == selector_before, "tenant B's selector changed"
+    if esp_before is not None:
+        assert b_esp(world) == esp_before, "tenant B's ESP assignment changed"
     after_a = world.state("a")
     if case.target == "smuggle" and response.status_code == 303:
         # The UI create ignores the smuggled tenant_id: the domain lands in tenant A only.
