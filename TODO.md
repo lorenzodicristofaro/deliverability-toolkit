@@ -150,7 +150,7 @@ Carried over from M0-07 QA:
   - [x] M6-01 ESP profile schema, loader, CI validation (opus)
   - [x] M6-02 domain_esps model, migration, repository (opus)
   - [ ] M6-03 ESP assignment service + REST + profile catalogue (opus)
-  - [ ] M6-04 ESP profile check: SPF include, DKIM CNAMEs, return-path, tracking (opus)
+  - [x] M6-04 ESP profile check: SPF include, DKIM CNAMEs, return-path, tracking (opus)
   - [ ] M6-05 combined ESP SPF lookup budget finding (opus)
   - [ ] M6-06 wire ESP check into domain runs (opus)
   - [ ] M6-07 domain page ESPs tab
