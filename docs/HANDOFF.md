@@ -6,7 +6,7 @@ Resume with `/gm`. Written as a safeguard: the 5-hour usage limit has been hit t
 - M1–M5 are accepted (M5 on 2026-11-10, report docs/reports/M5.md); `qa` → `main` is pending the maintainer for M1–M5.
 - `dev` promoted to `qa` at 101d43b (tree identical to dev 3bb1eb8, dev CI 42846313400 green). qa CI run 42848145136 was left running (token cannot cancel).
 - Local-only until the Actions minutes renew on 2026-12-21 (maintainer decision 2026-11-10): no pushes; commit locally; the local PostgreSQL suite is the gate. Then batched pushes (docs/WORKFLOW.md push policy). M6-00 (CI minutes) must be verified by the first push after 2026-12-21.
-- M6 (ESP profiles) not started: next `/gm` session asks `pm` to split it.
+- M6-00 (CI minutes) merged locally (b94793e). Local `dev` is ahead of origin by several commits; they go out with the first push after 2026-12-21. The rest of M6 (ESP profiles) is not split yet.
 
 ## How the work runs now (maintainer decisions 2026-11-09)
 - Sonnet → Opus: once Sonnet code fails (QA, tests or CI), all further coder work on that ticket goes to a NEW coder on Opus (docs/WORKFLOW.md section 3).
@@ -32,6 +32,6 @@ Resume with `/gm`. Written as a safeguard: the 5-hour usage limit has been hit t
 - Carried over: M4 provider samples; `qa` → `main` for M1–M4; Mailchimp/Postmark/HubSpot DKIM sources; the PSL licence; SecLists terms; HTMX under CSP.
 
 ## Next 3 steps
-1. Maintainer: SPEC §5 wording (http_fetch in M7), branch protection check, unverified seeds/shorteners, `qa` → `main`.
-2. M6: `pm` splits the milestone into tickets; GM reviews (vendor ESP facts must be sourced or `unverified`).
-3. Optional cleanup ticket from TODO.md follow-ups (M5 QA nits, flaky wall-clock parser test).
+1. `pm` splits M6 (ESP profiles) into tickets after M6-00; GM reviews them. ESP facts need official sources, otherwise `unverified` and ask the maintainer.
+2. Work locally only: merge each ticket into local `dev` with the full PostgreSQL suite as the gate; no pushes before 2026-12-21.
+3. Maintainer items: SPEC §5 wording (http_fetch moved to M7), the branch protection check, unverified seeds and shorteners, `qa` → `main` for M1–M5.
