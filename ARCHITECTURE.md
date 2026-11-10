@@ -79,6 +79,10 @@ Rules:
   `http_fetch` is a reserved kind refused by schema and evaluator until M7, where it goes through
   the guarded client. The definition schema is `app/core/custom_check_schema.py`, so repositories
   validate every write without depending on `/checks`; the evaluator is `app/checks/custom.py`.
+  An `all` domain run (built in `app/api/v1/checks.py`) runs the built-ins first, then the enabled
+  global and own-tenant custom checks, read through the tenant repository; ids are
+  `custom:<scope>:<key>`. All custom checks of one run share a 12 s budget (under the 15 s API
+  deadline); a check with no budget left, or past the 50th, is `error`, never `ok`.
 
 ## 4. Multi-tenancy
 
