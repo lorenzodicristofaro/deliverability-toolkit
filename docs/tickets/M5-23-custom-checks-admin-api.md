@@ -12,4 +12,4 @@ Acceptance criteria:
 - Custom checks execute in the normal domain run for the tenant that owns them (plus enabled global ones), never for another tenant's domains; a built-in-only domain run is byte-equal to pre-M5 (regression against M3 acceptance fixtures).
 - Tenancy/permission tests per role and verb, plus: analyst cannot create, client viewer cannot read or run; routes in the coverage matrix; denial never invokes the evaluator or DNS (spies).
 New i18n keys: api.custom_checks.error.invalid_definition, .kind_unavailable, .scope_forbidden, .not_found, .name_too_long (en + it)
-Status: in-review
+Status: done
