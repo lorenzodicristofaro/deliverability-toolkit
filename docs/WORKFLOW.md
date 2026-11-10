@@ -115,7 +115,14 @@ commit. The GM runs it on the merge result. CI on `dev` remains the gate after e
   `dev`, each with the full local suite on PostgreSQL as the gate, and pushes `dev` once every 2–3 tickets
   and always before promoting to `qa`. A failing CI run is bisected across the batch's merges. A `code` push
   costs about 25 billed minutes, a docs-only push about 1. `qa` only ever receives a `dev` commit whose CI is
-  green, so `qa` pushes do not run CI again (from M6-00, `.github/workflows/ci.yml`).
+  green, so `qa` pushes do not run CI again (from M6-00).
+- What runs when (M6-00): `ci.yml` (lint, test-sqlite, test-postgres) runs on `dev` and `main` pushes and on
+  pull requests, skipped for docs-only changes. `ci-infra.yml` (docker-build, integration-unbound,
+  unbound-arm64-smoke) runs on `dev` pushes and pull requests only when a Docker-related path changes (list and
+  reasons at the top of that file); on `main` pushes `ci.yml` calls it without a path filter, so `main` runs
+  every job. `qa` pushes run nothing. A path-filtered or skipped workflow reports no check at all, so a
+  branch protection rule that requires these checks would block merges; do not require them (or the `infra /`
+  checks) without allowing for that.
 - Local-only period: no pushes to `dev` or `qa` until the Actions minutes renew on 2026-12-21, unless
   the maintainer says otherwise. Commit locally; the local PostgreSQL suite is the only gate meanwhile.
 - Coder, PM and QA never push. `main`, tags, releases, force pushes and branch deletions stay with the human.
