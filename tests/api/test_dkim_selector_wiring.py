@@ -15,22 +15,27 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import delete, event
+from sqlalchemy import delete, event, select
 
 from app.api.v1 import checks as api_checks
 from app.checks import dkim as dkim_mod
+from app.checks.dkim import seed_providers
 from app.checks.dkim_selectors import KnowledgeError, list_selectors
 from app.checks.models import CheckContext
 from app.cli import check as cli_check
 from app.core.config import Settings
+from app.core.csrf import CSRF_HEADER, session_csrf_token
 from app.core.db import create_db_engine, create_session_factory
 from app.core.i18n import t
+from app.core.security import SESSION_COOKIE_NAME, unsign_session_token
 from app.core.tenancy import TenantContext
 from app.dns.types import DnsQuestion, DnsResult
 from app.main import create_app
+from app.models import User
 from app.models.dkim_selector import DkimSelector
 from app.repositories import GlobalDkimSelectorRepository, repo_for
 from app.services import dkim_probe_selectors as probe
+from app.services.auth import SessionPolicy, create_session
 from app.services.dkim_probe_selectors import MAX_PROBE_SELECTORS
 from app.web import checks_stream
 from tests.api.test_domains import KEY, World, _seed, call
@@ -403,16 +408,184 @@ def test_denied_caller_never_reads_the_table(
 # --- what a result shows, and an unreadable seed -------------------------------------------------
 
 
-def test_client_viewer_sees_the_name_but_never_provider_or_notes(rig: m3.Rig) -> None:
-    tenant_row(rig, "mine", provider="secret-provider", notes="SECRET-NOTE")
+TENANT_NOTE = "SECRET-TENANT-NOTE"
+GLOBAL_NOTE = "SECRET-GLOBAL-NOTE"
+SEED_PROVIDERS = seed_providers()
+WITH_PROVIDER = next(n for n in SEED if n in SEED_PROVIDERS)
+WITHOUT_PROVIDER = next(n for n in SEED if n not in SEED_PROVIDERS)
+PROVIDER_SPAN = re.compile(r'data-testid="dkim-provider">([^<]*)<')
+
+
+def note_on_global(rig: m3.Rig, name: str, notes: str) -> None:
+    store = GlobalDkimSelectorRepository(rig.world.db)
+    row = next(r for r in store.list(limit=1000) if r.selector == name)
+    store.update(row.id, {"notes": notes})
+    rig.world.db.commit()
+
+
+def rest_providers(doc: Any) -> dict[str, str | None]:
+    return {s["selector"]: s["provider"] for s in doc["data"]["selectors"]}
+
+
+def sse_providers(text: str) -> dict[str, str | None]:
+    out: dict[str, str | None] = {}
+    for name, data in parse_sse(text):
+        if name == "selector" and (m := ROW.search(data)):
+            p = PROVIDER_SPAN.search(data)
+            out[m[1]] = None if p is None else p[1]
+    return out
+
+
+def no_tenant_cookie(rig: m3.Rig, who: str) -> str:
+    w = rig.world
+    user = w.db.scalars(select(User).where(User.id == w.users[who])).one()
+    issued = create_session(
+        w.db,
+        user,
+        w.settings.secret_key,
+        active_tenant_id=None,
+        policy=SessionPolicy.from_settings(w.settings),
+    )
+    w.db.commit()
+    return issued.cookie_value
+
+
+@pytest.mark.parametrize("who", ["owner", "admin", "analyst", "viewer"])
+def test_every_role_sees_name_and_provider_never_notes(rig: m3.Rig, who: str) -> None:
+    tenant_row(rig, "mine", provider="tenant-prov", notes=TENANT_NOTE)
+    tenant_row(rig, "bare", notes=TENANT_NOTE)
+    note_on_global(rig, WITH_PROVIDER, GLOBAL_NOTE)
+    expected = {
+        **{n: SEED_PROVIDERS.get(n) for n in SEED},
+        "mine": "tenant-prov",
+        "bare": None,
+    }
+    w = rig.world
+    rest = call(w, who, "POST", f"/api/v1/domains/{w.domains['assigned']}/checks/dkim")
+    sse = call(w, who, "GET", stream_path(rig), headers=STREAM)
+    assert rest.status_code == sse.status_code == 200, rest.text[:300]
+    assert rest_providers(rest.json()) == expected
+    assert sse_providers(sse.text) == expected
+    for response in (rest, sse):
+        assert TENANT_NOTE not in response.text and GLOBAL_NOTE not in response.text
+        assert '"notes"' not in response.text
+
+
+def test_a_selector_without_provider_renders_no_label(rig: m3.Rig) -> None:
+    sse = call(rig.world, "viewer", "GET", stream_path(rig), headers=STREAM)
+    label = t("checks.dkim.row.provider", "en")
+    for name, data in parse_sse(sse.text):
+        m = ROW.search(data)
+        if name == "selector" and m and m[1] == WITHOUT_PROVIDER:
+            assert "dkim-provider" not in data and label not in data
+            break
+    else:
+        pytest.fail("row missing")
+
+
+def test_same_name_in_two_tenants_never_leaks_the_other_provider(rig: m3.Rig) -> None:
+    tenant_row(rig, "shared", provider="a-prov", notes=TENANT_NOTE)
+    tenant_row(rig, "shared", tenant="b", provider="b-prov", notes=TENANT_NOTE)
+    tenant_row(rig, "a-only", provider="a-only-prov")
+    tenant_row(rig, "b-only", tenant="b", provider="b-only-prov")
+    w = rig.world
+    a_path = f"/api/v1/domains/{w.domains['assigned']}/checks/dkim"
+    b_path = f"/api/v1/domains/{w.domains['other']}/checks/dkim"
+    for who in ("viewer", "owner"):
+        rest = call(w, who, "POST", a_path)
+        sse = call(w, who, "GET", stream_path(rig), headers=STREAM)
+        assert rest_providers(rest.json())["shared"] == "a-prov"
+        assert sse_providers(sse.text)["shared"] == "a-prov"
+        for response in (rest, sse):
+            assert "b-prov" not in response.text and "b-only" not in response.text
+    for who in ("b_viewer", "b_owner"):
+        rest = call(w, who, "POST", b_path, tenant="b")
+        sse = call(w, who, "GET", stream_path(rig, "other"), headers=STREAM, tenant="b")
+        assert rest_providers(rest.json())["shared"] == "b-prov"
+        assert sse_providers(sse.text)["shared"] == "b-prov"
+        for response in (rest, sse):
+            assert "a-prov" not in response.text and "a-only" not in response.text
+            assert TENANT_NOTE not in response.text
+
+
+@pytest.mark.parametrize(
+    ("values", "expected"),
+    [
+        ({"provider": "mine-wins"}, "mine-wins"),  # tenant non-empty provider wins
+        ({}, None),  # NULL tenant provider: the global one
+        ({"provider": "off-prov", "enabled": False}, None),  # disabled: the global one
+    ],
+    ids=["tenant-wins", "empty-falls-back", "disabled-ignored"],
+)
+def test_tenant_row_over_a_global_row_of_the_same_name(
+    rig: m3.Rig, values: dict[str, Any], expected: str | None
+) -> None:
+    tenant_row(rig, WITH_PROVIDER, **values)
+    want = expected or SEED_PROVIDERS[WITH_PROVIDER]
     w = rig.world
     rest = call(w, "viewer", "POST", f"/api/v1/domains/{w.domains['assigned']}/checks/dkim")
     sse = call(w, "viewer", "GET", stream_path(rig), headers=STREAM)
+    assert rest_providers(rest.json())[WITH_PROVIDER] == want
+    assert sse_providers(sse.text)[WITH_PROVIDER] == want
+    # Tenant B keeps the global provider.
+    b_doc = api(rig, "b_owner", "other", "b")
+    assert rest_providers(b_doc)[WITH_PROVIDER] == SEED_PROVIDERS[WITH_PROVIDER]
+
+
+@pytest.mark.parametrize(
+    ("who", "domain", "tenant"),
+    [
+        ("viewer", "unassigned", "a"),
+        ("owner", "other", "a"),
+        ("analyst", "assigned", "b"),
+        ("b_viewer", "assigned", "b"),
+    ],
+    ids=["viewer-unassigned", "foreign-domain", "foreign-active-tenant", "foreign-viewer"],
+)
+def test_denied_callers_get_404_and_no_provider(
+    rig: m3.Rig, who: str, domain: str, tenant: str
+) -> None:
+    tenant_row(rig, "mine", provider="tenant-prov", notes=TENANT_NOTE)
+    w = rig.world
+    rest = call(w, who, "POST", f"/api/v1/domains/{w.domains[domain]}/checks/dkim", tenant=tenant)
+    sse = call(w, who, "GET", stream_path(rig, domain), headers=STREAM, tenant=tenant)
     for response in (rest, sse):
-        assert response.status_code == 200, response.text[:300]
-        assert "mine" in response.text
-        assert "secret-provider" not in response.text
-        assert "SECRET-NOTE" not in response.text
+        assert response.status_code == 404
+        assert "tenant-prov" not in response.text and TENANT_NOTE not in response.text
+    assert rig.queries == []
+
+
+@pytest.mark.parametrize("who", ["viewer", "analyst"])
+def test_no_active_tenant_is_404_on_rest_and_sse(rig: m3.Rig, who: str) -> None:
+    tenant_row(rig, "mine", provider="tenant-prov")
+    w = rig.world
+    w.client.cookies.clear()
+    cookie = no_tenant_cookie(rig, who)
+    w.client.cookies.set(SESSION_COOKIE_NAME, cookie)
+    token = unsign_session_token(cookie, w.settings.secret_key)
+    assert token is not None
+    csrf = {CSRF_HEADER: session_csrf_token(token, w.settings.secret_key)}
+    rest = w.client.post(f"/api/v1/domains/{w.domains['assigned']}/checks/dkim", headers=csrf)
+    sse = w.client.get(stream_path(rig), headers=STREAM)
+    for response in (rest, sse):
+        assert response.status_code == 404, response.text[:200]
+        assert "tenant-prov" not in response.text
+    assert rig.queries == []
+
+
+def test_free_surfaces_show_seed_providers_and_never_tenant_ones(
+    rig: m3.Rig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tenant_row(rig, WITH_PROVIDER, provider="tenant-prov", notes=TENANT_NOTE)
+    expected = {n: SEED_PROVIDERS.get(n) for n in SEED}
+    free = json.loads(m3.via_free(rig, ["dkim"]))[0]
+    assert rest_providers(free) == expected
+    response = call(rig.world, "analyst", "GET", f"/tools/dkim/stream?name={D}", headers=STREAM)
+    assert sse_providers(response.text) == expected
+    cli = m3.via_cli(monkeypatch, m3.maker("healthy"), ["dkim"], mode="single")
+    assert rest_providers(json.loads(cli.stdout)) == expected
+    for text in (json.dumps(free), response.text, cli.stdout):
+        assert "tenant-prov" not in text and TENANT_NOTE not in text
 
 
 def _break_seed(rig: m3.Rig, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -3,6 +3,9 @@
 {% if kind == "row" %}
 <div class="dkim-row dkim-row-{{ row.state }}" data-testid="dkim-row" data-selector="{{ row.selector|visible }}" data-state="{{ row.state }}">
   <h4 class="dns-wrap">{{ row.selector|visible }}</h4>
+  {% if row.provider %}
+  <p class="dkim-provider">{{ t("checks.dkim.row.provider") }} <span class="dns-wrap" data-testid="dkim-provider">{{ row.provider|visible }}</span></p>
+  {% endif %}
   <p class="dns-state dns-state-{{ "ok" if row.state == "found" else ("absent" if row.state == "not_found" else "failure") }}"{% if row.state == "error" %} role="alert"{% endif %}>
     {{ {"found": t("checks.dkim.row.found"), "not_found": t("checks.dkim.row.not_found"), "error": t("checks.dkim.row.error")}[row.state] }}
     {% if row.reason %}<code class="dns-reason">{{ row.reason|visible }}</code>{% endif %}

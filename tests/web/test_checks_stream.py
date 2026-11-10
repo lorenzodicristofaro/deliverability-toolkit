@@ -396,6 +396,98 @@ async def test_hostile_selector_name_is_escaped() -> None:
     assert "&lt;b&gt;evil&lt;/b&gt;" in body
 
 
+# --- provider (M5-23b) ---------------------------------------------------------------------------
+
+
+class _Nx:
+    identity = "nx"
+
+    async def resolve(self, question: DnsQuestion) -> DnsResult:
+        from app.dns.types import ResultState
+
+        return DnsResult(question=question, state=ResultState.nxdomain, rcode=3)
+
+
+async def _rows(
+    providers: dict[str, str] | None, selectors: list[str] | None, lang: str = "en"
+) -> dict[str, str]:
+    """selector -> raw HTML of its row."""
+    ctx = CheckContext(resolver=_Nx())
+    frames = [
+        f
+        async for f in dkim_events(
+            ctx, "example.com", lang, selectors=selectors, providers=providers
+        )
+    ]
+    out: dict[str, str] = {}
+    for event, data in (parse(f)[0] for f in frames):
+        if event == "selector" and (m := re.search(r'data-selector="([^"]*)"', data)):
+            out[m[1]] = data
+    return out
+
+
+@pytest.mark.parametrize("lang", ["en", "it"])
+async def test_row_shows_the_provider_with_a_localized_label(lang: str) -> None:
+    rows = await _rows({"a": "acme_mail"}, ["a", "b"], lang)
+    label = t("checks.dkim.row.provider", lang)
+    assert label in rows["a"] and 'data-testid="dkim-provider">acme_mail<' in rows["a"]
+    assert "dkim-provider" not in rows["b"] and label not in rows["b"]  # no placeholder
+
+
+@pytest.mark.parametrize(
+    "providers", [{}, {"a": ""}, {"other": "x"}], ids=["empty-map", "empty-value", "other-name"]
+)
+async def test_row_without_provider_has_no_provider_line(providers: dict[str, str]) -> None:
+    rows = await _rows(providers, ["a"])
+    assert "dkim-provider" not in rows["a"]
+
+
+async def test_hostile_provider_is_escaped() -> None:
+    rows = await _rows({"a": "<b>evil</b>‮&\"'"}, ["a"])
+    assert "<b>" not in rows["a"]
+    assert "&lt;b&gt;evil&lt;/b&gt;" in rows["a"]
+    assert "‮" not in rows["a"] and "\\u202e" in rows["a"]  # made visible
+
+
+async def test_without_a_map_rows_show_the_seed_providers() -> None:
+    seed = list_selectors()
+    rows = await _rows(None, None)
+    assert set(rows) == {s.name for s in seed}
+    for s in seed:
+        if s.provider:
+            assert f'data-testid="dkim-provider">{s.provider}<' in rows[s.name]
+        else:
+            assert "dkim-provider" not in rows[s.name]
+        if len(s.notes) > 12:
+            assert s.notes not in rows[s.name]
+
+
+async def test_done_result_carries_the_same_providers_as_the_check() -> None:
+    from app.checks.dkim import DkimCheck
+    from app.checks.models import Target
+
+    ctx = CheckContext(resolver=_Nx())
+    providers = {"a": "acme"}
+    got: list[Any] = []
+    [
+        f
+        async for f in dkim_events(
+            ctx,
+            "example.com",
+            "en",
+            selectors=["a", "b"],
+            providers=providers,
+            on_result=got.append,
+        )
+    ]
+    expected = await DkimCheck(["a", "b"], providers=providers).run(
+        ctx, Target(domain="example.com")
+    )
+    zero = {"started_at": expected.started_at, "duration_ms": 0}
+    assert got[0].model_copy(update=zero) == expected.model_copy(update=zero)
+    assert [s["provider"] for s in got[0].data["selectors"]] == ["acme", None]
+
+
 async def test_done_result_equals_dkim_check_run() -> None:
     from app.checks.dkim import DkimCheck
     from app.checks.models import Target
