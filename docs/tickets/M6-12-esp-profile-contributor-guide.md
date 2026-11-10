@@ -11,4 +11,4 @@ Acceptance criteria:
 - The template YAML loads with the real loader (test) and uses a reserved example domain; it cannot be mistaken for a vendor profile (the loader rejects it from `profiles/esp/` because `example-esp` is not shipped there; the test loads it from docs/templates explicitly).
 - Linked from README.md contributor section only if one exists; otherwise from docs/RELEASE.md checklist line about profiles. Coder states which.
 New i18n keys: none
-Status: todo
+Status: done
