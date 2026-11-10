@@ -10,7 +10,7 @@ from typing import Any
 
 import pytest
 
-from app.checks.esp_profile import CODES, EspHosts, EspProfileCheck
+from app.checks.esp_profile import CODES, MAX_CNAME_HOPS, EspHosts, EspProfileCheck
 from app.checks.models import Check, CheckContext, CheckResult, Target
 from app.core.i18n import LOCALES_DIR, placeholders
 from app.dns.types import DnsQuestion, DnsRecord, DnsResult, ResultState
@@ -185,6 +185,40 @@ CASES: list[tuple[str, Zone | dict[Any, Any], set[str], str, tuple[str, str] | N
     (
         "spf_esp_record_fails_but_term_present",
         {("spf.esp.example.com", "TXT"): ResultState.servfail},
+        set(),
+        "ok",
+        ("spf", "ok"),
+    ),
+    (
+        "spf_root_multiple_records",
+        {(D, "TXT"): ["v=spf1 -all", "v=spf1 include:spf.esp.example.com -all"]},
+        {"ESP_SPF_PERMERROR"},
+        "error",
+        ("spf", "permerror"),
+    ),
+    (
+        "spf_root_syntax_error",
+        {(D, "TXT"): ["v=spf1 include:spf.esp.example.com bogus:x -all"]},
+        {"ESP_SPF_PERMERROR"},
+        "error",
+        ("spf", "permerror"),
+    ),
+    (
+        "spf_nested_multiple_records",
+        {
+            (D, "TXT"): [f"v=spf1 include:_spf.{D} -all"],
+            (f"_spf.{D}", "TXT"): ["v=spf1 -all", "v=spf1 include:spf.esp.example.com -all"],
+        },
+        {"ESP_SPF_PERMERROR"},
+        "error",
+        ("spf", "permerror"),
+    ),
+    (
+        "spf_broken_nested_but_include_found",
+        {
+            (D, "TXT"): [f"v=spf1 include:_spf.{D} include:spf.esp.example.com -all"],
+            (f"_spf.{D}", "TXT"): ["v=spf1 -all", "v=spf1 ~all"],
+        },
         set(),
         "ok",
         ("spf", "ok"),
@@ -396,6 +430,62 @@ async def test_mx_return_path_ok() -> None:
     zone = _apply({RP: None, (RP[0], "MX"): ["10 mx.esp.example.com."]})
     r, _ = await _run(zone, [p])
     assert _sec(r)["return_path"] == {"state": "ok", "host": RP[0]}
+
+
+@pytest.mark.parametrize(
+    ("name", "changes", "reason"),
+    [
+        (
+            "permerror_names_nested",
+            {
+                (D, "TXT"): [f"v=spf1 include:_spf.{D} -all"],
+                (f"_spf.{D}", "TXT"): ["v=spf1 -all", "v=spf1 ~all"],
+            },
+            "multiple_records",
+        ),
+        ("permerror_syntax", {(D, "TXT"): ["v=spf1 bogus:x -all"]}, "syntax_error"),
+    ],
+)
+async def test_spf_permerror_params(name: str, changes: dict[Any, Any], reason: str) -> None:
+    r, _ = await _run(_apply(changes))
+    (f,) = [f for f in r.findings if f.code == "ESP_SPF_PERMERROR"]
+    assert f.params["reason"] == reason
+    assert f.params["name"] == (f"_spf.{D}" if reason == "multiple_records" else D)
+    assert _sec(r)["spf"]["includes"] == [{"host": "spf.esp.example.com", "state": "permerror"}]
+
+
+def _chain_zone(length: int, last: str) -> dict[Any, Any]:
+    hops = [f"hop{i}.example.net" for i in range(1, length)] + [last]
+    zone: dict[Any, Any] = {S1: [hops[0]]}
+    for a, b in zip(hops, hops[1:], strict=False):
+        zone[(a, "CNAME")] = [b]
+    return zone
+
+
+@pytest.mark.parametrize(
+    ("changes", "state", "reason"),
+    [
+        (_chain_zone(MAX_CNAME_HOPS, "s1.dkim.x.esp.example.com"), "ok", None),
+        (_chain_zone(MAX_CNAME_HOPS + 1, "s1.dkim.x.esp.example.com"), "mismatch", "hop_limit"),
+        ({S1: ["s1.dkim.other.example.net"]}, "mismatch", "chain_end"),
+        ({S1: ["."]}, "mismatch", "empty_target"),
+        (
+            {S1: ["hop1.example.net"], ("hop1.example.net", "CNAME"): ["hop1.example.net"]},
+            "mismatch",
+            "loop",
+        ),
+    ],
+    ids=["at_limit_ok", "hop_limit", "chain_end", "empty_target", "loop"],
+)
+async def test_cname_mismatch_reason(
+    changes: dict[Any, Any], state: str, reason: str | None
+) -> None:
+    r, _ = await _run(_apply(changes))
+    sel = _dkim(r, "s1")
+    assert sel["state"] == state
+    assert sel.get("reason") == reason
+    mism = [f for f in r.findings if f.code == "ESP_DKIM_TARGET_MISMATCH"]
+    assert [f.params["reason"] for f in mism] == ([reason] if reason else [])
 
 
 async def test_hosts_not_configured() -> None:

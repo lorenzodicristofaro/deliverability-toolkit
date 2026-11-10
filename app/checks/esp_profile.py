@@ -13,11 +13,15 @@ unverified with `EspProfile.is_verified`):
   anywhere in the domain's resolved SPF tree, so nested includes count. The term only has to be
   present: a failing lookup of the ESP's own record is the SPF check's business. A host not found
   while the tree has DNS failures or was truncated by a cap is not evaluated (`ESP_DNS_ERROR`).
+  Otherwise, a host not found while some record in the tree is a permerror that `resolve_spf`
+  does not follow (several SPF records at one name, or a syntax error) is not evaluated either:
+  state `permerror`, `ESP_SPF_PERMERROR` naming that record; never "missing".
 - `dkim.selectors.<name>` at `<name>._domainkey.<domain>`:
   - `cname`: NXDOMAIN is missing; NODATA is `wrong_type` when the name holds a TXT record, else
     missing. A CNAME is followed hop by hop (at most MAX_CNAME_HOPS, loops stop it) until one
     target fits `target_pattern` (any target fits when there is no pattern); none fitting is
-    `ESP_DKIM_TARGET_MISMATCH`.
+    `ESP_DKIM_TARGET_MISMATCH`, whose `reason` says why the chain stopped: `chain_end`,
+    `loop`, `empty_target` or `hop_limit` (the chain may continue past the limit).
   - `txt`: a TXT record is ok (also when served through a CNAME); none and a CNAME at the name
     is `wrong_type`; none and no CNAME is missing.
 - `return_path` / `tracking_domain` at the assignment's host (`ESP_HOST_NOT_CONFIGURED` when
@@ -58,6 +62,7 @@ from app.esp.profile import DkimSelector, EspProfile, RecordExpectation
 
 CODES: tuple[str, ...] = (
     "ESP_SPF_INCLUDE_MISSING",
+    "ESP_SPF_PERMERROR",
     "ESP_DKIM_RECORD_MISSING",
     "ESP_DKIM_TARGET_MISMATCH",
     "ESP_DKIM_WRONG_TYPE",
@@ -75,7 +80,14 @@ CODES: tuple[str, ...] = (
 MAX_CNAME_HOPS: Final = 8
 
 PartState = Literal[
-    "ok", "missing", "mismatch", "wrong_type", "error", "not_configured", "skipped_unverified"
+    "ok",
+    "missing",
+    "mismatch",
+    "wrong_type",
+    "error",
+    "permerror",
+    "not_configured",
+    "skipped_unverified",
 ]
 
 
@@ -135,34 +147,58 @@ def _spf_targets(tree: SpfTree) -> set[str]:
     }
 
 
+def _broken_node(tree: SpfTree) -> tuple[str, str] | None:
+    """(name, reason) of the first record `resolve_spf` could not follow (permerror)."""
+    for node in tree.nodes():
+        if node.multiple_records:
+            return node.domain, "multiple_records"
+        if node.syntax_error:
+            return node.domain, "syntax_error"
+    return None
+
+
 async def _spf(run: _Run, esp: EspProfile) -> dict[str, Any]:
     tree, failed = await run.spf_tree()
     if tree is None:
         run.dns_error(esp, "spf.includes", run.domain, "TXT", failed or "error")
         return _part("error", includes=[])
     targets = _spf_targets(tree)
+    broken = _broken_node(tree)
+    unknown: PartState | None = None
+    if tree.errors or tree.truncated:
+        unknown = "error"
+    elif broken is not None:
+        unknown = "permerror"
     includes: list[dict[str, Any]] = []
-    errored = False
     for host in sorted(esp.spf_includes):
         if host in targets:
             includes.append({"host": host, "state": "ok"})
-        elif tree.errors or tree.truncated:
-            errored = True
-            includes.append({"host": host, "state": "error"})
+        elif unknown is not None:
+            includes.append({"host": host, "state": unknown})
         else:
             includes.append({"host": host, "state": "missing"})
             run.findings.append(
                 finding("ESP_SPF_INCLUDE_MISSING", "high", {"esp": esp.name, "host": host})
             )
-    if errored:
+    not_found = any(i["state"] == unknown for i in includes) if unknown else False
+    if not_found and unknown == "error":
         if tree.errors:
             name, rdtype, failure = tree.errors[0]
             run.dns_error(esp, "spf.includes", name, rdtype, str(failure))
         else:
             run.dns_error(esp, "spf.includes", run.domain, "TXT", "truncated")
+    elif not_found and broken is not None:
+        run.evaluated = False
+        run.findings.append(
+            finding(
+                "ESP_SPF_PERMERROR",
+                "high",
+                {"esp": esp.name, "name": broken[0], "reason": broken[1]},
+            )
+        )
     state: PartState = "ok"
-    if errored:
-        state = "error"
+    if not_found and unknown is not None:
+        state = unknown
     elif any(i["state"] == "missing" for i in includes):
         state = "missing"
     return _part(state, includes=includes)
@@ -180,10 +216,15 @@ async def _follow_cname(
     chain = [first]
     seen = {name, first}
     current = first
+    reason = "chain_end"
     while True:
         if pattern is None or pattern.matches(current):
             return _part("ok", selector=sel.name, chain=chain)
-        if not current or len(chain) >= MAX_CNAME_HOPS:
+        if not current:
+            reason = "empty_target"
+            break
+        if len(chain) >= MAX_CNAME_HOPS:
+            reason = "hop_limit"
             break
         try:
             nxt = await fetch_cname(run.ctx.resolver, current)
@@ -197,6 +238,7 @@ async def _follow_cname(
             break
         chain.append(nxt.target)
         if nxt.target in seen:
+            reason = "loop"
             break
         seen.add(nxt.target)
         current = nxt.target
@@ -204,11 +246,17 @@ async def _follow_cname(
         finding(
             "ESP_DKIM_TARGET_MISMATCH",
             "medium",
-            {"esp": esp.name, "selector": sel.name, "name": name, "pattern": str(pattern)},
+            {
+                "esp": esp.name,
+                "selector": sel.name,
+                "name": name,
+                "pattern": str(pattern),
+                "reason": reason,
+            },
             chain,
         )
     )
-    return _part("mismatch", selector=sel.name, chain=chain)
+    return _part("mismatch", selector=sel.name, chain=chain, reason=reason)
 
 
 async def _dkim_one(run: _Run, esp: EspProfile, sel: DkimSelector) -> dict[str, Any]:
