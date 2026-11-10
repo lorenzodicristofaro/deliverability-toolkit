@@ -18,5 +18,6 @@ Acceptance criteria:
 - Tests: tenancy matrix rows for each ESP route and the `esp` check by role (client viewer assigned: read 200, write 403; client viewer unassigned: 404; owner/admin/analyst unchanged); role tests updated; a two-tenant test (viewer of tenant A on tenant B domain id gets 404 on list, check by id and `all` without ESP data).
 - Update the old-rule statements in M6-03 (acceptance line on client viewers getting 403 including the catalogue) and M6-06 (the client viewer criterion) tickets, and any code comment or docstring stating the old rule, so no stale text remains (grep for "client viewer" and "no ESP data").
 - SPEC section 3 flag for the GM: it says client viewers "cannot see other ESP data". The decision reads this as "cannot see ESP data of other domains". The coder does not edit SPEC.md; the GM decides whether to clarify the wording.
+- QA (M6-06): `resolve_esp_run` (app/services/domain_esps.py:409-415) says it never raises, but after a SQLAlchemyError a PostgreSQL session is left in an aborted transaction; use `db.begin_nested()` or state in the docstring that the caller must roll back. Optional: a PostgreSQL test with a real statement failure instead of a monkeypatched OperationalError (tests/api/test_checks_api.py:551).
 New i18n keys: none expected
 Status: todo

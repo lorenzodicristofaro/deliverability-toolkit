@@ -19,4 +19,4 @@ Acceptance criteria:
 - QA (M6-03): the ESP check in domain runs returns `error` (not evaluated) in the same case.
 - QA (M6-03): tests cover the catalogue, the GET list and PUT.
 New i18n keys: `api.domain_esps.error.profiles_unavailable` (en + it; name may vary); reuse M6-04 keys; add `api.checks.error.esp_unavailable` en + it only if the coder needs it
-Status: todo
+Status: done (merged into local dev at 7c31bc2 after QA APPROVE; GM gate full PostgreSQL suite green, lint clean)

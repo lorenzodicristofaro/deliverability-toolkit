@@ -152,7 +152,7 @@ Carried over from M0-07 QA:
   - [x] M6-03 ESP assignment service + REST + profile catalogue (opus)
   - [x] M6-04 ESP profile check: SPF include, DKIM CNAMEs, return-path, tracking (opus)
   - [x] M6-05 combined ESP SPF lookup budget finding (opus)
-  - [ ] M6-06 wire ESP check into domain runs + broken-profiles handling (opus)
+  - [x] M6-06 wire ESP check into domain runs + broken-profiles handling (opus)
   - [ ] M6-06b localized rendering of ESP finding params (opus, depends on M6-06)
   - [ ] M6-06c client viewers read ESP data on assigned domains (opus, depends on M6-06; maintainer decision 2026-11-10)
   - [ ] M6-13 detect ESPs configured in DNS but not assigned (opus, depends on M6-06, M6-04/05)
