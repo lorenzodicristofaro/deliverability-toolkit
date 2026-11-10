@@ -82,6 +82,10 @@ def _esp_hosts(_w: World) -> dict[str, None]:
     return {"return_path_host": None}
 
 
+def _esp_form(_w: World) -> dict[str, str]:
+    return {"esp_id": "example-esp"}
+
+
 Payload = Callable[[World], Any] | None
 
 # (method, route path) -> request payload. Must list every route with a numeric path id.
@@ -93,6 +97,9 @@ ID_ROUTES: dict[tuple[str, str], Payload] = {
     ("POST", "/domains/{domain_id}/delete"): None,
     ("GET", "/domains/{domain_id}/authentication"): None,
     ("GET", "/domains/{domain_id}/authentication/dkim/stream"): None,
+    ("GET", "/domains/{domain_id}/esps"): None,
+    ("POST", "/domains/{domain_id}/esps"): _esp_form,
+    ("POST", "/domains/{domain_id}/esps/{esp_id}/remove"): None,
     ("GET", "/api/v1/domains/{domain_id}"): None,
     ("PATCH", "/api/v1/domains/{domain_id}"): _name,
     ("DELETE", "/api/v1/domains/{domain_id}"): None,

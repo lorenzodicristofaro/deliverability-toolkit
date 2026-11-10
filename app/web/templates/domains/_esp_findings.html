@@ -1,0 +1,14 @@
+{#- A list of findings of the `esp` check (same markup rules as checks/_result.html). Everything is
+    autoescaped; DNS-sourced text additionally goes through `visible`. Expects `findings`. -#}
+{% set severity_text = {"critical": t("checks.severity.critical"), "high": t("checks.severity.high"), "medium": t("checks.severity.medium"), "low": t("checks.severity.low"), "info": t("checks.severity.info")} %}
+<ul class="check-findings">
+{% for f in findings %}
+  <li data-code="{{ f.code }}" data-severity="{{ f.severity }}">
+    <strong>[{{ severity_text[f.severity] }}] {{ t(f.title_key, **(f.params|finding_params(f.code, lang))) }}</strong>
+    <p>{{ t(f.detail_key, **(f.params|finding_params(f.code, lang))) }}</p>
+    {% if f.remediation_key %}<p>{{ t(f.remediation_key, **(f.params|finding_params(f.code, lang))) }}</p>{% endif %}
+    {% for e in f.evidence %}<p class="dns-wrap"><code>{{ e|visible }}</code></p>{% endfor %}
+    {% if f.docs_url is https_url %}<p><a href="{{ f.docs_url }}" rel="noopener noreferrer">{{ t("checks.docs_link") }}</a></p>{% endif %}
+  </li>
+{% endfor %}
+</ul>
