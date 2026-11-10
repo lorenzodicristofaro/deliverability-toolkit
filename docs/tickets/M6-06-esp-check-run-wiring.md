@@ -14,5 +14,10 @@ Acceptance criteria:
 - `DuplicateCheckError` for id `esp` cannot happen (custom checks reject the reserved id); add a test that a custom check named `esp` is rejected or documented, whichever the code already does.
 - QA (M6-04): ESP_PITFALL findings carry `params.notes_key`. Rendering (UI, API and CLI text) must look the key up in the user's language. Otherwise the detail shows only the raw pitfall code and the remediation's "Review the note" points to nothing.
 - QA (M6-04): rendering must localize the `{reason}` param of `ESP_SPF_PERMERROR` (`multiple_records`, `syntax_error`), which is a raw token today. The `ESP_DKIM_TARGET_MISMATCH` `reason` (`chain_end`, `loop`, `empty_target`, `hop_limit`) may also be shown localized.
-New i18n keys: none (reuse M6-04 keys; add `api.checks.error.esp_unavailable` en + it only if the coder needs it)
+- QA (M6-03): a broken profiles directory must never give a bare 500. Today it does at app/services/domain_esps.py:387, :407 and :411 and app/api/v1/domain_esps.py:76, because `load_esp_profiles` caches only successful loads.
+- QA (M6-03): follow the existing pattern: app/services/dkim_probe_selectors.py:93 and app/web/checks_stream.py:204 catch `KnowledgeError` (`EspProfileError` is a subclass) and log a warning.
+- QA (M6-03): the ESP routes return a handled, localized 503 with a new key such as `api.domain_esps.error.profiles_unavailable` (en + it).
+- QA (M6-03): the ESP check in domain runs returns `error` (not evaluated) in the same case.
+- QA (M6-03): tests cover the catalogue, the GET list and PUT.
+New i18n keys: `api.domain_esps.error.profiles_unavailable` (en + it; name may vary); reuse M6-04 keys; add `api.checks.error.esp_unavailable` en + it only if the coder needs it
 Status: todo

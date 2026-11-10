@@ -17,4 +17,4 @@ Acceptance criteria:
 - QA (M6-02): the service validates that `esp_id` names a loaded profile (app/esp/profile.py).
 - QA (M6-02): renaming a domain does not re-check stored hosts. Note this for whichever ticket adds renaming (not in this ticket).
 New i18n keys: api.domain_esps.error.unknown_esp, .invalid_host, .host_outside_domain, .too_many, .not_found (en + it)
-Status: todo
+Status: done (merged into local dev at fff0823 after QA APPROVE; GM gate full PostgreSQL suite 29343 passed, lint clean. QA should-fix on a broken profiles directory moved to M6-06)
