@@ -138,8 +138,12 @@ warning (`tests/esp/test_shipped_profiles.py`, not a failure). Re-read the sourc
   `ESP_TRACKING_MISSING`, `ESP_PROFILE_UNVERIFIED`, `ESP_DNS_ERROR`, and each pitfall as an info
   finding). A DNS failure is `error`, never "missing".
 - **Detection (M6-13)**: reads the same profiles to spot ESPs that appear in a domain's DNS (SPF
-  includes, DKIM selectors) without being assigned. A thin or wrong profile therefore causes
-  false detections: keep `includes` and selector data precise.
+  includes, DKIM selectors) without being assigned; each hit is reported as
+  `ESP_DETECTED_NOT_ASSIGNED`. Only verified fields are used. For DKIM, only verified `cname`
+  selectors that have a `target_pattern` are probed; `cname` selectors without a pattern and
+  `txt` selectors are never used for detection. Probing is capped at 32 queries per run (a
+  truncated run is reported as `ESP_DETECTION_TRUNCATED`). A thin or wrong profile therefore
+  causes false detections: keep `includes` and selector data precise.
 - **Client viewers (M6-06c)**: a client viewer sees, read-only, the ESPs assigned to their domain,
   the ESPs detected but not assigned (flagged as possible stale configuration) and the `esp`
   check result. Notes you write are shown to customers: keep them neutral and accurate.

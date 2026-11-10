@@ -19,4 +19,4 @@ Acceptance criteria:
 - Detection quality grows with profiles M6-08..10; this ticket's tests use fixtures only.
 - Two-tenant test: detection results for tenant A's domain never reach tenant B's run.
 New i18n keys: ESP_DETECTED_NOT_ASSIGNED message and remediation, a truncation message if the partial option is chosen, evidence labels as needed (names follow existing finding key conventions; en + it)
-Status: todo
+Status: done (merged into local dev after QA APPROVE; GM gate full PostgreSQL suite green, lint clean; DKIM concurrency should-fix moved to M6-13b)
