@@ -1,10 +1,12 @@
-"""M5-22 custom DNS check evaluator. Fake resolvers only; no network.
+"""M5-22 custom DNS check evaluator, plus the M5-23 run budget and remediation key. Fake resolvers
+and fake clocks only; no network.
 
 The regex engine really runs (its worker is a local subprocess) except where a test stubs it.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from datetime import UTC, datetime
@@ -20,14 +22,17 @@ from app.checks.custom import (
     MAX_EVIDENCE_ITEMS,
     MAX_RECORDS,
     MAX_REGEX_BUDGET_S,
+    RUN_BUDGET_S,
     CustomDnsCheck,
+    RunBudget,
 )
 from app.checks.models import CheckContext, CheckResult, Target
+from app.checks.registry import CheckRegistry
 from app.core import custom_check_schema
 from app.core.i18n import LOCALES_DIR, t
 from app.core.safe_regex import Match, MatchResult, SearchFailure
 from app.dns.types import DnsQuestion, DnsRecord, DnsResult, ResultState, join_txt_strings
-from app.services.checks import DEFAULT_DEADLINE_S
+from app.services.checks import DEFAULT_DEADLINE_S, run_checks
 
 NAME = "_x.example.com"
 TEXT = {"en": "Publish <b>it</b>.", "it": "Pubblicalo."}
@@ -583,29 +588,113 @@ async def test_remediation_is_the_definition_text_and_not_an_i18n_key() -> None:
     assert finding.params["remediation_text"] == TEXT  # raw: renderers autoescape it
 
 
-async def test_global_row_with_a_key_has_no_remediation_text() -> None:
+# Any lowercase key present in both catalogues works; no custom_check.* key ships yet.
+CATALOGUE_KEY = "api.rules.error.not_found"
+
+
+async def test_global_row_with_a_key_carries_it_to_the_finding() -> None:
     result = await _run(
         EXISTS,
         Dns(ResultState.nodata),
         scope="global",
         remediation_text=None,
-        remediation_key="custom_check.a.remediation",
+        remediation_key=CATALOGUE_KEY,
     )
     _assert_failed(result, "nodata")
     assert "remediation_text" not in result.findings[0].params
+    assert result.findings[0].remediation_key == CATALOGUE_KEY
+    assert result.check_id == "custom:global:acme.check"
+
+
+@pytest.mark.parametrize("lang", ["en", "it"])
+async def test_carried_key_renders_in_every_language(lang: str) -> None:
+    result = await _run(
+        EXISTS,
+        Dns(ResultState.nxdomain),
+        scope="global",
+        remediation_text=None,
+        remediation_key=CATALOGUE_KEY,
+    )
+    found = result.findings[0]
+    assert found.remediation_key is not None
+    assert t(found.remediation_key, lang, **found.params) == t(CATALOGUE_KEY, lang)
+
+
+async def test_a_key_is_only_on_failed_findings() -> None:
+    dns_error = await _run(
+        EXISTS,
+        Dns(ResultState.timeout),
+        scope="global",
+        remediation_text=None,
+        remediation_key=CATALOGUE_KEY,
+    )
+    assert dns_error.findings[0].remediation_key is None
+    ok = await _run(
+        EXISTS,
+        Dns(values=("x",)),
+        scope="global",
+        remediation_text=None,
+        remediation_key=CATALOGUE_KEY,
+    )
+    assert ok.status == "ok" and ok.findings == ()
+
+
+@pytest.mark.parametrize(
+    ("key", "detail"),
+    [
+        ("custom_check.missing.remediation", "unknown_key"),
+        ("finding.SPF_MISSING.remediation", "invalid_format"),  # repository format: lowercase
+        ("nodots", "invalid_format"),
+        (5, "not_a_string"),
+    ],
+)
+async def test_global_key_that_cannot_render_is_error_without_a_query(
+    key: object, detail: str
+) -> None:
+    dns = Dns(ResultState.nxdomain)
+    result = await _run(EXISTS, dns, scope="global", remediation_text=None, remediation_key=key)
+    _assert_error(result, "invalid_definition")
+    assert (result.data["field"], result.data["detail"]) == ("remediation_key", detail)
+    assert dns.questions == []
+
+
+def test_remediation_key_must_be_in_every_catalogue(monkeypatch: pytest.MonkeyPatch) -> None:
+    catalogues = {"en": {"custom_check.a.fix": "x"}, "it": {}}
+    monkeypatch.setattr(custom_check_schema, "load_catalogue", lambda lang: catalogues[lang])
+    with pytest.raises(custom_check_schema.DefinitionInvalid) as caught:
+        custom_check_schema.validate_remediation_key("custom_check.a.fix")
+    assert caught.value.reason == "unknown_key"
+    catalogues["it"] = {"custom_check.a.fix": "y"}
+    assert (
+        custom_check_schema.validate_remediation_key("custom_check.a.fix") == "custom_check.a.fix"
+    )
+
+
+async def test_dry_run_may_omit_the_remediation() -> None:
+    result = await _run(
+        EXISTS, Dns(ResultState.nxdomain), remediation_text=None, remediation_optional=True
+    )
+    _assert_failed(result, "nxdomain")
+    assert "remediation_text" not in result.findings[0].params
     assert result.findings[0].remediation_key is None
+
+
+@pytest.mark.parametrize("scope", ["Global", "", None, 3])
+async def test_untrusted_scope_is_not_echoed(scope: object) -> None:
+    result = await _run(EXISTS, Dns(ResultState.nxdomain), scope=scope)
+    assert result.check_id == "custom:invalid:acme.check"
 
 
 @pytest.mark.parametrize("bad", ["Upper", "", "a b", "k" * 65, None, 5])
 async def test_untrusted_check_key_is_not_echoed(bad: Any) -> None:
     result = await _run(EXISTS, Dns(ResultState.nxdomain), check_key=bad)
-    assert result.check_id == "custom:invalid"
+    assert result.check_id == "custom:tenant:invalid"
     assert result.findings[0].params["check_key"] == "invalid"
 
 
 async def test_result_ids_and_serialization() -> None:
     result = await _run(EXISTS, Dns(ResultState.nxdomain))
-    assert result.check_id == "custom:acme.check" and result.target == "example.com"
+    assert result.check_id == "custom:tenant:acme.check" and result.target == "example.com"
     assert json.loads(result.model_dump_json())["findings"][0]["code"] == "CUSTOM_CHECK_FAILED"
 
 
@@ -630,3 +719,148 @@ async def test_every_finding_renders_with_its_params(lang: str) -> None:
         item = result.findings[0]
         assert t(item.title_key, lang, **item.params)
         assert t(item.detail_key, lang, **item.params)
+
+
+# --- run budget (M5-23) ---------------------------------------------------------------------------
+
+
+class FakeClock:
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+class SlowDns(Dns):
+    """Every answer costs `step` seconds on a fake clock; no real waiting."""
+
+    def __init__(self, clock: FakeClock, step: float, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.clock, self.step = clock, step
+
+    async def resolve(self, question: DnsQuestion) -> DnsResult:
+        self.clock.now += self.step
+        return await super().resolve(question)
+
+
+class Hanging:
+    """Never answers (until cancelled)."""
+
+    identity = "hanging"
+
+    def __init__(self) -> None:
+        self.questions: list[DnsQuestion] = []
+
+    async def resolve(self, question: DnsQuestion) -> DnsResult:
+        self.questions.append(question)
+        await asyncio.Event().wait()
+        raise AssertionError("unreachable")
+
+
+def _budgeted(n: int, budget: RunBudget, spec: dict[str, Any] = EXISTS) -> list[CustomDnsCheck]:
+    return [
+        CustomDnsCheck(
+            check_key=f"c{i}",
+            severity="low",
+            remediation_text=dict(TEXT),
+            budget=budget,
+            **spec,
+        )
+        for i in range(n)
+    ]
+
+
+async def _run_all(checks: list[CustomDnsCheck], dns: Any) -> list[CheckResult]:
+    registry = CheckRegistry()
+    for check in checks:
+        registry.register(check)
+    ctx = CheckContext(resolver=dns, clock=lambda: NOW)
+    return await run_checks([c.id for c in checks], "example.com", ctx, registry=registry)
+
+
+def test_run_budget_is_below_the_run_deadline() -> None:
+    assert RUN_BUDGET_S == 12.0
+    assert RUN_BUDGET_S + 2.0 <= DEFAULT_DEADLINE_S  # room for the last search's worker
+
+
+def test_run_budget_starts_at_first_use() -> None:
+    clock = FakeClock()
+    clock.now = 100.0
+    budget = RunBudget(12.0, clock)
+    clock.now = 500.0  # building the checks and loading rows costs nothing
+    assert budget.remaining() == 12.0
+    clock.now = 505.0
+    assert budget.remaining() == 7.0
+
+
+@pytest.mark.parametrize(
+    ("count", "step", "statuses", "queried"),
+    [
+        (5, 5.0, ["ok", "ok", "error", "error", "error"], 3),
+        (3, 4.0, ["ok", "ok", "error"], 3),  # the third answer lands exactly at the budget
+        (4, 1.0, ["ok", "ok", "ok", "ok"], 4),
+        (2, 20.0, ["error", "error"], 1),
+    ],
+)
+async def test_checks_of_one_run_share_the_budget(
+    count: int, step: float, statuses: list[str], queried: int
+) -> None:
+    clock = FakeClock()
+    dns = SlowDns(clock, step, values=("x",))
+    results = await _run_all(_budgeted(count, RunBudget(12.0, clock)), dns)
+    assert [r.status for r in results] == statuses
+    for result in results:
+        if result.status == "error":
+            _assert_error(result, "run_budget_exceeded")
+    assert len(dns.questions) == queried
+
+
+async def test_spent_budget_is_error_without_a_query() -> None:
+    dns = Dns(values=("x",))
+    results = await _run_all(_budgeted(3, RunBudget(0.0)), dns)
+    assert {r.status for r in results} == {"error"}
+    assert dns.questions == []
+
+
+async def test_hanging_dns_is_cut_at_the_budget_not_the_runner_deadline() -> None:
+    dns = Hanging()
+    t0 = time.monotonic()
+    results = await _run_all(_budgeted(3, RunBudget(0.2)), dns)
+    assert time.monotonic() - t0 < 2.0
+    for result in results:
+        _assert_error(result, "run_budget_exceeded")
+    assert len(dns.questions) == 3
+
+
+async def test_regex_searches_get_at_most_the_run_budget_left(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stub = _Budget(3.0, True)
+    stub.install(monkeypatch)
+    (check,) = _budgeted(1, RunBudget(4.0, stub.clock), MATCHES)
+    ctx = CheckContext(resolver=Dns(values=("x", "y", "z")), clock=lambda: NOW)
+    result = await check.run(ctx, Target(domain="example.com"))
+    _assert_error(result, "run_budget_exceeded")
+    assert stub.calls == [(1.0, 4.0), (1.0, 1.0)]
+
+
+async def test_batch_deadline_from_the_run_budget_names_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = FakeClock()
+
+    def cut(*_a: Any, **_k: Any) -> list[MatchResult]:
+        clock.now += 5.0
+        return [MatchResult((), True, False, SearchFailure.BATCH_DEADLINE)]
+
+    monkeypatch.setattr(custom_module, "search_many", cut)
+    (check,) = _budgeted(1, RunBudget(4.0, clock), MATCHES)
+    ctx = CheckContext(resolver=Dns(values=("x",)), clock=lambda: NOW)
+    _assert_error(await check.run(ctx, Target(domain="example.com")), "run_budget_exceeded")
+
+
+async def test_a_check_without_a_budget_gets_its_own() -> None:
+    check = CustomDnsCheck(check_key="a", severity="low", remediation_text=dict(TEXT), **EXISTS)
+    ctx = CheckContext(resolver=Dns(values=("x",)), clock=lambda: NOW)
+    assert (await check.run(ctx, Target(domain="example.com"))).status == "ok"

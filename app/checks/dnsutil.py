@@ -46,7 +46,9 @@ class CnameFetch:
     ttl: int | None = None
 
 
-def _classify(result: DnsResult, rdtype: str) -> tuple[ResultState, bool, list[str], int | None]:
+def classify(result: DnsResult, rdtype: str) -> tuple[ResultState, bool, list[str], int | None]:
+    """``(state, evaluated, rdata texts of type rdtype, ttl)`` by the mapping above. Public: the
+    custom checks (``app.checks.custom``) use it for any record type."""
     state = result.state
     if state.is_definitive_absence:
         return state, True, [], None
@@ -62,13 +64,13 @@ def _classify(result: DnsResult, rdtype: str) -> tuple[ResultState, bool, list[s
 
 async def fetch_txt(resolver: Resolver, name: str) -> TxtFetch:
     result = await resolver.resolve(DnsQuestion(to_dns_name(name), "TXT"))
-    state, evaluated, texts, ttl = _classify(result, "TXT")
+    state, evaluated, texts, ttl = classify(result, "TXT")
     return TxtFetch(state=state, records=tuple(texts), evaluated=evaluated, ttl=ttl)
 
 
 async def fetch_cname(resolver: Resolver, name: str) -> CnameFetch:
     result = await resolver.resolve(DnsQuestion(to_dns_name(name), "CNAME"))
-    state, evaluated, texts, ttl = _classify(result, "CNAME")
+    state, evaluated, texts, ttl = classify(result, "CNAME")
     targets = list(dict.fromkeys(t.lower().removesuffix(".") for t in texts))
     if len(targets) > 1:
         return CnameFetch(state=ResultState.error, target=None, evaluated=False, ttl=None)

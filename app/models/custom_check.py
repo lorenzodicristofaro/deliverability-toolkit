@@ -7,10 +7,12 @@ remediation_key on global rows only.
 `kind` deliberately excludes `http_fetch` (reserved, deferred to M7 with the guarded outbound
 client; see M5-22): the CHECK refuses it even for a raw insert.
 
-`definition` is stored opaquely as a JSON object; its schema is validated by the M5-22 service
-layer, not here. The JSON size CHECKs measure `CAST(column AS TEXT)`: both backends keep the
-text SQLAlchemy sent (`json.dumps`, ASCII-only), so the repository measures exactly the same
-length before the database.
+`definition` is stored opaquely as a JSON object; its schema is not checked here. The repository
+(`app.repositories.custom_checks`) validates it on every write path with the M5-22 schema
+(`app.core.custom_check_schema.parse_definition`), and the evaluator (`app.checks.custom`)
+validates it again on every run. The JSON size CHECKs measure `CAST(column AS TEXT)`: both
+backends keep the text SQLAlchemy sent (`json.dumps`, ASCII-only), so the repository measures
+exactly the same length before the database.
 
 `check_key` (a stable lowercase slug; not `key`, an SQL keyword) is unique per scope: once among
 global rows (partial unique index, since NULL tenant_id never collides in a plain one) and once

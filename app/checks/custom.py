@@ -8,9 +8,9 @@ recompiles any regex through `compile_checked`, on every run. An invalid stored 
 Status rules:
 - `error` (could not evaluate; never `ok`, never a claim that the record is absent): any DNS state
   other than ok/nxdomain/nodata, an "ok" with no record of the asked type, a regex timeout or any
-  incomplete regex result, the regex time budget running out, a non-numeric value on a range, an
-  invalid definition, a name that cannot be built (too long included), too many records to
-  evaluate.
+  incomplete regex result, the regex time budget running out, the run budget running out (below),
+  a non-numeric value on a range, an invalid definition, a name that cannot be built (too long
+  included), too many records to evaluate.
 - Missing record (DNS answered definitively): `CUSTOM_CHECK_FAILED` with the configured severity
   on all three kinds, `reason` being `nxdomain` or `nodata`. For `dns_matches` and
   `dns_value_range` the requirement is unmet because there is no record to satisfy it; it is not
@@ -30,9 +30,24 @@ Multiple records:
   notation (no exponent, NaN or Infinity, at most 30 digits on each side of the point) and the
   comparison is exact, in `Decimal`.
 
-`Finding.remediation_key` is always None: the remediation is the plain text of the definition, in
-`params["remediation_text"]` ({en, it}), and renderers escape it. A global row carrying only a
-`remediation_key` produces a finding without remediation text.
+Remediation, on `CUSTOM_CHECK_FAILED` only: either the plain text of the definition, in
+`params["remediation_text"]` ({en, it}), which renderers escape, with `Finding.remediation_key`
+None; or, for a global row carrying only a `remediation_key`, that key in
+`Finding.remediation_key`, rendered like any built-in remediation. The key must exist in every
+catalogue (`validate_remediation_key`); a key that does not is an invalid definition (`error`), so
+a failed finding never lacks its remediation.
+
+Ids: `custom:<scope>:<check_key>`, so a global and a tenant check sharing a key never collide in
+one run; an invalid key or scope reads `invalid`, never the stored value.
+
+Run budget (M5-23): every custom check of one domain run shares one `RunBudget` of
+RUN_BUDGET_S, started by the first custom check that runs and kept below the 15 s per-check
+deadline of `app.services.checks`. A check that starts with no budget left is `error`
+(`run_budget_exceeded`) without a DNS query; the DNS lookup is cut at the budget, an answer that
+arrives past it gives no verdict, and the regex searches get at most what is left. So N custom
+checks end within the budget plus scheduling overhead and their own `error`, instead of each one
+racing the runner's deadline into `CHECK_TIMEOUT`; never `ok` once the budget is spent. A
+`CustomDnsCheck` built without a budget (the admin dry run) gets its own.
 """
 
 from __future__ import annotations
@@ -40,12 +55,12 @@ from __future__ import annotations
 import asyncio
 import re
 import time
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Any, Final
 
-from app.checks.dnsutil import _classify
+from app.checks.dnsutil import classify
 from app.checks.models import CheckContext, CheckResult, Finding, Target, finding
 from app.core.custom_check_schema import (
     DefinitionInvalid,
@@ -54,6 +69,7 @@ from app.core.custom_check_schema import (
     ParsedDefinition,
     parse_definition,
     render_name,
+    validate_remediation_key,
     validate_remediation_text,
     validate_severity,
 )
@@ -71,10 +87,31 @@ MAX_EVIDENCE_ITEMS: Final = 5
 MAX_EVIDENCE_CHARS: Final = 256
 MATCH_TIMEOUT_S: Final = 1.0
 MAX_REGEX_BUDGET_S: Final = 10.0  # all the regex searches of one evaluation
+RUN_BUDGET_S: Final = 12.0  # every custom check of one domain run together
+SCOPES: Final = ("global", "tenant")
 _NUMBER: Final = re.compile(r"[+-]?[0-9]{1,30}(\.[0-9]{1,30})?")
 _CHECK_KEY: Final = re.compile(r"[a-z0-9][a-z0-9_.-]{0,63}")
 _BUDGET_EXCEEDED: Final = "regex_budget_exceeded"
+_RUN_BUDGET_EXCEEDED: Final = "run_budget_exceeded"
 _regex_clock = time.monotonic
+
+
+class RunBudget:
+    """Time shared by the custom checks of one run. The clock starts at the first `remaining()`
+    call, so building the checks (and any database work before the run) costs nothing."""
+
+    def __init__(
+        self, total_s: float = RUN_BUDGET_S, clock: Callable[[], float] = time.monotonic
+    ) -> None:
+        self._total = total_s
+        self._clock = clock
+        self._started: float | None = None
+
+    def remaining(self) -> float:
+        now = self._clock()
+        if self._started is None:
+            self._started = now
+        return self._total - (now - self._started)
 
 
 def _evidence(values: Iterable[str]) -> list[str]:
@@ -112,40 +149,48 @@ class CustomDnsCheck:
         severity: object,
         remediation_text: object = None,
         remediation_key: object = None,
-        scope: str = "tenant",
+        scope: object = "tenant",
+        budget: RunBudget | None = None,
+        remediation_optional: bool = False,
     ) -> None:
         valid_key = isinstance(check_key, str) and _CHECK_KEY.fullmatch(check_key)
         self._key = check_key if valid_key else "invalid"
-        self.id = f"custom:{self._key}"
+        self._scope = scope if isinstance(scope, str) and scope in SCOPES else "invalid"
+        self.id = f"custom:{self._scope}:{self._key}"
         self._kind = kind
         self._definition = definition
         self._severity = severity
         self._remediation_text = remediation_text
         self._remediation_key = remediation_key
-        self._scope = scope
+        self._budget = budget if budget is not None else RunBudget()
+        # Dry run only: a definition being tried out needs no remediation yet.
+        self._remediation_optional = remediation_optional
 
     def _error(self, reason: str, **data: Any) -> _Outcome:
         params = {"check_key": self._key, "reason": reason}
         found = finding("CUSTOM_CHECK_ERROR", "low", params, remediation=False)
         return _Outcome([found], False, {"reason": reason, **data})
 
-    def _remediation(self) -> dict[str, str] | None:
+    def _remediation(self) -> tuple[dict[str, str] | None, str | None]:
+        """(text, key): exactly one is set, unless a dry run gave neither."""
         if self._remediation_key is not None:
             if self._scope != "global":
                 raise DefinitionInvalid("remediation_key", "global_only")
             if self._remediation_text is not None:
                 raise DefinitionInvalid("remediation", "both")
-            return None
+            return None, validate_remediation_key(self._remediation_key)
         text = self._remediation_text
+        if text is None and self._remediation_optional:
+            return None, None
         # A stored record carries a LocalizedText; checks do not import repositories.
         as_dict = getattr(text, "as_dict", None)
-        return validate_remediation_text(as_dict() if callable(as_dict) else text)
+        return validate_remediation_text(as_dict() if callable(as_dict) else text), None
 
     async def _evaluate(self, ctx: CheckContext, target: Target) -> _Outcome:
         try:
             parsed = parse_definition(self._kind, self._definition)
             severity = validate_severity(self._severity)
-            remediation = self._remediation()
+            remediation, remediation_key = self._remediation()
         except KindUnavailable:
             params = {"check_key": self._key}
             found = finding("CUSTOM_KIND_UNAVAILABLE", "low", params, remediation=False)
@@ -158,8 +203,17 @@ class CustomDnsCheck:
         except NameRenderError as exc:
             return self._error(exc.reason)
 
-        result = await ctx.resolver.resolve(DnsQuestion(name, parsed.rrtype))
-        state, evaluated, records, _ttl = _classify(result, parsed.rrtype)
+        remaining = self._budget.remaining()
+        if remaining <= 0:
+            return self._error(_RUN_BUDGET_EXCEEDED)
+        try:
+            async with asyncio.timeout(remaining):
+                result = await ctx.resolver.resolve(DnsQuestion(name, parsed.rrtype))
+        except TimeoutError:
+            return self._error(_RUN_BUDGET_EXCEEDED, name=name, rrtype=parsed.rrtype)
+        if self._budget.remaining() <= 0:  # an answer past the budget gives no verdict either
+            return self._error(_RUN_BUDGET_EXCEEDED, name=name, rrtype=parsed.rrtype)
+        state, evaluated, records, _ttl = classify(result, parsed.rrtype)
         data: dict[str, Any] = {
             "kind": parsed.kind,
             "name": name,
@@ -180,6 +234,8 @@ class CustomDnsCheck:
             found = finding(
                 "CUSTOM_CHECK_FAILED", severity, params, _evidence(evidence), remediation=False
             )
+            if remediation_key is not None:
+                found = found.model_copy(update={"remediation_key": remediation_key})
             return _Outcome([found], True, {**data, "reason": reason})
 
         if not evaluated:
@@ -192,7 +248,7 @@ class CustomDnsCheck:
             return self._error("too_many_records", **data)
         try:
             if parsed.kind == "dns_matches":
-                if not await _any_match(parsed, records):
+                if not await _any_match(parsed, records, self._budget):
                     return failed("no_match", records)
             elif not _all_in_range(parsed, records):
                 return failed("out_of_range", records)
@@ -238,20 +294,29 @@ async def _search(rule: CompiledRule, text: str, remaining: float) -> bool:
     return bool(result.matches)
 
 
-async def _any_match(parsed: ParsedDefinition, records: Sequence[str]) -> bool:
+async def _any_match(parsed: ParsedDefinition, records: Sequence[str], run: RunBudget) -> bool:
     assert parsed.rule is not None
     started = _regex_clock()
 
     def budget_left() -> float:
+        run_left = run.remaining()
+        if run_left <= 0:
+            raise _CannotEvaluate(_RUN_BUDGET_EXCEEDED)
         remaining = MAX_REGEX_BUDGET_S - (_regex_clock() - started)
         if remaining <= 0:
             raise _CannotEvaluate(_BUDGET_EXCEEDED)
-        return remaining
+        return min(remaining, run_left)
 
     matched = False
-    for text in records:  # no early exit: an incomplete search is `error` in any record order
-        matched = await _search(parsed.rule, text, budget_left()) or matched
-    budget_left()  # a last search that ended past the budget gives no verdict either
+    try:
+        for text in records:  # no early exit: an incomplete search is `error` in any record order
+            matched = await _search(parsed.rule, text, budget_left()) or matched
+        budget_left()  # a last search that ended past the budget gives no verdict either
+    except _CannotEvaluate as exc:
+        # A search cut by the batch deadline: say which budget ran out.
+        if exc.reason == _BUDGET_EXCEEDED and run.remaining() <= 0:
+            raise _CannotEvaluate(_RUN_BUDGET_EXCEEDED) from None
+        raise
     return matched
 
 
