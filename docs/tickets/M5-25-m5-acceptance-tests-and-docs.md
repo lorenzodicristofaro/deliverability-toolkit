@@ -15,4 +15,4 @@ Acceptance criteria:
 - Report lists the unverified seed items and shortener entries awaiting maintainer confirmation.
 New i18n keys: none
 GM notes (from M5-10): docs/CONTENT.md must carry the List-Unsubscribe citations from app/parsers/list_unsubscribe.py's docstring (RFC 2369 §2, §3, §3.2; RFC 8058 §3.1, §4, §5; RFC 5234 §2.3) and the documented heuristics: case-insensitive One-Click match (exact match exposed as post_value_exact), eligibility requires exactly one of each field, the one-space ABNF rule is not checked, and the parser limits are project choices.
-Status: todo
+Status: in-review
