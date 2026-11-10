@@ -132,7 +132,7 @@ Carried over from M0-07 QA:
   - [x] M5-19 content rules admin UI
   - [x] M5-20 DKIM selectors admin service + REST + check wiring (opus)
   - [x] M5-21 DKIM selectors admin UI
-  - [ ] M5-22 custom checks schema + DNS evaluator (http_fetch rejected, deferred to M7)
+  - [x] M5-22 custom checks schema + DNS evaluator (http_fetch rejected, deferred to M7)
   - [ ] M5-23 custom checks admin service + REST + run wiring (opus)
   - [ ] M5-23b DKIM provider visible to client viewers (opus)
   - [ ] M5-24 custom checks admin UI
