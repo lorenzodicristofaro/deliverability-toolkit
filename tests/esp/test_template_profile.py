@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import shutil
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import pytest
 
@@ -31,10 +32,13 @@ def test_template_loads_with_real_loader() -> None:
 
 def test_template_uses_reserved_example_domains_only() -> None:
     p = parse_esp_profile(_load_yaml(TEMPLATE), "example-esp")
-    hosts = [p.homepage, *p.sources, *p.spf_includes]
+    hosts = [urlsplit(u).hostname or "" for u in (p.homepage, *p.sources)]
+    hosts += list(p.spf_includes)
     hosts += [str(s.target_pattern) for s in p.dkim_selectors if s.target_pattern]
     for h in hosts:
-        assert ".example.com" in h or ".example.net" in h, h
+        assert any(
+            h == d or h.endswith("." + d) for d in ("example.com", "example.net", "example.org")
+        ), h
 
 
 def test_template_is_not_a_shipped_profile() -> None:

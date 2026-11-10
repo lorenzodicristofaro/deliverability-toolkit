@@ -49,7 +49,7 @@ underscore (`_spf`).
 | `verified_on` | yes | ISO date (`2026-11-02`), never in the future. The day you actually read the sources. |
 | `sources` | yes | Non-empty list, at most 10, of `https` URLs (same URL rules as `homepage`, no duplicates). |
 | `status` | yes | `verified` or `unverified`. |
-| `unverified_fields` | iff `status: unverified` | Non-empty list, see below. Forbidden when status is `verified`. |
+| `unverified_fields` | iff `status: unverified` | Non-empty list, at most 50 entries, see below. Forbidden when status is `verified`. |
 
 `verified_on` and `sources` are always required, for `unverified` profiles too.
 
@@ -57,7 +57,7 @@ underscore (`_spf`).
 `_`, then an upper snake case name (`ESP_AMAZON_SES_EASY_DKIM_RANDOM_SELECTORS`), at most 80
 characters, unique in the file. `severity` is one of the finding severities defined in
 `app/checks/models.py`. A pitfall has no condition: a `when:` key is rejected, the pitfall is
-always shown as an info finding for every domain assigned to this ESP.
+shown as an info finding (`ESP_PITFALL`) for every domain assigned to this ESP, unless the pitfall is marked unverified; the declared `severity` is carried in the finding params, not used as the finding severity.
 
 ### `target_pattern`
 
