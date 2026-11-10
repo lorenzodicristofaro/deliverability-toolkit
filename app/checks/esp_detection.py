@@ -15,10 +15,19 @@ assigned profiles. Read only: it never assigns anything. DNS goes through `ctx.r
   `<selector>._domainkey.<domain>`; a target fitting the pattern is a hit (the first target
   only, no chain following). NXDOMAIN and NODATA are misses. Any other state is `ESP_DNS_ERROR`
   and `error`. A target that a same-named verified selector of an assigned profile also fits is
-  not attributed to a candidate. Names are queried once per run, in (profile id, selector)
-  order; at most `MAX_DETECTION_DKIM_QUERIES` queries. When the cap stops probing, the result
-  is partial: `data["detection"]["truncated"]` is true and an `ESP_DETECTION_TRUNCATED` (low)
-  finding keeps the status from being `ok`.
+  not attributed to a candidate. Names are queried once per run, started in (profile id,
+  selector) order with at most `DETECTION_CONCURRENCY` in flight (M6-13b); at most
+  `MAX_DETECTION_DKIM_QUERIES` names. When the cap stops probing, the result is partial:
+  `data["detection"]["truncated"]` is true and an `ESP_DETECTION_TRUNCATED` (low) finding keeps
+  the status from being `ok`. The first query that is not evaluated (timeout, SERVFAIL, invalid
+  name, ...) stops probing: no new query starts, the ones in flight finish and are reported,
+  `data["detection"]["dkim_stopped"]` is true and the result is `error`. `dkim_queries` counts
+  the queries started. Findings and data follow (profile id, selector) order, never completion
+  order.
+- `data["detection"]["spf"]`: None (no candidate with verified includes), "ok", "partial" (every
+  such candidate matched, but the tree had a DNS failure, was truncated or holds a permerror
+  record: the hits stand, the tree is incomplete; the status follows the hit findings), "error"
+  or "permerror" (a candidate could not be ruled out; the result is `error`).
 - Fields a profile marks unverified are never used for matching.
 
 One `ESP_DETECTED_NOT_ASSIGNED` (low) per candidate with a hit: params `esp_id` and `esp`,
@@ -27,6 +36,8 @@ evidence in DNS notation (`include:<host>`, `<name> CNAME <target>`).
 
 from __future__ import annotations
 
+import asyncio
+from collections import deque
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Final
@@ -39,6 +50,8 @@ from app.esp.profile import DkimSelector, EspProfile
 CODES: tuple[str, ...] = ("ESP_DETECTED_NOT_ASSIGNED", "ESP_DETECTION_TRUNCATED")
 
 MAX_DETECTION_DKIM_QUERIES: Final = 32
+# ARCHITECTURE section 6: bounded concurrency, as `app.checks.dkim.PROBE_CONCURRENCY`.
+DETECTION_CONCURRENCY: Final = 8
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,7 +127,7 @@ async def detect(
                 spf_hits[p.id] = matched
             else:
                 unseen.append(p.name)
-        spf_state = "ok"
+        spf_state = "ok" if view.failure is None and view.broken is None else "partial"
         if unseen and view.failure is not None:
             out.evaluated = False
             spf_state = "error"
@@ -132,44 +145,45 @@ async def detect(
             )
 
     # --- DKIM
-    cache: dict[str, CnameFetch | None] = {}  # None: the name cannot be built
+    plan = [
+        (p, sel, f"{sel.name}._domainkey.{domain}")
+        for p in ordered
+        for sel in detectable_selectors(p)
+    ]
+    names = list(dict.fromkeys(name for _, _, name in plan))
+    probe = names[:MAX_DETECTION_DKIM_QUERIES]
+    capped = set(names[MAX_DETECTION_DKIM_QUERIES:])
+    cache, queries, stopped = await _probe_dkim(ctx, probe)
     reported: set[str] = set()
-    queries = 0
     truncated = False
     unprobed: list[str] = []
-    for p in ordered:
-        for sel in detectable_selectors(p):
-            name = f"{sel.name}._domainkey.{domain}"
-            if name not in cache:
-                if queries >= MAX_DETECTION_DKIM_QUERIES:
-                    truncated = True
-                    if p.id not in unprobed:
-                        unprobed.append(p.id)
-                    continue
-                queries += 1
-                try:
-                    cache[name] = await fetch_cname(ctx.resolver, name)
-                except InvalidDomainName:
-                    cache[name] = None
-            res = cache[name]
-            part = f"dkim.selectors.{sel.name}"
-            if res is None or not res.evaluated:
-                out.evaluated = False
-                if name not in reported:
-                    reported.add(name)
-                    state = "invalid_name" if res is None else str(res.state)
-                    out.findings.append(_dns_error(p.name, part, name, "CNAME", state))
-                continue
-            target = res.target
-            if target is None or sel.target_pattern is None:
-                continue
-            if not sel.target_pattern.matches(target):
-                continue
-            if _claimed_by_assigned(assigned, sel.name, target):
-                continue
-            dkim_hits.setdefault(p.id, []).append(
-                {"selector": sel.name, "name": name, "target": target}
-            )
+    for p, sel, name in plan:
+        if name in capped:
+            truncated = True
+            if p.id not in unprobed:
+                unprobed.append(p.id)
+            continue
+        if name not in cache:  # not started: probing stopped on a failure (already reported)
+            continue
+        res = cache[name]
+        part = f"dkim.selectors.{sel.name}"
+        if res is None or not res.evaluated:
+            out.evaluated = False
+            if name not in reported:
+                reported.add(name)
+                state = "invalid_name" if res is None else str(res.state)
+                out.findings.append(_dns_error(p.name, part, name, "CNAME", state))
+            continue
+        target = res.target
+        if target is None or sel.target_pattern is None:
+            continue
+        if not sel.target_pattern.matches(target):
+            continue
+        if _claimed_by_assigned(assigned, sel.name, target):
+            continue
+        dkim_hits.setdefault(p.id, []).append(
+            {"selector": sel.name, "name": name, "target": target}
+        )
 
     detected: list[dict[str, Any]] = []
     for p in ordered:
@@ -200,8 +214,51 @@ async def detect(
         "dkim_query_limit": MAX_DETECTION_DKIM_QUERIES,
         "truncated": truncated,
         "unprobed": unprobed,
+        "dkim_stopped": stopped,
     }
     return out
+
+
+async def _probe_dkim(
+    ctx: CheckContext, names: Sequence[str]
+) -> tuple[dict[str, CnameFetch | None], int, bool]:
+    """CNAME of each name, at most `DETECTION_CONCURRENCY` in flight, started in `names` order.
+
+    Returns (name -> result, None when the name cannot be built; probes started; stopped). The
+    first result that is not evaluated stops probing: no new probe starts after it, the probes in
+    flight finish and their results are kept. Same bounded-worker pattern as
+    `app.checks.dkim.probe_selectors`; the caller reads the results in its own order.
+    """
+    pending = deque(names)
+    results: dict[str, CnameFetch | None] = {}
+    started = 0
+    stopped = False
+
+    async def worker() -> None:
+        nonlocal started, stopped
+        while pending and not stopped:
+            name = pending.popleft()
+            started += 1
+            res: CnameFetch | None
+            try:
+                res = await fetch_cname(ctx.resolver, name)
+            except InvalidDomainName:
+                res = None
+            results[name] = res
+            if res is None or not res.evaluated:
+                stopped = True
+                pending.clear()
+
+    workers = [
+        asyncio.create_task(worker()) for _ in range(min(DETECTION_CONCURRENCY, len(pending)))
+    ]
+    try:
+        await asyncio.gather(*workers)
+    finally:
+        for w in workers:
+            w.cancel()
+        await asyncio.gather(*workers, return_exceptions=True)
+    return results, started, stopped
 
 
 def _claimed_by_assigned(assigned: Sequence[EspProfile], selector: str, target: str) -> bool:

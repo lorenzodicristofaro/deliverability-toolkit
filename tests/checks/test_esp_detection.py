@@ -3,6 +3,7 @@ the in-memory fake resolver of the M6-04 tests: no real profile file, no network
 
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import date
 from typing import Any
@@ -14,7 +15,7 @@ from app.checks.esp_detection import CODES, MAX_DETECTION_DKIM_QUERIES
 from app.checks.esp_profile import EspHosts, EspProfileCheck
 from app.checks.models import CheckResult, Target
 from app.core.i18n import LOCALES_DIR, placeholders
-from app.dns.types import ResultState
+from app.dns.types import DnsQuestion, DnsResult, ResultState
 from app.esp.profile import EspProfile, parse_esp_profile
 from tests.checks.test_esp_profile import FakeDns, Zone, _ctx
 
@@ -385,6 +386,169 @@ async def test_spf_failure_names_only_candidates_not_ruled_out() -> None:
     assert f.params["esp"] == "Beta Esp" and f.params["part"] == "spf.includes"
     assert f.params["state"] == "servfail"
     assert r.data["detection"]["spf"] == "error"
+
+
+async def test_spf_failure_with_every_candidate_matched_is_partial() -> None:
+    """The hit stands (status follows it: warn), but the tree was incomplete: "partial", not
+    "ok". Not `error`: no candidate is left unruled out."""
+    zone: Zone = {
+        SPF: [f"v=spf1 include:spf.alpha.example.com include:_spf.{D} -all"],
+        (f"_spf.{D}", "TXT"): ResultState.servfail,
+    }
+    r, _ = await _run(zone, ["alpha-esp"])
+    assert r.data["detection"]["spf"] == "partial"
+    assert _detected(r) == ["alpha-esp"]
+    assert _codes(r) == ["ESP_DETECTED_NOT_ASSIGNED", "ESP_NONE_ASSIGNED"]
+    assert r.status == "warn"
+
+
+@pytest.mark.parametrize(
+    ("zone", "spf_state"),
+    [
+        ({}, None),  # no SPF record at all: the tree is complete and empty
+        ({SPF: ["v=spf1 include:spf.alpha.example.com -all"]}, "ok"),
+        ({SPF: ResultState.timeout}, "error"),
+        ({SPF: ["v=spf1 -all", "v=spf1 ~all"]}, "permerror"),
+    ],
+    ids=["no_record", "complete", "root_timeout", "two_records"],
+)
+async def test_spf_state_values(zone: Zone, spf_state: str | None) -> None:
+    r, _ = await _run(zone, ["alpha-esp"] if spf_state is not None else ["nopat-esp"])
+    assert r.data["detection"]["spf"] == spf_state
+    assert (r.status == "error") is (spf_state in ("error", "permerror"))
+
+
+# --- bounded, fail-fast DKIM probing (M6-13b). No wall clock: asyncio.Event and sleep(0) only.
+
+N_SELECTORS = 20
+WIDE = _p(
+    "wide-esp",
+    [],
+    [
+        {"name": f"s{i:02d}", "type": "cname", "target_pattern": f"s{i:02d}.*.wide.example.net"}
+        for i in range(N_SELECTORS)
+    ],
+)
+WIDE_NAMES = [f"s{i:02d}._domainkey.{D}" for i in range(N_SELECTORS)]
+
+
+class GatedDns(FakeDns):
+    """`failing` names answer at once and open the gate; every other name waits for the gate,
+    which also opens once `open_at` queries are in flight."""
+
+    def __init__(self, zone: Zone, failing: set[str], open_at: int = 0) -> None:
+        super().__init__(zone)
+        self.failing = failing
+        self.open_at = open_at
+        self.gate = asyncio.Event()
+        self.in_flight = 0
+
+    async def resolve(self, question: DnsQuestion) -> DnsResult:
+        self.in_flight += 1
+        try:
+            if question.name in self.failing or self.in_flight == self.open_at:
+                self.gate.set()
+            else:
+                await self.gate.wait()
+            return await super().resolve(question)
+        finally:
+            self.in_flight -= 1
+
+
+def _dkim_questions(dns: FakeDns) -> list[str]:
+    return [n for n, _ in dns.questions if "._domainkey." in n]
+
+
+@pytest.mark.parametrize(
+    "state",
+    [ResultState.timeout, ResultState.servfail, ResultState.network_error, ResultState.malformed],
+)
+async def test_dkim_failure_stops_new_probes(
+    monkeypatch: pytest.MonkeyPatch, state: ResultState
+) -> None:
+    monkeypatch.setattr(esp_detection, "DETECTION_CONCURRENCY", 4)
+    failing = WIDE_NAMES[1]
+    zone: Zone = {(failing, "CNAME"): state}
+    zone.update({(n, "CNAME"): [f"{n[:3]}.x.wide.example.net."] for n in WIDE_NAMES[2:]})
+    dns = GatedDns(zone, {failing})
+    r = await EspProfileCheck([], {}, [WIDE]).run(_ctx(dns), Target(domain=D))
+    asked = _dkim_questions(dns)
+    # Bound: after the failure no new query starts, so at most one batch was ever started.
+    assert len(asked) <= esp_detection.DETECTION_CONCURRENCY < N_SELECTORS
+    assert failing in asked and WIDE_NAMES[-1] not in asked
+    assert r.status == "error"
+    detection = r.data["detection"]
+    assert detection["dkim_stopped"] is True and detection["truncated"] is False
+    assert detection["dkim_queries"] == len(asked)
+    (f,) = [f for f in r.findings if f.code == "ESP_DNS_ERROR"]
+    assert f.params["name"] == failing and f.params["state"] == str(state)
+
+
+async def test_dkim_failures_in_flight_are_all_reported_in_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every query that started fails; none is swallowed, findings follow selector order."""
+    monkeypatch.setattr(esp_detection, "DETECTION_CONCURRENCY", 4)
+    first = WIDE_NAMES[:4]
+    zone: Zone = {(n, "CNAME"): ResultState.timeout for n in WIDE_NAMES}
+    dns = GatedDns(zone, set(), open_at=4)  # four queries in flight, then all time out
+    r = await EspProfileCheck([], {}, [WIDE]).run(_ctx(dns), Target(domain=D))
+    asked = _dkim_questions(dns)
+    assert sorted(asked) == first  # the first batch, nothing after it
+    errors = [f.params["name"] for f in r.findings if f.code == "ESP_DNS_ERROR"]
+    assert errors == first
+    assert r.status == "error" and r.data["detection"]["dkim_queries"] == 4
+
+
+class ReorderingDns(FakeDns):
+    """Later names answer first (fewer event-loop turns); records the most queries in flight."""
+
+    def __init__(self, zone: Zone) -> None:
+        super().__init__(zone)
+        self.in_flight = 0
+        self.max_in_flight = 0
+
+    async def resolve(self, question: DnsQuestion) -> DnsResult:
+        self.in_flight += 1
+        self.max_in_flight = max(self.max_in_flight, self.in_flight)
+        try:
+            idx = WIDE_NAMES.index(question.name) if question.name in WIDE_NAMES else 0
+            for _ in range(2 * (N_SELECTORS - idx)):
+                await asyncio.sleep(0)
+            return await super().resolve(question)
+        finally:
+            self.in_flight -= 1
+
+
+async def _wide_run(monkeypatch: pytest.MonkeyPatch, concurrency: int) -> tuple[Any, ReorderingDns]:
+    monkeypatch.setattr(esp_detection, "DETECTION_CONCURRENCY", concurrency)
+    zone: Zone = {(n, "CNAME"): [f"{n[:3]}.x.wide.example.net."] for n in WIDE_NAMES}
+    zone[(WIDE_NAMES[5], "CNAME")] = ["elsewhere.example.org."]  # a miss among the hits
+    other = _p(
+        "other-esp",
+        [],
+        [{"name": "s03", "type": "cname", "target_pattern": "s03.*.wide.example.net"}],
+    )
+    dns = ReorderingDns(zone)
+    r = await EspProfileCheck([], {}, [WIDE, other]).run(_ctx(dns), Target(domain=D))
+    return r, dns
+
+
+async def test_concurrency_is_bounded_and_order_ignores_completion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    r, dns = await _wide_run(monkeypatch, 4)
+    assert 1 < dns.max_in_flight <= 4
+    serial, serial_dns = await _wide_run(monkeypatch, 1)
+    assert serial_dns.max_in_flight == 1
+    assert r.findings == serial.findings
+    assert r.data["detection"] == serial.data["detection"]
+    detection = r.data["detection"]
+    assert [d["id"] for d in detection["detected"]] == ["other-esp", "wide-esp"]
+    wide = detection["detected"][1]["dkim"]
+    assert [d["selector"] for d in wide] == [f"s{i:02d}" for i in range(N_SELECTORS) if i != 5]
+    assert detection["dkim_queries"] == N_SELECTORS and detection["dkim_stopped"] is False
+    assert len(set(_dkim_questions(dns))) == len(_dkim_questions(dns)) == N_SELECTORS
 
 
 async def test_cap_reached_is_partial_and_never_ok(monkeypatch: pytest.MonkeyPatch) -> None:
