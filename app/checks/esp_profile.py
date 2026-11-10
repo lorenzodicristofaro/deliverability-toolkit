@@ -57,9 +57,13 @@ have verified `spf.includes`. It reuses `SpfTree.lookup_count` (no recount) and 
   records, syntax error) is not a reason for `error` here: receivers stop at it, and the SPF
   check and the include part report it.
 
-No assigned profile: one `ESP_NONE_ASSIGNED` info finding. `CheckResult` derives `ok` from an
-empty finding list and accepts no other status for it, so "info with no findings" cannot be
-expressed without changing the shared model.
+Detection (M6-13, `app.checks.esp_detection`): with `candidates` (the loaded profiles not
+assigned to the domain; None turns detection off) the check also reports DNS records of those
+ESPs (`ESP_DETECTED_NOT_ASSIGNED`), on this run's SPF tree, and adds `data["detection"]`.
+
+No assigned profile: one `ESP_NONE_ASSIGNED` info finding (plus any detection findings).
+`CheckResult` derives `ok` from an empty finding list and accepts no other status for it, so
+"info with no findings" cannot be expressed without changing the shared model.
 
 `data["esps"]` has one section per profile, sorted by id; selectors are sorted by name.
 """
@@ -72,6 +76,7 @@ from dataclasses import dataclass
 from typing import Any, Final, Literal
 
 from app.checks.dnsutil import classify, fetch_cname, fetch_txt
+from app.checks.esp_detection import SpfView, detect
 from app.checks.models import CheckContext, CheckResult, Finding, Severity, Target, finding
 from app.checks.spf import NEAR_LOOKUP_THRESHOLD
 from app.checks.spf_tree import LOOKUP_LIMIT, SpfTree, resolve_spf
@@ -150,6 +155,20 @@ class _Run:
             except InvalidDomainName:
                 self._spf_failed = "invalid_name"
         return self._spf, self._spf_failed
+
+
+async def _spf_view(run: _Run) -> SpfView:
+    """The run's SPF tree as detection needs it (resolved at most once per run)."""
+    tree, failed = await run.spf_tree()
+    if tree is None:
+        return SpfView(frozenset(), failure=(run.domain, "TXT", failed or "error"))
+    failure: tuple[str, str, str] | None = None
+    if tree.errors:
+        name, rdtype, state = tree.errors[0]
+        failure = (name, rdtype, str(state))
+    elif tree.truncated:
+        failure = (run.domain, "TXT", "truncated")
+    return SpfView(frozenset(_spf_targets(tree)), failure, _broken_node(tree))
 
 
 def _part(state: PartState, **extra: Any) -> dict[str, Any]:
@@ -482,7 +501,8 @@ async def _profile(run: _Run, esp: EspProfile, hosts: EspHosts) -> dict[str, Any
 
 class EspProfileCheck:
     """`Check` for the ESPs assigned to one domain. `assignments` maps profile id -> hosts; a
-    profile without an entry has both hosts unknown."""
+    profile without an entry has both hosts unknown. `candidates`: the loaded profiles that are
+    not assigned, for detection (M6-13); None turns detection off."""
 
     id = "esp"
 
@@ -490,6 +510,7 @@ class EspProfileCheck:
         self,
         profiles: Sequence[EspProfile],
         assignments: Mapping[str, EspHosts] | None = None,
+        candidates: Sequence[EspProfile] | None = None,
     ) -> None:
         ids = [p.id for p in profiles]
         if len(set(ids)) != len(ids):
@@ -497,8 +518,15 @@ class EspProfileCheck:
         extra = set(assignments or {}) - set(ids)
         if extra:
             raise ValueError(f"assignment for an ESP profile not given: {sorted(extra)}")
+        if candidates is not None:
+            cids = [p.id for p in candidates]
+            if len(set(cids)) != len(cids):
+                raise ValueError("duplicate ESP candidate id")
+            if set(cids) & set(ids):
+                raise ValueError("an assigned ESP profile is also a detection candidate")
         self._profiles = tuple(sorted(profiles, key=lambda p: p.id))
         self._hosts = dict(assignments or {})
+        self._candidates = None if candidates is None else tuple(candidates)
 
     async def run(self, ctx: CheckContext, target: Target) -> CheckResult:
         started = ctx.clock()
@@ -506,7 +534,7 @@ class EspProfileCheck:
         findings: list[Finding]
         data: dict[str, Any]
         evaluated = True
-        if not self._profiles:
+        if not self._profiles and self._candidates is None:
             findings = [finding("ESP_NONE_ASSIGNED", "info")]
             data = {"esps": []}
         else:
@@ -532,12 +560,22 @@ class EspProfileCheck:
                 evaluated = False
             else:
                 run = _Run(ctx, domain)
+                if not self._profiles:
+                    run.findings.append(finding("ESP_NONE_ASSIGNED", "info"))
                 sections = [
                     await _profile(run, p, self._hosts.get(p.id, EspHosts()))
                     for p in self._profiles
                 ]
                 await _spf_budget(run, self._profiles)
-                findings, data, evaluated = run.findings, {"esps": sections}, run.evaluated
+                data = {"esps": sections}
+                if self._candidates is not None:
+                    found = await detect(
+                        ctx, domain, self._candidates, self._profiles, lambda: _spf_view(run)
+                    )
+                    run.findings.extend(found.findings)
+                    run.evaluated = run.evaluated and found.evaluated
+                    data["detection"] = found.data
+                findings, evaluated = run.findings, run.evaluated
         return CheckResult.build(
             check_id=self.id,
             target=target.domain,

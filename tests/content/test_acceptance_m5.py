@@ -24,6 +24,7 @@ from sqlalchemy import func, select
 from typer.testing import CliRunner
 
 from app.api.v1 import checks as api_checks
+from app.api.v1.domain_esps import esp_profiles
 from app.cli import content as cli_content
 from app.cli.main import app as cli_app
 from app.core import i18n
@@ -36,7 +37,7 @@ from app.main import create_app
 from app.models import CustomCheck, User
 from app.services.content_analysis import ContentAnalysis, ContentInput, analyze_content
 from tests.api.test_domains import KEY, World, _seed, call
-from tests.checks.test_acceptance_m3 import REGISTERED, Scripted, healthy, txt
+from tests.checks.test_acceptance_m3 import DOMAIN_ALL, Scripted, healthy, no_esp_profiles, txt
 from tests.support.socket_guard import db_endpoint, install, resolved_addresses
 
 RULES = "/api/v1/rules"
@@ -155,6 +156,7 @@ def world(migrated_db_url: str, monkeypatch: pytest.MonkeyPatch, zone: Zone) -> 
     settings = Settings(database_url=migrated_db_url, secret_key=KEY, encryption_key=KEY)  # type: ignore[call-arg]
     application = create_app(settings)
     application.dependency_overrides[api_checks._resolver] = zone.resolver
+    application.dependency_overrides[esp_profiles] = no_esp_profiles
     try:
         with TestClient(application, raise_server_exceptions=True) as client:
             yield World(client, db, settings, tenant_a, tenant_b, users, domains)
@@ -459,8 +461,8 @@ def run_all(w: World, who: str = "analyst") -> dict[str, dict[str, Any]]:
     response = call(w, who, "POST", f"/api/v1/domains/{w.domains['assigned']}/checks/all")
     assert response.status_code == 200, response.text[:300]
     results: list[dict[str, Any]] = response.json()
-    assert [r["check_id"] for r in results[: len(REGISTERED)]] == list(REGISTERED)
-    return {r["check_id"]: r for r in results[len(REGISTERED) :]}
+    assert [r["check_id"] for r in results[: len(DOMAIN_ALL)]] == list(DOMAIN_ALL)
+    return {r["check_id"]: r for r in results[len(DOMAIN_ALL) :]}
 
 
 DNS_CASES = [

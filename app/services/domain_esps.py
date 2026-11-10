@@ -41,14 +41,16 @@ need them: the catalogue, the list (profile names) and assign. Remove needs no p
 
 Domain runs (M6-06): `resolve_esp_run` builds the `esp` check of one domain run from the
 domain's assignments, read through the tenant repository with the caller's `TenantContext`, and
-the loaded profiles. Profiles are loaded only when the domain has an assignment, so a run of a
-domain without ESPs never depends on them. Every role that may run checks on the domain gets the
-full result, client viewers included (M6-06c). Outcomes:
-- no assignment: `EspProfileCheck` with no profile (the M6-04 `ESP_NONE_ASSIGNED` info result),
-  `assigned` False (not part of `all`);
+the loaded profiles. The profiles are always loaded: the loaded profiles that are not assigned
+are the detection candidates (M6-13, `app.checks.esp_detection`), so the `esp` check is part of
+`all` for every domain. `assigned` says only whether the domain has an assignment. Every role
+that may run checks on the domain gets the full result, client viewers included (M6-06c).
+Outcomes:
+- no assignment: `EspProfileCheck` with no profile and every loaded profile as a candidate (the
+  M6-04 `ESP_NONE_ASSIGNED` info result plus any detection findings);
 - the repository fails (SQLAlchemyError) or the profiles cannot be loaded: a check that returns
-  `error` with `CHECK_INTERNAL_ERROR` (not evaluated), `assigned` True so `all` shows it; the
-  other checks of the run are unaffected;
+  `error` with `CHECK_INTERNAL_ERROR` (not evaluated; detection cannot run either); the other
+  checks of the run are unaffected;
 - an assigned profile id that is no longer loaded (file removed or renamed): the loaded ones are
   evaluated, and each missing one adds `ESP_PROFILE_UNAVAILABLE` (param `esp`: the stored id) and
   is listed in `data["unavailable"]`; the result is `error`, never `ok`.
@@ -341,7 +343,7 @@ class DomainEspService:
 
 @dataclass(frozen=True, slots=True)
 class EspRun:
-    """The `esp` check of one domain run; `assigned` False means it stays out of `all`."""
+    """The `esp` check of one domain run; `assigned`: the domain has at least one assignment."""
 
     check: Check
     assigned: bool
@@ -365,7 +367,8 @@ class _UnavailableEspCheck:
 
 
 class _AssignedEspCheck:
-    """`EspProfileCheck` on the loaded profiles; profile ids no longer loaded make it `error`."""
+    """`EspProfileCheck` on the loaded assigned profiles, with detection over `candidates`;
+    profile ids no longer loaded make it `error`."""
 
     id = ESP_CHECK_ID
 
@@ -374,21 +377,19 @@ class _AssignedEspCheck:
         profiles: Sequence[EspProfile],
         hosts: dict[str, EspHosts],
         missing: Sequence[str],
+        candidates: Sequence[EspProfile] = (),
     ) -> None:
-        self._check = EspProfileCheck(profiles, hosts) if profiles else None
+        self._check = EspProfileCheck(profiles, hosts, candidates)
         self._missing = tuple(missing)
 
     async def run(self, ctx: CheckContext, target: Target) -> CheckResult:
-        if self._check is not None:
-            result = await self._check.run(ctx, target)
-            if not self._missing:
-                return result
-            findings: list[Finding] = list(result.findings)
-            data = dict(result.data)
-            started, duration = result.started_at, result.duration_ms
-        else:
-            findings, data = [], {"esps": []}
-            started, duration = ctx.clock(), 0
+        result = await self._check.run(ctx, target)
+        if not self._missing:
+            return result
+        # Something is assigned, only not loaded: "no ESP assigned" would be wrong.
+        findings: list[Finding] = [f for f in result.findings if f.code != "ESP_NONE_ASSIGNED"]
+        data = dict(result.data)
+        started, duration = result.started_at, result.duration_ms
         findings.extend(
             finding("ESP_PROFILE_UNAVAILABLE", "low", {"esp": esp_id}) for esp_id in self._missing
         )
@@ -423,14 +424,17 @@ def resolve_esp_run(
             "esp assignments unreadable", extra={"event": "domain_esps.assignments_unreadable"}
         )
         return EspRun(_UnavailableEspCheck(), assigned=True)
-    if not records:
-        return EspRun(EspProfileCheck(()), assigned=False)
     try:
         by_id = {p.id: p for p in load_profiles(profiles)}
     except EspProfilesUnavailable:
-        return EspRun(_UnavailableEspCheck(), assigned=True)
+        return EspRun(_UnavailableEspCheck(), assigned=bool(records))
     # Records are unique per (domain, esp_id), so `known` has no duplicate and every host entry
-    # names a profile in it: EspProfileCheck's ValueError cases cannot occur.
+    # names a profile in it; `by_id` drops duplicate profile ids and the candidates exclude
+    # every assigned id: EspProfileCheck's ValueError cases cannot occur.
+    assigned_ids = {r.esp_id for r in records}
+    candidates = [p for pid, p in sorted(by_id.items()) if pid not in assigned_ids]
+    if not records:
+        return EspRun(_AssignedEspCheck((), {}, (), candidates), assigned=False)
     known = [by_id[r.esp_id] for r in records if r.esp_id in by_id]
     hosts = {
         r.esp_id: EspHosts(r.return_path_host, r.tracking_host)
@@ -438,7 +442,7 @@ def resolve_esp_run(
         if r.esp_id in by_id
     }
     missing = sorted(r.esp_id for r in records if r.esp_id not in by_id)
-    check = _AssignedEspCheck(known, hosts, missing)
+    check = _AssignedEspCheck(known, hosts, missing, candidates)
     if missing:
         logger.warning(
             "assigned esp profile not loaded",

@@ -208,7 +208,7 @@ def test_all_returns_every_check_sorted(world: World) -> None:
     r = call(world, "viewer", "POST", dpath(world, "assigned", "/all"))
     assert r.status_code == 200
     body = r.json()
-    assert [x["check_id"] for x in body] == sorted(CHECKS)
+    assert [x["check_id"] for x in body] == sorted([*CHECKS, "esp"])
     assert all(set(x) == WIRE_KEYS and x["target"] == "assigned.example" for x in body)
 
 
@@ -396,10 +396,6 @@ def broken_profiles() -> Sequence[EspProfile]:
     raise EspProfileError("profile directory not found")
 
 
-def never_called() -> Sequence[EspProfile]:
-    raise AssertionError("profiles loaded for a domain without ESPs")
-
-
 def ids_of(response: Any) -> list[str]:
     assert response.status_code == 200, response.text[:300]
     return [x["check_id"] for x in response.json()]
@@ -413,31 +409,84 @@ def codes(result: dict[str, Any]) -> list[str]:
     return [f["code"] for f in result["findings"]]
 
 
-def test_all_without_esp_is_byte_equal_to_the_built_ins(
+def test_all_without_esp_is_byte_equal_to_the_built_ins_plus_esp(
     world: World, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """Updated on purpose by M6-13: `esp` (detection) now runs in `all` with no assignment, so
+    `all` equals the built-ins plus `esp`, byte for byte, and that `esp` entry is the single
+    ESP_NONE_ASSIGNED info result on a zone without ESP records."""
     real = checks_api._context
 
     def fixed(*args: Any, **kw: Any) -> CheckContext:
         return real(*args, **kw).model_copy(update={"clock": lambda: FIXED})
 
     monkeypatch.setattr(checks_api, "_context", fixed)
-    set_profiles(world, never_called)  # no assignment: the profiles are never loaded
     everything = call(world, "owner", "POST", dpath(world, "assigned", "/all"))
     built_ins = call(
-        world, "owner", "POST", dpath(world, "assigned", ""), json={"ids": sorted(CHECKS)}
+        world,
+        "owner",
+        "POST",
+        dpath(world, "assigned", ""),
+        json={"ids": sorted([*CHECKS, "esp"])},
     )
-    assert ids_of(everything) == sorted(CHECKS)
+    assert ids_of(everything) == sorted([*CHECKS, "esp"])
     assert everything.content == built_ins.content
+    esp = by_id(everything, "esp")
+    assert codes(esp) == ["ESP_NONE_ASSIGNED"] and esp["status"] == "info"
 
 
 def test_esp_by_id_without_assignment_is_none_assigned(world: World) -> None:
-    set_profiles(world, never_called)
     r = call(world, "analyst", "POST", dpath(world, "assigned", "/esp"))
     assert r.status_code == 200
     body = r.json()
     assert body["check_id"] == "esp" and body["status"] == "info"
     assert codes(body) == ["ESP_NONE_ASSIGNED"]
+
+
+def test_all_with_broken_profiles_and_no_assignment_is_esp_error(world: World) -> None:
+    set_profiles(world, broken_profiles)
+    r = call(world, "owner", "POST", dpath(world, "assigned", "/all"))
+    assert ids_of(r) == sorted([*CHECKS, "esp"])
+    esp = by_id(r, "esp")
+    assert esp["status"] == "error" and codes(esp) == ["CHECK_INTERNAL_ERROR"]
+    assert all(x["status"] != "error" for x in r.json() if x["check_id"] != "esp")
+
+
+DETECTION_ZONES: dict[str, list[dict[str, Any]]] = {
+    "default": [
+        *ZONES["default"],
+        {
+            "name": "s1._domainkey.assigned.example",
+            "type": "CNAME",
+            "ttl": 300,
+            "rdata": ["s1.dkim.tenant-a.esp.example.com."],
+        },
+        {"name": B_SECRET_NAME, "type": "TXT", "ttl": 300, "rdata": ["v=spf1 -all"]},
+    ]
+}
+
+
+@pytest.mark.parametrize("tail", ["/all", "/esp"])
+def test_detection_of_tenant_a_never_reaches_tenant_b(world: World, tail: str) -> None:
+    """Two tenants: tenant A's domain has DNS of the unassigned example-esp; tenant A sees the
+    detection, tenant B's own run has none, and tenant B asking for A's domain is a 404."""
+    backend, _ = fake_backend(DETECTION_ZONES)
+    world.client.app.dependency_overrides[dns_backend] = lambda: backend  # type: ignore[attr-defined]
+    own = call(world, "analyst", "POST", dpath(world, "assigned", tail))
+    assert own.status_code == 200
+    esp_a = _esp_of(own)
+    assert "ESP_DETECTED_NOT_ASSIGNED" in codes(esp_a)
+    assert [d["id"] for d in esp_a["data"]["detection"]["detected"]] == ["example-esp"]
+
+    b_own = call(world, "b_owner", "POST", dpath(world, "other", tail), tenant="b")
+    assert b_own.status_code == 200
+    esp_b = _esp_of(b_own)
+    assert esp_b["data"]["detection"]["detected"] == []
+    assert "tenant-a" not in b_own.text and "assigned.example" not in b_own.text
+
+    foreign = call(world, "b_owner", "POST", dpath(world, "assigned", tail), tenant="b")
+    assert foreign.status_code == 404
+    assert "tenant-a" not in foreign.text and "example-esp" not in foreign.text
 
 
 @pytest.mark.parametrize("who", ["owner", "admin", "analyst"])
@@ -535,7 +584,8 @@ def test_tenant_b_assignment_never_reaches_tenant_a_run(world: World) -> None:
         assert B_HOST not in r.text and B_SECRET_NAME not in r.text
         assert "example-esp" not in r.text
     r = call(world, "owner", "POST", dpath(world, "assigned", "/all"))
-    assert ids_of(r) == sorted(CHECKS)
+    assert ids_of(r) == sorted([*CHECKS, "esp"])  # M6-13: `esp` always runs in `all`
+    assert by_id(r, "esp")["data"]["esps"] == []
     # Tenant B's own run sees its assignment; tenant A's domain stays foreign to it.
     own = call(world, "b_owner", "POST", dpath(world, "other", "/esp"), tenant="b")
     assert own.status_code == 200
@@ -562,7 +612,8 @@ def test_only_unloaded_profiles_is_error_not_none_assigned(world: World) -> None
     body = call(world, "owner", "POST", dpath(world, "assigned", "/esp")).json()
     assert body["status"] == "error"
     assert codes(body) == ["ESP_PROFILE_UNAVAILABLE"]
-    assert body["data"] == {"esps": [], "unavailable": ["gone-esp"]}
+    assert body["data"]["esps"] == [] and body["data"]["unavailable"] == ["gone-esp"]
+    assert body["data"]["detection"]["detected"] == []  # M6-13: detection still ran
 
 
 @pytest.mark.parametrize("tail", ["/all", "/esp"])
@@ -577,12 +628,6 @@ def test_broken_profiles_make_only_esp_error(world: World, tail: str) -> None:
     if tail == "/all":
         assert ids_of(r) == sorted([*CHECKS, "esp"])
         assert by_id(r, "spf")["status"] == "ok" and by_id(r, "dmarc")["status"] == "ok"
-
-
-def test_broken_profiles_without_assignment_change_nothing(world: World) -> None:
-    set_profiles(world, broken_profiles)
-    r = call(world, "owner", "POST", dpath(world, "assigned", "/all"))
-    assert ids_of(r) == sorted(CHECKS)
 
 
 def test_repository_failure_makes_only_esp_error(

@@ -4,19 +4,18 @@ Routes (all POST, so the CSRF rules are those of `/api/v1/domains`):
 - `/domains/{domain_id}/checks/{check_id}`: one check, or `all` (every registered check, then the
   enabled custom checks of the active tenant and the global ones, M5-23);
   the domain routes also know `esp` (M6-06, `app.services.domain_esps.resolve_esp_run`): the
-  domain's assigned ESPs, read through the tenant repository. It is part of `all` only when the
-  domain has an assignment (sorted among the built-ins); requested by id with no assignment it is
-  the `ESP_NONE_ASSIGNED` info result. Every role that may run checks on the domain gets the
-  full `esp` result, client viewers on their assigned domains included (M6-06c). The free route
-  does not know `esp`;
+  domain's assigned ESPs, read through the tenant repository, plus detection of the loaded ESPs
+  that are not assigned (M6-13). It is always part of `all` (sorted among the built-ins); with no
+  assignment and nothing detected it is the `ESP_NONE_ASSIGNED` info result. Every role that
+  may run checks on the domain gets the full `esp` result, client viewers on their assigned
+  domains included (M6-06c). The free route does not know `esp`;
 - `/domains/{domain_id}/checks`: body `{"ids": [...]}`;
 - `/checks/free`: body `{"name": ..., "ids": [...]}`, no tenant data.
 
 The response body is the `CheckResult` wire JSON of the M3-02 service, byte for byte
 (`model_dump_json`), so the API and the CLI print the same thing. A single check answers with one
 object; `all` and `ids` answer with an array of objects in request order (`all`: the built-in
-checks sorted by id, then the custom checks in creation order; with no enabled custom check and no
-assigned ESP it is exactly the pre-M5 answer).
+checks sorted by id, `esp` among them, then the custom checks in creation order).
 
 Status codes (bodies are `{"detail": <i18n>}`, never echoing user input):
 - 401 anonymous (mutations first need a valid CSRF token, else the middleware answers 403);
@@ -204,16 +203,15 @@ def _prepare(
 def _prepare_all(
     access: _CheckTarget, db: Session, profiles: ProfileSource
 ) -> tuple[CheckRegistry, list[str]]:
-    """The registry and ids of `all`: built-ins (DKIM on the tenant's selectors, `esp` when the
-    domain has an assigned ESP) plus the tenant's custom checks; ends
+    """The registry and ids of `all`: built-ins (DKIM on the tenant's selectors, `esp` with
+    detection, M6-13) plus the tenant's custom checks; ends
     the transaction. The ESP assignments are read last, so a failure there cannot affect the
     other reads."""
     try:
         registry = registry_for(resolve_probe_selectors(access.ctx, db))
         custom = run_checks_for(access.ctx, db)
         esp = resolve_esp_run(access.ctx, db, access.view.id, profiles)
-        if esp.assigned:
-            registry = registry.with_checks([esp.check])
+        registry = registry.with_checks([esp.check])
     finally:
         db.rollback()
     return registry.with_checks(custom), [*registry.all_ids(), *(c.id for c in custom)]
