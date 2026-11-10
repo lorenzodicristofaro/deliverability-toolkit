@@ -12,5 +12,7 @@ Acceptance criteria:
 - Other Italian candidates named in SPEC 4.2 are Emailchef, Contactlab/Experian, Agile Telecom and Aruba. Pick at most two whose OFFICIAL documentation is reachable and states the setup (SPF/DKIM at least); skip the rest and list each skipped one with the reason (unreachable, no public doc, not an ESP for third-party domains). Fewer verified profiles beat more unverified ones.
 - Each profile loads with the M6-01 loader and passes `tests/esp/test_shipped_profiles.py`; notes/pitfall texts as i18n keys in en and it (the Italian wording is reviewed by the maintainer, flag in the Note).
 - Consistency with `seeds/dkim_selectors.yaml` where selectors overlap.
+- i18n key rule: `notes_key` values must not contain hyphens (the loader regex `_NOTES_KEY` in app/esp/profile.py rejects them). The key segment is the profile id with `-` replaced by `_`. Profile ids and file names may keep hyphens.
+- `target_pattern` `*` matches exactly one whole DNS label. A partial-label prefix such as `selector1-<domain>` can only be written as a whole `*`; do not write partial-label patterns.
 New i18n keys: esp.mailup.* (and the other chosen ids) notes and pitfall keys (en + it)
 Status: todo

@@ -186,6 +186,7 @@ Carried over from M0-07 QA:
 - [ ] Security review checklist, dependency/license audit, v0.1.0 release
 
 ## Follow-ups (post-M1)
+- [ ] ESP loader nit (M6-01 QA): app/esp/profile.py:53 imports private helpers (`_check_keys`, `_fail`, `_str`, `_date`, `_status`) from app/dns/knowledge.py; make them public (pairs with the M5-09 seed loader item).
 - [ ] Custom checks (M5-23 QA nits): "id order" (app/services/custom_checks_admin.py:172) vs "creation order" (app/api/v1/checks.py:12), pick one wording; `with_checks` DuplicateCheckError at app/api/v1/checks.py:69 would 500 the whole `all` run (unreachable today: catch it or comment why); tests/api/test_custom_checks_api.py:569 viewer run test should assert pattern/range text never appears in the response.
 - [ ] DKIM provider nits (M5-23b QA): `ProbeSelectors.providers` is a MappingProxyType in a frozen dataclass, so hashing it raises TypeError (app/services/dkim_probe_selectors.py:50-57; add `field(hash=False)` or a comment); CLI `--selector` gets seed providers implicitly via `providers=None` (app/cli/check.py:97).
 - [ ] Flaky timing test (GM, 2026-11-10): tests/parsers/test_received.py:365 `test_scanners_linear` asserts wall-clock < 1.0 s; it failed once ([keywords]) while two full suites ran at once, passes alone. Use a relative bound or an operation counter instead of wall-clock (same pattern at :384).

@@ -11,5 +11,7 @@ Acceptance criteria:
 - Mailbox providers (Google Workspace, Microsoft 365) are sender-side configuration for a domain whose mail is sent through them; the profile describes SPF include and DKIM, not return-path or tracking. Fields that do not apply are omitted, not invented. Where DKIM selectors are tenant-specific or key-rotated, the profile says what the docs state and nothing more.
 - Each profile loads with the M6-01 loader and passes `tests/esp/test_shipped_profiles.py`; en + it texts for notes and pitfalls.
 - Consistency with `seeds/dkim_selectors.yaml` (Microsoft 365 and Google Workspace selectors were verified in M3-20).
-New i18n keys: esp.google-workspace.*, esp.microsoft-365.*, esp.brevo.* notes and pitfall keys (en + it)
+- i18n key rule: `notes_key` values must not contain hyphens (the loader regex `_NOTES_KEY` in app/esp/profile.py rejects them). The key segment is the profile id with `-` replaced by `_`. Profile ids and file names may keep hyphens.
+- `target_pattern` `*` matches exactly one whole DNS label. A partial-label prefix such as `selector1-<domain>` can only be written as a whole `*`; do not write partial-label patterns.
+New i18n keys: esp.google_workspace.*, esp.microsoft_365.*, esp.brevo.* notes and pitfall keys (en + it)
 Status: todo
