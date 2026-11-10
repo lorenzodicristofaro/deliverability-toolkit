@@ -30,6 +30,26 @@ failure is a 409, never a 500.
 
 Renaming a domain does not re-check stored hosts (noted in the repository; the renaming ticket
 decides what to do with them).
+
+Profiles that cannot be loaded (`KnowledgeError`, of which `EspProfileError` is a subclass; the
+loader caches only successful loads, so every call retries) are logged as a warning and answer
+`EspProfilesUnavailable` (503, `api.domain_esps.error.profiles_unavailable`) on the routes that
+need them: the catalogue, the list (profile names) and assign. Remove needs no profile.
+
+Domain runs (M6-06): `resolve_esp_run` builds the `esp` check of one domain run from the
+domain's assignments, read through the tenant repository with the caller's `TenantContext`, and
+the loaded profiles. Profiles are loaded only when the domain has an assignment, so a run of a
+domain without ESPs never depends on them. `esp_withheld` tells the API that a client viewer gets
+no `esp` result (GM decision 2026-11-10, consistent with the routes above). Outcomes:
+- no assignment: `EspProfileCheck` with no profile (the M6-04 `ESP_NONE_ASSIGNED` info result),
+  `assigned` False (not part of `all`);
+- the repository fails (SQLAlchemyError) or the profiles cannot be loaded: a check that returns
+  `error` with `CHECK_INTERNAL_ERROR` (not evaluated), `assigned` True so `all` shows it; the
+  other checks of the run are unaffected;
+- an assigned profile id that is no longer loaded (file removed or renamed): the loaded ones are
+  evaluated, and each missing one adds `ESP_PROFILE_UNAVAILABLE` (param `esp`: the stored id) and
+  is listed in `data["unavailable"]`; the result is `error`, never `ok`.
+`esp` cannot collide with a custom check: those are registered as `custom:<scope>:<key>`.
 """
 
 from __future__ import annotations
@@ -39,9 +59,11 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Final
 
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from app.checks.esp_profile import EspHosts, EspProfileCheck
+from app.checks.models import Check, CheckContext, CheckResult, Finding, Target, finding
 from app.core.permissions import (
     Action,
     DomainResource,
@@ -51,6 +73,7 @@ from app.core.permissions import (
     is_domain_restricted,
 )
 from app.core.tenancy import TenantContext
+from app.dns.knowledge import KnowledgeError
 from app.esp.profile import EspProfile, load_esp_profiles
 from app.repositories import repo_for
 from app.repositories.base import coerce_id
@@ -70,8 +93,20 @@ TOO_MANY_KEY: Final = "api.domain_esps.error.too_many"
 NOT_FOUND_KEY: Final = "api.domain_esps.error.not_found"
 FORBIDDEN_KEY: Final = "api.error.forbidden"
 CONFLICT_KEY: Final = "api.error.conflict"
+PROFILES_UNAVAILABLE_KEY: Final = "api.domain_esps.error.profiles_unavailable"
+
+ESP_CHECK_ID: Final = EspProfileCheck.id
+# Finding codes added by the domain-run wiring (title/detail/remediation keys in en and it).
+CODES: tuple[str, ...] = ("ESP_PROFILE_UNAVAILABLE",)
 
 ProfileSource = Callable[[], Sequence[EspProfile]]
+
+
+def esp_withheld(principal: Principal, tenant_id: int) -> bool:
+    """True unless the principal holds exactly one membership in the tenant with a role that
+    sees every domain: a client viewer gets no ESP data (fail closed)."""
+    grants = [m for m in principal.memberships if m.tenant_id == tenant_id]
+    return len(grants) != 1 or is_domain_restricted(grants[0].role)
 
 
 def field_key(field: str, reason: str) -> str:
@@ -101,6 +136,24 @@ class EspForbidden(DomainEspError):
 class EspConflict(DomainEspError):
     status = 409
     key = CONFLICT_KEY
+
+
+class EspProfilesUnavailable(DomainEspError):
+    """The ESP profiles could not be loaded (broken profile directory)."""
+
+    status = 503
+    key = PROFILES_UNAVAILABLE_KEY
+
+
+def load_profiles(source: ProfileSource) -> Sequence[EspProfile]:
+    """The profiles of `source`; a load failure is logged and raised as EspProfilesUnavailable."""
+    try:
+        return source()
+    except KnowledgeError:
+        logger.warning(
+            "esp profiles unreadable", extra={"event": "domain_esps.profiles_unreadable"}
+        )
+        raise EspProfilesUnavailable from None
 
 
 class EspFieldInvalid(DomainEspError):
@@ -145,10 +198,7 @@ class DomainEspService:
         return self._ctx.tenant_id
 
     def _restricted(self, tenant_id: int) -> bool:
-        """True unless the principal holds exactly one membership in the tenant with a role that
-        sees every domain (a client viewer is restricted; fail closed)."""
-        grants = [m for m in self._principal.memberships if m.tenant_id == tenant_id]
-        return len(grants) != 1 or is_domain_restricted(grants[0].role)
+        return esp_withheld(self._principal, tenant_id)
 
     def check_catalogue(self) -> None:
         tenant_id = self._tenant_id()
@@ -197,7 +247,7 @@ class DomainEspService:
 
     def _known_esp(self, esp_id: object) -> str:
         if isinstance(esp_id, str):
-            for profile in self._profiles():
+            for profile in load_profiles(self._profiles):
                 if profile.id == esp_id:
                     return profile.id
         raise EspFieldInvalid("esp_id", "unknown")
@@ -217,11 +267,11 @@ class DomainEspService:
 
     def catalogue(self) -> Sequence[EspProfile]:
         self.check_catalogue()
-        return tuple(sorted(self._profiles(), key=lambda p: p.id))
+        return tuple(sorted(load_profiles(self._profiles), key=lambda p: p.id))
 
     def profile_names(self) -> dict[str, str]:
         """Profile id -> display name, for the list response. No permission of its own."""
-        return {p.id: p.name for p in self._profiles()}
+        return {p.id: p.name for p in load_profiles(self._profiles)}
 
     def list_for_domain(self, domain_id: object) -> Sequence[DomainEspRecord]:
         did = self.check_read(domain_id)
@@ -285,3 +335,110 @@ class DomainEspService:
             raise EspNotFound
         self._db.commit()
         self._audit("deleted", did, str(esp_id))
+
+
+# --- domain runs (M6-06) ------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class EspRun:
+    """The `esp` check of one domain run; `assigned` False means it stays out of `all`."""
+
+    check: Check
+    assigned: bool
+
+
+class _UnavailableEspCheck:
+    """The assignments or the profiles could not be loaded: `error`, never `ok`."""
+
+    id = ESP_CHECK_ID
+
+    async def run(self, ctx: CheckContext, target: Target) -> CheckResult:
+        return CheckResult.build(
+            check_id=self.id,
+            target=target.domain,
+            findings=[finding("CHECK_INTERNAL_ERROR", "medium", remediation=False)],
+            evaluated=False,
+            started_at=ctx.clock(),
+            duration_ms=0,
+            data={"esps": []},
+        )
+
+
+class _AssignedEspCheck:
+    """`EspProfileCheck` on the loaded profiles; profile ids no longer loaded make it `error`."""
+
+    id = ESP_CHECK_ID
+
+    def __init__(
+        self,
+        profiles: Sequence[EspProfile],
+        hosts: dict[str, EspHosts],
+        missing: Sequence[str],
+    ) -> None:
+        self._check = EspProfileCheck(profiles, hosts) if profiles else None
+        self._missing = tuple(missing)
+
+    async def run(self, ctx: CheckContext, target: Target) -> CheckResult:
+        if self._check is not None:
+            result = await self._check.run(ctx, target)
+            if not self._missing:
+                return result
+            findings: list[Finding] = list(result.findings)
+            data = dict(result.data)
+            started, duration = result.started_at, result.duration_ms
+        else:
+            findings, data = [], {"esps": []}
+            started, duration = ctx.clock(), 0
+        findings.extend(
+            finding("ESP_PROFILE_UNAVAILABLE", "low", {"esp": esp_id}) for esp_id in self._missing
+        )
+        data["unavailable"] = list(self._missing)
+        return CheckResult.build(
+            check_id=self.id,
+            target=target.domain,
+            findings=findings,
+            evaluated=False,
+            started_at=started,
+            duration_ms=duration,
+            data=data,
+        )
+
+
+def resolve_esp_run(
+    ctx: TenantContext,
+    db: Session,
+    domain_id: int,
+    profiles: ProfileSource = load_esp_profiles,
+) -> EspRun:
+    """The `esp` check of a run on `domain_id` (already authorized by the caller). Reads only
+    through the tenant repository of `ctx`; never raises for a repository or profile failure."""
+    try:
+        records = repo_for(ctx, db).domain_esps.list_for_domain(domain_id)
+    except SQLAlchemyError:
+        logger.warning(
+            "esp assignments unreadable", extra={"event": "domain_esps.assignments_unreadable"}
+        )
+        return EspRun(_UnavailableEspCheck(), assigned=True)
+    if not records:
+        return EspRun(EspProfileCheck(()), assigned=False)
+    try:
+        by_id = {p.id: p for p in load_profiles(profiles)}
+    except EspProfilesUnavailable:
+        return EspRun(_UnavailableEspCheck(), assigned=True)
+    # Records are unique per (domain, esp_id), so `known` has no duplicate and every host entry
+    # names a profile in it: EspProfileCheck's ValueError cases cannot occur.
+    known = [by_id[r.esp_id] for r in records if r.esp_id in by_id]
+    hosts = {
+        r.esp_id: EspHosts(r.return_path_host, r.tracking_host)
+        for r in records
+        if r.esp_id in by_id
+    }
+    missing = sorted(r.esp_id for r in records if r.esp_id not in by_id)
+    check = _AssignedEspCheck(known, hosts, missing)
+    if missing:
+        logger.warning(
+            "assigned esp profile not loaded",
+            extra={"event": "domain_esps.profile_missing", "domain_id": domain_id},
+        )
+    return EspRun(check, assigned=True)
