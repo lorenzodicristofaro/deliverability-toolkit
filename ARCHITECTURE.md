@@ -132,6 +132,12 @@ data JSON, timestamps), `dns_snapshots` (for diffing), `dkim_selectors`
 `alerts`, `api_keys`, `share_links`, `audit_log`, `settings`.
 The `esp_profiles` table is deferred beyond M6: M6 stores only `domain_esps`, profiles come
 from `profiles/esp/*.yaml`.
+`domain_esps` (M6-02): one row per (domain, ESP), composite FK (domain_id, tenant_id) to
+`domains` like `domain_access`, cascade from domain and tenant, at most 10 per domain
+(soft cap, checked by count). `esp_id` is a slug with no FK; the service checks it names a
+loaded profile. Optional `return_path_host` / `tracking_host` must be the domain or a
+subdomain of it. `DomainEspRepository.add` is idempotent and never changes stored hosts
+(use `update_hosts`).
 
 Retention: raw `check_results` are pruned by configurable policy; aggregates
 and DNS snapshots are kept longer.
