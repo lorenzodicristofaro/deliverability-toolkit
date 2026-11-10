@@ -12,4 +12,4 @@ Acceptance criteria:
 - SPF resolution failure gives `error` (same rule as M6-04), never a clean pass. Truncated tree gives `error` with `SPF_RESOLUTION_TRUNCATED` semantics preserved.
 - Table-driven tests with fake DNS: one, two and three ESPs, under and over the limit, nested includes, include loop, DNS error.
 New i18n keys: finding.ESP_SPF_COMBINED_OVER_LIMIT.title/detail/remediation (en + it)
-Status: todo
+Status: done (merged into local dev at b36c9f8 after QA APPROVE; permerror test rows added at ac97c33; GM gate full PostgreSQL suite green, lint clean)

@@ -151,7 +151,7 @@ Carried over from M0-07 QA:
   - [x] M6-02 domain_esps model, migration, repository (opus)
   - [x] M6-03 ESP assignment service + REST + profile catalogue (opus)
   - [x] M6-04 ESP profile check: SPF include, DKIM CNAMEs, return-path, tracking (opus)
-  - [ ] M6-05 combined ESP SPF lookup budget finding (opus)
+  - [x] M6-05 combined ESP SPF lookup budget finding (opus)
   - [ ] M6-06 wire ESP check into domain runs (opus)
   - [ ] M6-07 domain page ESPs tab
   - [ ] M6-08 profiles: SendGrid, Amazon SES, Mailgun (official docs only)
@@ -186,6 +186,7 @@ Carried over from M0-07 QA:
 - [ ] Security review checklist, dependency/license audit, v0.1.0 release
 
 ## Follow-ups (post-M1)
+- [ ] ESP tests nit (M6-05 QA): tests/checks/test_esp_profile_spf_budget.py:16 imports private helpers (`_ctx`, `_assert_params_cover_placeholders`) from tests/checks/test_esp_profile.py; move them to a shared helper/conftest.
 - [ ] ESP API nits (M6-03 QA): no test turns off `domain.update` for an owner and expects 403 on PUT/DELETE (tests/services/test_domain_esps_service.py:161-164 covers the list and read toggles only). PUT runs `check_write` twice (app/api/v1/domain_esps.py:167 and app/services/domain_esps.py:427), which is harmless but costs a second domain lookup.
 - [ ] domain_esps (M6-02 QA): the 10-per-domain cap is checked by count before insert, so a concurrent add can exceed it by one (soft cap, not a security boundary).
 - [ ] ESP loader nit (M6-01 QA): app/esp/profile.py:53 imports private helpers (`_check_keys`, `_fail`, `_str`, `_date`, `_status`) from app/dns/knowledge.py; make them public (pairs with the M5-09 seed loader item).

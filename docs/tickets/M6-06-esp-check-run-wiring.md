@@ -19,5 +19,6 @@ Acceptance criteria:
 - QA (M6-03): the ESP routes return a handled, localized 503 with a new key such as `api.domain_esps.error.profiles_unavailable` (en + it).
 - QA (M6-03): the ESP check in domain runs returns `error` (not evaluated) in the same case.
 - QA (M6-03): tests cover the catalogue, the GET list and PUT.
+- QA (M6-05): rendering must localize the ESP finding part names (`spf.includes`, `spf.lookups`, etc.), which now appear raw in the ESP_DNS_ERROR detail. The `spf.lookups` error puts a joined ESP list ("Alpha, Beta") into `{esp}`, so the text must read correctly with several ESPs (test with two or more).
 New i18n keys: `api.domain_esps.error.profiles_unavailable` (en + it; name may vary); reuse M6-04 keys; add `api.checks.error.esp_unavailable` en + it only if the coder needs it
 Status: todo
