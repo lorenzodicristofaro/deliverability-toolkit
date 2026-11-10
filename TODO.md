@@ -147,7 +147,7 @@ Carried over from M0-07 QA:
 - Accept: each profile has `verified_on` + sources; sample domains produce expected findings.
 - Tickets (docs/tickets/):
   - [x] M6-00 CI: fewer billed Actions minutes (no CI on qa, path-filtered infra jobs)
-  - [ ] M6-01 ESP profile schema, loader, CI validation (opus)
+  - [x] M6-01 ESP profile schema, loader, CI validation (opus)
   - [ ] M6-02 domain_esps model, migration, repository (opus)
   - [ ] M6-03 ESP assignment service + REST + profile catalogue (opus)
   - [ ] M6-04 ESP profile check: SPF include, DKIM CNAMEs, return-path, tracking (opus)

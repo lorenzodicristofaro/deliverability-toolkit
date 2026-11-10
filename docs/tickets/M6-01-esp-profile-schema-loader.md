@@ -17,4 +17,5 @@ Acceptance criteria:
 - `tests/esp/test_shipped_profiles.py` loads the real `profiles/esp/` (passes while the directory is empty) and emits a warning (not a failure) for any profile older than 12 months, per ARCHITECTURE section 8. This is the "CI validation": it runs in the normal pytest jobs.
 - Docker image contains `profiles/` (Dockerfile) and a CI path entry exists; coder confirms the header comment lists the reason.
 New i18n keys: none
-Status: todo
+Status: done
+Merge note: merged to local dev at 1db639d (QA APPROVE; fix 9ecf174); SQLite suite 23320 passed, lint clean; PostgreSQL skipped (no DB change).
