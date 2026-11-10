@@ -147,6 +147,18 @@ Carried over from M0-07 QA:
 - Accept: each profile has `verified_on` + sources; sample domains produce expected findings.
 - Tickets (docs/tickets/):
   - [x] M6-00 CI: fewer billed Actions minutes (no CI on qa, path-filtered infra jobs)
+  - [ ] M6-01 ESP profile schema, loader, CI validation (opus)
+  - [ ] M6-02 domain_esps model, migration, repository (opus)
+  - [ ] M6-03 ESP assignment service + REST + profile catalogue (opus)
+  - [ ] M6-04 ESP profile check: SPF include, DKIM CNAMEs, return-path, tracking (opus)
+  - [ ] M6-05 combined ESP SPF lookup budget finding (opus)
+  - [ ] M6-06 wire ESP check into domain runs (opus)
+  - [ ] M6-07 domain page ESPs tab
+  - [ ] M6-08 profiles: SendGrid, Amazon SES, Mailgun (official docs only)
+  - [ ] M6-09 profiles: MailUp/TeamSystem + up to two Italian ESPs (official docs only)
+  - [ ] M6-10 profiles: Google Workspace, Microsoft 365, Brevo (official docs only)
+  - [ ] M6-11 acceptance: sample domains produce expected findings, docs/CHECKS.md
+  - [ ] M6-12 contributor guide docs/ESP_PROFILES.md
 
 ## M7 — Monitoring
 - [ ] Guarded outbound client (SSRF protection) + tests
@@ -177,6 +189,7 @@ Carried over from M0-07 QA:
 - [ ] Custom checks (M5-23 QA nits): "id order" (app/services/custom_checks_admin.py:172) vs "creation order" (app/api/v1/checks.py:12), pick one wording; `with_checks` DuplicateCheckError at app/api/v1/checks.py:69 would 500 the whole `all` run (unreachable today: catch it or comment why); tests/api/test_custom_checks_api.py:569 viewer run test should assert pattern/range text never appears in the response.
 - [ ] DKIM provider nits (M5-23b QA): `ProbeSelectors.providers` is a MappingProxyType in a frozen dataclass, so hashing it raises TypeError (app/services/dkim_probe_selectors.py:50-57; add `field(hash=False)` or a comment); CLI `--selector` gets seed providers implicitly via `providers=None` (app/cli/check.py:97).
 - [ ] Flaky timing test (GM, 2026-11-10): tests/parsers/test_received.py:365 `test_scanners_linear` asserts wall-clock < 1.0 s; it failed once ([keywords]) while two full suites ran at once, passes alone. Use a relative bound or an operation counter instead of wall-clock (same pattern at :384).
+- [ ] ESP profile overrides (GM decision 2026-11-10, M6 split): SPEC §5 lists tenant/global "ESP profiles overrides" and ARCHITECTURE sections 4/5 an `esp_profiles` table and ESPProfileOverride; M6 ships YAML profiles plus `domain_esps` only. Plan overrides for a later milestone. MAINTAINER TO CONFIRM: client viewers have no access to ESP routes, tab or results (reading of SPEC §3 "cannot see other ESP data"); alternative is read-only on assigned domains. Italian notes for profiles need maintainer review.
 - [ ] M6-00 follow-ups: tests/integration/test_unbound.py:3 docstring still says the integration-unbound job is in ci.yml (now ci-infra.yml). M6-00 is unverified on GitHub until the first push after 2026-12-21: check that qa pushes run nothing, dev pushes skip infra jobs unless their paths change, and main runs `infra / *`.
 - [ ] DKIM selectors (M5-20 QA): seed sync adoption at app/services/seed_sync.py:232 silently replaces the admin's provider and record_type (only `enabled` and `notes` survive); add one log line per adoption (id only) and assert those fields in tests/services/test_seed_sync.py:274. Free checks and CLI `check` stay on the seed, so a global selector edit does not affect them. A list near the 250 cap can hit the API's 15 s `CHECK_TIMEOUT` (`error`) where SSE has 60 s. Maintainer decision 2026-11-10 (overrules the earlier GM decision): a client viewer sees the selector name and the provider (not notes, which stay admin-only) in DKIM results for its assigned domain; see M5-23b.
 - [ ] Rules admin UI (M5-19 QA): a broken stored rule cannot be disabled by toggle or by an unchanged edit, because the service re-validates its pattern on enabled-only updates (toggle gives a 422; a tenant row can be deleted, a broken seeded global row can only be edited with a replacement pattern). Toggle, delete and error responses return to page 1. Every list view reads all rows (about 0.65 s at 10003 rows on SQLite, no per-tenant cap). The localized 413 stops at 1 MiB because `register_form_cap` matches exact paths only. `/rules/test` has no language input (the page says so).

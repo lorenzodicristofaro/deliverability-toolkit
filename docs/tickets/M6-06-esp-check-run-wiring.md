@@ -1,0 +1,16 @@
+# M6-06 Wire the ESP check into domain check runs
+Milestone: M6
+Branch: feature/m6-06-esp-check-run-wiring
+Files in scope: app/services/checks.py and/or app/api/v1/checks.py (only the seam where custom checks are added via `CheckRegistry.with_checks`; coder inspects first), app/web/checks_stream.py only if the SSE stream builds its own registry, tests/api/test_checks_api.py (or the existing domain-run test files, extended), tests/tenancy/test_matrix.py (only if routes change)
+Out of scope: UI tab (M6-07), check logic (M6-04/05), free (tenant-less) checks and the CLI `check`, which stay without ESP data
+Depends on: M6-03, M6-04
+Parallel-safe: no (shared services/api checks seam, also touched by M5-23 code)
+Model: opus (tenant data reaches a check)
+Acceptance criteria:
+- A run on a tenant domain loads that domain's assignments through the M6-02 repository with the caller's `TenantContext`, builds `EspProfileCheck` from the M6-01 profiles, and adds it with `with_checks`; the `esp` check is included in `all` only when at least one ESP is assigned, and can be requested by id (`esp`) like any check; with no assignment it returns the M6-04 "info, nothing assigned" result.
+- Authorization is the existing `check.run` rule; no new route. A tenant's assignments never appear in another tenant's run (two-tenant test); a client viewer's run on an assigned domain follows the existing rules, and the `esp` result for a viewer is withheld (consistent with M6-03: no ESP data for client viewers; GM to confirm).
+- A profile id stored in the DB but missing from the loaded profiles (profile removed or renamed) gives status `error` for that ESP, not a crash and not `ok`.
+- A repository or profile-load failure gives `error` for the `esp` check only; other checks in `all` still run. The existing `all` run results for domains without ESPs are byte-equal to before (regression test).
+- `DuplicateCheckError` for id `esp` cannot happen (custom checks reject the reserved id); add a test that a custom check named `esp` is rejected or documented, whichever the code already does.
+New i18n keys: none (reuse M6-04 keys; add `api.checks.error.esp_unavailable` en + it only if the coder needs it)
+Status: todo
