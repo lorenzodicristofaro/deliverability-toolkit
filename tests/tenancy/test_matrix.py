@@ -47,6 +47,7 @@ from app.main import create_app
 from app.repositories import repo_for
 from app.repositories.base import MAX_LIMIT
 from app.repositories.content_rules import ContentRuleRecord
+from app.repositories.custom_checks import CustomCheckRecord
 from app.repositories.dkim_selectors import DkimSelectorRecord
 from app.web import deps
 from tests.tenancy.conftest import (
@@ -134,7 +135,7 @@ class Kind(Enum):
     SESSION = "session"  # session only, no tenant data (logout)
     SWITCH = "switch"  # changes the active tenant
     DNS = "dns"  # raw DNS tools: tenant-level `dns.tools`, no tenant data (M2-12)
-    RULE = "rule"  # one content rule or DKIM selector by id; `own` is the status on tenant B's
+    RULE = "rule"  # one content rule, DKIM selector or custom check by id; `own`: on tenant B's
 
 
 Body = Callable[[World, str], Any]
@@ -226,6 +227,17 @@ _RULES_READ = {**_by_role(200, 200), "viewer": 403}  # client viewers never see 
 # Addressing a rule of tenant B: permission first (403), then the row is simply not there (404).
 _RULE_READ_ON_B = {**_by_role(404, 404), "viewer": 403}
 _RULE_WRITE_ON_B = _by_role(404, 403)
+
+
+_CUSTOM_404 = "api.custom_checks.error.not_found"
+
+
+def _custom_dry_run(w: World, _role: str) -> dict[str, Any]:
+    return {
+        "domain_id": w.domains["assigned"],
+        "kind": "dns_exists",
+        "definition": {"name": "{domain}", "rrtype": "A"},
+    }
 
 
 def _rule_sample(_w: World, _role: str) -> dict[str, Any]:
@@ -328,6 +340,28 @@ MATRIX: dict[tuple[str, str], Entry] = {
     ),
     ("DELETE", "/api/v1/dkim-selectors/{selector_id}"): Entry(
         Kind.RULE, own=_RULE_WRITE_ON_B, not_found=_SELECTORS_404
+    ),
+    # custom checks API (app.api.v1.custom_checks), tenant path: same permissions as the content
+    # rules API. The global path needs no tenant, so it is covered per role and verb by
+    # tests/api/test_custom_checks_api.py. `/test` (dry run) needs `rules.read` and `check.run` on
+    # the domain of its body, here an assigned tenant A domain.
+    ("GET", "/api/v1/custom-checks"): Entry(
+        Kind.COLLECTION, own=_RULES_READ, not_found=_CUSTOM_404
+    ),
+    ("POST", "/api/v1/custom-checks"): Entry(
+        Kind.COLLECTION, body=_smuggle_json, smuggle=_by_role(422, 403), not_found=_CUSTOM_404
+    ),
+    ("POST", "/api/v1/custom-checks/test"): Entry(
+        Kind.DNS, body=_custom_dry_run, own=_RULES_READ, not_found=_CUSTOM_404
+    ),
+    ("GET", "/api/v1/custom-checks/{custom_check_id}"): Entry(
+        Kind.RULE, own=_RULE_READ_ON_B, not_found=_CUSTOM_404
+    ),
+    ("PATCH", "/api/v1/custom-checks/{custom_check_id}"): Entry(
+        Kind.RULE, body=_rename, own=_RULE_WRITE_ON_B, not_found=_CUSTOM_404
+    ),
+    ("DELETE", "/api/v1/custom-checks/{custom_check_id}"): Entry(
+        Kind.RULE, own=_RULE_WRITE_ON_B, not_found=_CUSTOM_404
     ),
     # content rules UI (app.web.rules). Reads need `rules.read`, every other route `rules.manage`
     # on the tenant path; the global tab is covered by tests/web/test_rules_ui.py. `POST /rules`
@@ -616,7 +650,31 @@ def b_selector(w: World) -> DkimSelectorRecord:
     return created
 
 
+def b_custom_check(w: World) -> CustomCheckRecord:
+    """Tenant B's private custom check, created on first use. Its name holds a tenant B secret, so
+    `leaks` catches it in any response or log line. The world baseline does not cover these."""
+    w.db.expire_all()
+    repository = repo_for(TenantContext(w.tenants["b"], w.users["b_owner"]), w.db).custom_checks
+    for existing in repository.list(limit=MAX_LIMIT):
+        if existing.scope == "tenant":
+            return existing
+    created = repository.create(
+        {
+            "check_key": "b.private",
+            "name": f"{B_TENANT_NAME} private check",
+            "kind": "dns_exists",
+            "definition": {"name": "_b-private.{domain}", "rrtype": "TXT"},
+            "severity": "low",
+            "remediation_text": {"en": "B private", "it": "B privato"},
+        }
+    )
+    w.db.commit()
+    return created
+
+
 def _path(w: World, case: Case) -> str:
+    if "{custom_check_id}" in case.leaf.path:
+        return case.leaf.path.replace("{custom_check_id}", str(b_custom_check(w).id))
     if "{rule_id}" in case.leaf.path:
         return case.leaf.path.replace("{rule_id}", str(b_rule(w).id))
     if "{selector_id}" in case.leaf.path:
@@ -662,6 +720,9 @@ def _check_case(world: World, logs: pytest.LogCaptureFixture, case: Case) -> Non
     assert entry is not None
     before_a, before_b = world.state("a"), world.state("b")
     rule_before = b_rule(world) if case.leaf.path.startswith(("/api/v1/rules", "/rules")) else None
+    custom_before = (
+        b_custom_check(world) if case.leaf.path.startswith("/api/v1/custom-checks") else None
+    )
     selector_before = (
         b_selector(world)
         if case.leaf.path.startswith(("/api/v1/dkim-selectors", "/dkim-selectors"))
@@ -692,6 +753,8 @@ def _check_case(world: World, logs: pytest.LogCaptureFixture, case: Case) -> Non
     assert after_b == before_b, "tenant B changed"
     if rule_before is not None:
         assert b_rule(world) == rule_before, "tenant B's rule changed"
+    if custom_before is not None:
+        assert b_custom_check(world) == custom_before, "tenant B's custom check changed"
     if selector_before is not None:
         assert b_selector(world) == selector_before, "tenant B's selector changed"
     after_a = world.state("a")

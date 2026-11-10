@@ -22,6 +22,10 @@ U-label (`idn`, any non-ASCII character) and A-label (`xn--`); the target domain
 Templates are never passed to `str.format`: the prefix is concatenated, so format-spec tricks
 cannot run, and they are refused anyway.
 
+`remediation_key` (global rows only) must name a message present in every supported catalogue
+(`validate_remediation_key`), so a finding that carries it always renders; checked by the admin
+service on write and by the evaluator on every run.
+
 Every error carries a field and a stable reason, never the value.
 """
 
@@ -42,9 +46,11 @@ from app.core.domain_names import (
     to_ascii_domain,
     to_dns_name,
 )
+from app.core.i18n import SUPPORTED_LANGUAGES, load_catalogue
 from app.core.safe_regex import CompiledRule, RegexRuleError, compile_checked
 from app.models.custom_check import (
     KINDS,
+    MAX_REMEDIATION_KEY_LENGTH,
     MAX_REMEDIATION_LENGTH,
     REMEDIATION_LANGUAGES,
     RESERVED_KINDS,
@@ -64,6 +70,8 @@ MAX_DEFINITION_JSON_LENGTH: Final = 4096
 MAX_RANGE_MAGNITUDE: Final = 2**53
 
 _LABEL: Final = re.compile(r"_?[a-z0-9]([a-z0-9-]*[a-z0-9])?")
+# The repository's format for remediation_key (app.repositories.custom_checks).
+_I18N_KEY: Final = re.compile(r"[a-z0-9_]+(?:\.[a-z0-9_]+)+")
 _SHORTEST_DOMAIN: Final = "a.co"  # dry run: a template must fit under at least this domain
 _KEYS: Final[dict[str, frozenset[str]]] = {
     "dns_exists": frozenset({"name", "rrtype"}),
@@ -284,3 +292,16 @@ def validate_remediation_text(value: object) -> dict[str, str]:
             raise DefinitionInvalid(field, "whitespace")
         result[lang] = text
     return result
+
+
+def validate_remediation_key(value: object) -> str:
+    """An i18n key present in every supported catalogue, so the finding renders in each language.
+    Format errors are `invalid_format`, a key some catalogue lacks is `unknown_key`."""
+    field = "remediation_key"
+    if not isinstance(value, str):
+        raise DefinitionInvalid(field, "not_a_string")
+    if len(value) > MAX_REMEDIATION_KEY_LENGTH or not _I18N_KEY.fullmatch(value):
+        raise DefinitionInvalid(field, "invalid_format")
+    if any(value not in load_catalogue(lang) for lang in SUPPORTED_LANGUAGES):
+        raise DefinitionInvalid(field, "unknown_key")
+    return value

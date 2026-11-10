@@ -8,6 +8,7 @@ from fastapi import APIRouter
 
 from app.api.v1.checks import router as checks_router
 from app.api.v1.content import router as content_router
+from app.api.v1.custom_checks import router as custom_checks_router
 from app.api.v1.dkim_selectors import router as dkim_selectors_router
 from app.api.v1.dns_tools import router as dns_tools_router
 from app.api.v1.domains import router as domains_router
@@ -22,5 +23,6 @@ api_router.include_router(message_router)
 api_router.include_router(content_router)
 api_router.include_router(rules_router)
 api_router.include_router(dkim_selectors_router)
+api_router.include_router(custom_checks_router)
 
 __all__ = ["api_router"]

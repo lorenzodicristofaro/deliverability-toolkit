@@ -1,13 +1,16 @@
 """`/api/v1` check endpoints (M3-15). Checks run live; nothing is persisted in M3.
 
 Routes (all POST, so the CSRF rules are those of `/api/v1/domains`):
-- `/domains/{domain_id}/checks/{check_id}`: one check, or `all` (every registered check);
+- `/domains/{domain_id}/checks/{check_id}`: one check, or `all` (every registered check, then the
+  enabled custom checks of the active tenant and the global ones, M5-23);
 - `/domains/{domain_id}/checks`: body `{"ids": [...]}`;
 - `/checks/free`: body `{"name": ..., "ids": [...]}`, no tenant data.
 
 The response body is the `CheckResult` wire JSON of the M3-02 service, byte for byte
 (`model_dump_json`), so the API and the CLI print the same thing. A single check answers with one
-object; `all` and `ids` answer with an array of objects in request order (`all` is sorted by id).
+object; `all` and `ids` answer with an array of objects in request order (`all`: the built-in
+checks sorted by id, then the custom checks in creation order; with no enabled custom check it is
+exactly the pre-M5 answer).
 
 Status codes (bodies are `{"detail": <i18n>}`, never echoing user input):
 - 401 anonymous (mutations first need a valid CSRF token, else the middleware answers 403);
@@ -53,7 +56,12 @@ from app.services.checks import (
     run_check,
     run_checks,
 )
-from app.services.dkim_probe_selectors import registry_for, resolve_and_release
+from app.services.custom_checks_admin import run_checks_for
+from app.services.dkim_probe_selectors import (
+    registry_for,
+    resolve_and_release,
+    resolve_probe_selectors,
+)
 from app.services.domains import DomainService, DomainServiceError, DomainView
 from app.web.deps import CurrentSession, DbDep, tenant_ctx
 
@@ -177,6 +185,17 @@ def _prepare(ctx: TenantContext, db: Session, ids: Sequence[str]) -> CheckRegist
     return None
 
 
+def _prepare_all(ctx: TenantContext, db: Session) -> tuple[CheckRegistry, list[str]]:
+    """The registry and ids of `all`: built-ins (DKIM on the tenant's selectors) plus the tenant's
+    custom checks; ends the transaction."""
+    try:
+        registry = registry_for(resolve_probe_selectors(ctx, db))
+        custom = run_checks_for(ctx, db)
+    finally:
+        db.rollback()
+    return registry.with_checks(custom), [*registry.all_ids(), *(c.id for c in custom)]
+
+
 async def _run_many(
     request: Request,
     ids: list[str],
@@ -204,9 +223,8 @@ async def run_domain_check(
 ) -> Response:
     ctx = _context(resolver, access.ctx.tenant_id, access.view.id)
     if check_id == ALL:
-        ids = default_registry().all_ids()
-        registry = await run_in_threadpool(_prepare, access.ctx, db, ids)
-        return await _run_many(request, ids, access.view.name, ctx, registry)
+        everything, ids = await run_in_threadpool(_prepare_all, access.ctx, db)
+        return await _run_many(request, ids, access.view.name, ctx, everything)
     registry = await run_in_threadpool(_prepare, access.ctx, db, [check_id])
     try:
         result = await run_check(check_id, access.view.name, ctx, registry=registry)

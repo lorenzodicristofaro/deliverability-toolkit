@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 
 from app.checks.custom import CustomDnsCheck
 from app.checks.models import CheckContext, Target
+from app.core import custom_check_schema
 from app.core.db import create_db_engine, create_session_factory
 from app.core.tenancy import TenantContext
 from app.dns.types import DnsQuestion, DnsResult, ResultState
@@ -942,11 +943,15 @@ class _NoRecord:
 
 @pytest.mark.parametrize(("row", "text"), [("a1", TEXT), ("g2", TEXT), ("g1", None)])
 async def test_evaluator_accepts_a_real_stored_record(
-    world: World, row: str, text: dict[str, str] | None
+    world: World, row: str, text: dict[str, str] | None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # Frozen definition and LocalizedText, exactly what the repository hands to M5-23.
     rec = world.repo("a").get(world.checks[row])
     assert rec is not None
+    if rec.remediation_key is not None:
+        # M5-23: a key renders only if every catalogue has it; this fixture key ships in none.
+        key = rec.remediation_key
+        monkeypatch.setattr(custom_check_schema, "load_catalogue", lambda _lang: {key: "Fix."})
     check = CustomDnsCheck(
         check_key=rec.check_key,
         kind=rec.kind,
@@ -960,6 +965,7 @@ async def test_evaluator_accepts_a_real_stored_record(
     assert result.status == "warn"
     assert [f.code for f in result.findings] == ["CUSTOM_CHECK_FAILED"]
     assert result.findings[0].params.get("remediation_text") == text
+    assert result.findings[0].remediation_key == rec.remediation_key
 
 
 def test_none_json_is_sql_null(world: World) -> None:
