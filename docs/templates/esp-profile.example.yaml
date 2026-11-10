@@ -1,0 +1,22 @@
+# Template for a new ESP profile. FAKE vendor "example-esp": every value below uses reserved
+# example domains only. Copy to profiles/esp/<id>.yaml, replace EVERY value with what the
+# vendor's official documentation says, and follow docs/ESP_PROFILES.md.
+# Never type vendor values from memory: if you cannot confirm a part, set `status: unverified`
+# and list it in `unverified_fields`.
+id: example-esp # must equal the file name without .yaml
+name: Example ESP
+homepage: https://esp.example.com
+spf:
+  includes: [spf.esp.example.com] # may be empty
+dkim:
+  selectors: # may be empty (see the guide for per-customer selector names)
+    - {name: s1, type: cname, target_pattern: "s1.dkim.*.esp.example.net"}
+    - {name: k1, type: txt}
+return_path: {type: cname, optional: false, notes_key: esp.example_esp.return_path}
+tracking_domain: {type: cname, optional: true, notes_key: esp.example_esp.tracking}
+pitfalls:
+  - {code: ESP_EXAMPLE_ESP_LINK_BRANDING, notes_key: esp.example_esp.link_branding, severity: low}
+verified_on: 2026-11-02 # the day you actually read the sources; never in the future
+sources:
+  - https://docs.esp.example.com/dns-setup
+status: verified # verified | unverified
