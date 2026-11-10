@@ -111,6 +111,13 @@ commit. The GM runs it on the merge result. CI on `dev` remains the gate after e
 - **Only the GM pushes, and only `dev` and `qa`** (maintainer decision 2026-11-04). Preconditions: QA APPROVE
   and green local tests (for `qa`: milestone accepted). After each push the GM watches the run with
   `gh run watch` and, on failure, sends the ticket back to `coder` with the log (counts toward the 2-round limit).
+- Batched pushes (maintainer decision 2026-11-10, GitHub Actions minutes): the GM merges tickets into local
+  `dev`, each with the full local suite on PostgreSQL as the gate, and pushes `dev` once every 2–3 tickets
+  and always before promoting to `qa`. A failing CI run is bisected across the batch's merges. A `code` push
+  costs about 25 billed minutes, a docs-only push about 1. `qa` only ever receives a `dev` commit whose CI is
+  green, so `qa` pushes do not run CI again (from M6-00, `.github/workflows/ci.yml`).
+- Local-only period: no pushes to `dev` or `qa` until the Actions minutes renew on 2026-12-21, unless
+  the maintainer says otherwise. Commit locally; the local PostgreSQL suite is the only gate meanwhile.
 - Coder, PM and QA never push. `main`, tags, releases, force pushes and branch deletions stay with the human.
 - Enforced by `.claude/settings.json`: exact allow rules for `git push origin dev|qa`, deny rules for
   `main`, tags, force, `--all`, `--mirror`, delete refspecs. `gh` uses a fine-grained token scoped to this

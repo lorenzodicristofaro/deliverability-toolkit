@@ -5,7 +5,7 @@ Resume with `/gm`. Written as a safeguard: the 5-hour usage limit has been hit t
 ## State
 - M1–M5 are accepted (M5 on 2026-11-10, report docs/reports/M5.md); `qa` → `main` is pending the maintainer for M1–M5.
 - `dev` promoted to `qa` at 101d43b (tree identical to dev 3bb1eb8, dev CI 42846313400 green). qa CI run 42848145136 was left running (token cannot cancel).
-- GitHub Actions at 90% of the monthly 2,000 minutes (2026-11-10): maintainer said stop. No pushes until the maintainer confirms the reset; commit locally and gate on the local PostgreSQL suite.
+- Local-only until the Actions minutes renew on 2026-12-21 (maintainer decision 2026-11-10): no pushes; commit locally; the local PostgreSQL suite is the gate. Then batched pushes (docs/WORKFLOW.md push policy). M6-00 (CI minutes) must be verified by the first push after 2026-12-21.
 - M6 (ESP profiles) not started: next `/gm` session asks `pm` to split it.
 
 ## How the work runs now (maintainer decisions 2026-11-09)

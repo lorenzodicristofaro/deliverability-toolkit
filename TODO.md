@@ -145,6 +145,8 @@ Carried over from M0-07 QA:
 - [ ] Initial profiles verified against official docs, incl. MailUp/TeamSystem and other Italian ESPs
 - [ ] Contributor guide for adding a profile
 - Accept: each profile has `verified_on` + sources; sample domains produce expected findings.
+- Tickets (docs/tickets/):
+  - [ ] M6-00 CI: fewer billed Actions minutes (no CI on qa, path-filtered infra jobs)
 
 ## M7 — Monitoring
 - [ ] Guarded outbound client (SSRF protection) + tests
