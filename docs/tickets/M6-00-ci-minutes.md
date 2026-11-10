@@ -15,4 +15,5 @@ Acceptance criteria:
 - docs/SETUP.md and docs/WORKFLOW.md describe which jobs run when. If branch protection names required checks, note that path-filtered workflows report nothing when skipped.
 - It cannot be verified on GitHub before 2026-12-21 (local-only period). The coder states that in the ticket, and the first push after that date is the check.
 New i18n keys: none
-Status: todo
+Status: done
+Note (coder): not verifiable on GitHub before 2026-12-21 (local-only period); the first push after that date is the check. Checked locally: YAML parses, every glob matches at least one tracked file, moved jobs are identical.

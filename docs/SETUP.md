@@ -27,6 +27,7 @@ git push -u origin main dev qa      # done by you, not by agents
 Install `pre-commit` and add `.pre-commit-config.yaml` with ruff and a secret scanner (for example gitleaks).
 Check the scanner's current recommended hook configuration in its own documentation before pinning a version.
 Add the same scan to CI (M0).
+CI layout and which jobs run on which push: see "Push policy" in `docs/WORKFLOW.md`. `ci.yml` and `ci-infra.yml` are path-filtered, so a skipped run reports no check: do not mark their checks as required in branch protection.
 
 ## 3. Push permissions (GM pushes `dev` and `qa` only)
 Decision 2026-11-04: the GM session may push `dev` and `qa`; everything else stays with you (see `docs/WORKFLOW.md`).
