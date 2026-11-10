@@ -127,7 +127,7 @@ def assert_problem(response: Any, key: str, field: str, reason: str | None = Non
 
 # --- roles and verbs ----------------------------------------------------------------------------
 
-READ = {"anon": 401, "owner": 200, "admin": 200, "analyst": 200, "viewer": 403, "root": 404}
+READ = {"anon": 401, "owner": 200, "admin": 200, "analyst": 200, "viewer": 200, "root": 404}
 WRITE = {"anon": 401, "owner": 0, "admin": 0, "analyst": 403, "viewer": 403, "root": 404}
 
 
@@ -141,7 +141,7 @@ def test_catalogue_per_role(world: World, who: str, status: int) -> None:
 
 @pytest.mark.parametrize(("who", "status"), READ.items())
 def test_list_per_role(world: World, who: str, status: int) -> None:
-    """The viewer's own assigned domain: still 403 (no ESP data for client viewers)."""
+    """The viewer's own assigned domain: readable (M6-06c)."""
     response = call(world, who, "GET", esps(world))
     assert response.status_code == status
 
@@ -220,6 +220,36 @@ def test_denied_caller_gets_403_whatever_the_body(world: World) -> None:
 def test_missing_domain_with_malformed_body_is_404(world: World) -> None:
     response = call(world, "owner", "PUT", one(world, "other"), content=b"{")
     assert response.status_code == 404
+
+
+def test_viewer_reads_what_the_analyst_reads(world: World) -> None:
+    """Client viewers see the assignments of their assigned domain unredacted (M6-06c)."""
+    hosts = {"return_path_host": "bounce.assigned.example", "tracking_host": "t.assigned.example"}
+    assert assign(world, **hosts).status_code == 201
+    viewer = call(world, "viewer", "GET", esps(world))
+    analyst = call(world, "analyst", "GET", esps(world))
+    assert viewer.status_code == analyst.status_code == 200
+    assert viewer.json() == analyst.json()
+    assert viewer.json()["items"][0]["tracking_host"] == "t.assigned.example"
+    assert call(world, "viewer", "GET", CATALOGUE).json() == (
+        call(world, "analyst", "GET", CATALOGUE).json()
+    )
+
+
+@pytest.mark.parametrize("method", ["PUT", "DELETE"])
+def test_viewer_write_on_assigned_domain_is_403_and_unchanged(world: World, method: str) -> None:
+    assert assign(world).status_code == 201
+    before = rows(world.db)
+    response = call(world, "viewer", method, one(world), json={"return_path_host": None})
+    assert (response.status_code, response.json()) == (403, FORBIDDEN)
+    assert rows(world.db) == before
+
+
+def test_two_tenants_viewer_on_foreign_domain_sees_no_esp_data(world: World) -> None:
+    assert assign(world, "b_owner", "other", return_path_host=B_HOST).status_code == 201
+    response = call(world, "viewer", "GET", esps(world, "other"))
+    assert (response.status_code, response.json()) == (404, NOT_FOUND)
+    assert B_SECRET_NAME not in response.text and ESP not in response.text
 
 
 def test_two_tenants_no_leak_through_list_or_catalogue(world: World) -> None:

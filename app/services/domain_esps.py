@@ -1,20 +1,23 @@
 """ESP assignments of a domain, and the ESP profile catalogue (M6-03).
 
 Authorization reuses the domain actions, decided with `can()` before any repository is built:
-- catalogue: `domain.list` on the active tenant;
+- catalogue: `domain.list` on the active tenant (public profile data, no tenant content);
 - read (list a domain's assignments): `domain.read` on the domain;
 - write (assign, change hosts, remove): `domain.read` and `domain.update` on the domain.
-Client viewers get none of it, whatever their DomainAccess grants (SPEC section 3, GM decision
-2026-11-10): `domain.read` alone would admit them, so a role that `is_domain_restricted` is refused
-too. This uses the existing helper of `app.core.permissions` (no new action). Per-user toggles keyed
-by those actions deny as elsewhere.
+This is the read rule of the other domain data (as the DKIM providers of M5-23b): whoever may read
+the domain reads its ESP assignments, so a client viewer reads them, read-only, on the domains
+assigned to it (maintainer decision 2026-11-10, M6-06c); it never has `domain.update`. Per-user
+toggles keyed by those actions deny as elsewhere. No new action.
 
 Outcomes (every error carries an i18n key, never user input or another tenant's data):
 - no active tenant, a malformed id, a domain the principal may not read (unassigned for a viewer,
   `domain.read` toggled off) or that is missing or of another tenant: `EspNotFound` (404). The
   `can()` answers are computed first; a write denial is raised only after the domain was found, so
-  a missing or foreign domain answers 404 to every role, as on the other domain routes;
-- a client viewer on a domain it can see, or a reader without `domain.update` on a write: 403;
+  a missing or foreign domain answers 404 to every role, as on the other domain routes. A client
+  viewer is the exception that needs no lookup: its `domain.read` comes from its own assignment
+  of that domain, so its write denial (403) is raised before any repository and reveals nothing
+  beyond that assignment;
+- a reader without `domain.update` on a write: 403;
 - `esp_id` that names no loaded profile (`app.esp.profile`): 422 `unknown_esp` on assign. Removing
   does not need a loaded profile, so an assignment whose profile file was removed can be cleaned
   up; a pair that is not assigned is a 404;
@@ -39,8 +42,8 @@ need them: the catalogue, the list (profile names) and assign. Remove needs no p
 Domain runs (M6-06): `resolve_esp_run` builds the `esp` check of one domain run from the
 domain's assignments, read through the tenant repository with the caller's `TenantContext`, and
 the loaded profiles. Profiles are loaded only when the domain has an assignment, so a run of a
-domain without ESPs never depends on them. `esp_withheld` tells the API that a client viewer gets
-no `esp` result (GM decision 2026-11-10, consistent with the routes above). Outcomes:
+domain without ESPs never depends on them. Every role that may run checks on the domain gets the
+full result, client viewers included (M6-06c). Outcomes:
 - no assignment: `EspProfileCheck` with no profile (the M6-04 `ESP_NONE_ASSIGNED` info result),
   `assigned` False (not part of `all`);
 - the repository fails (SQLAlchemyError) or the profiles cannot be loaded: a check that returns
@@ -102,11 +105,12 @@ CODES: tuple[str, ...] = ("ESP_PROFILE_UNAVAILABLE",)
 ProfileSource = Callable[[], Sequence[EspProfile]]
 
 
-def esp_withheld(principal: Principal, tenant_id: int) -> bool:
-    """True unless the principal holds exactly one membership in the tenant with a role that
-    sees every domain: a client viewer gets no ESP data (fail closed)."""
+def _reads_by_assignment(principal: Principal, tenant_id: int) -> bool:
+    """True when the principal's only membership in the tenant is domain-restricted (a client
+    viewer): `domain.read` then comes from its own assignment of the domain. Anything else
+    (no or several memberships) is False, which only costs a domain lookup."""
     grants = [m for m in principal.memberships if m.tenant_id == tenant_id]
-    return len(grants) != 1 or is_domain_restricted(grants[0].role)
+    return len(grants) == 1 and is_domain_restricted(grants[0].role)
 
 
 def field_key(field: str, reason: str) -> str:
@@ -197,14 +201,9 @@ class DomainEspService:
             raise EspNotFound
         return self._ctx.tenant_id
 
-    def _restricted(self, tenant_id: int) -> bool:
-        return esp_withheld(self._principal, tenant_id)
-
     def check_catalogue(self) -> None:
         tenant_id = self._tenant_id()
         if not can(self._principal, Action.DOMAIN_LIST, TenantResource(tenant_id)):
-            raise EspForbidden
-        if self._restricted(tenant_id):
             raise EspForbidden
 
     def _authorize(self, domain_id: object, *, write: bool) -> tuple[int, bool]:
@@ -217,9 +216,9 @@ class DomainEspService:
         resource = DomainResource(tenant_id, did)
         if not can(self._principal, Action.DOMAIN_READ, resource):
             raise EspNotFound
-        if self._restricted(tenant_id):
-            raise EspForbidden
         writable = can(self._principal, Action.DOMAIN_UPDATE, resource) if write else False
+        if write and not writable and _reads_by_assignment(self._principal, tenant_id):
+            raise EspForbidden
         return did, writable
 
     def _existing_domain(self, domain_id: object, *, write: bool) -> int:
@@ -412,7 +411,11 @@ def resolve_esp_run(
     profiles: ProfileSource = load_esp_profiles,
 ) -> EspRun:
     """The `esp` check of a run on `domain_id` (already authorized by the caller). Reads only
-    through the tenant repository of `ctx`; never raises for a repository or profile failure."""
+    through the tenant repository of `ctx`; never raises for a repository or profile failure.
+
+    A repository failure is caught but not rolled back here: after a failed statement a
+    PostgreSQL transaction is aborted, so the caller must roll back `db` before using it again
+    (the checks API does, in `finally`, and reads the assignments last)."""
     try:
         records = repo_for(ctx, db).domain_esps.list_for_domain(domain_id)
     except SQLAlchemyError:
