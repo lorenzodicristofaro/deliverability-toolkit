@@ -67,6 +67,7 @@
   "checks.dkim.row.found": "DKIM key record found.",
   "checks.dkim.row.key": "Key type {key_type}, {bits} bits.",
   "checks.dkim.row.not_found": "No key record at this selector.",
+  "checks.dkim.row.provider": "Provider:",
   "checks.dkim.stream_error": "The DKIM check could not be completed. Try again later.",
   "checks.dkim.title": "DKIM",
   "checks.dmarc.title": "DMARC",

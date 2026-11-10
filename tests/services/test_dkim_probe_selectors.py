@@ -4,13 +4,14 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from dataclasses import dataclass
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 from sqlalchemy import delete
 from sqlalchemy.orm import Session
 
-from app.checks.dkim import DkimCheck
+from app.checks.dkim import DkimCheck, seed_providers
 from app.checks.dkim_selectors import KnowledgeError, list_selectors
 from app.core.db import create_db_engine, create_session_factory
 from app.core.tenancy import TenantContext
@@ -31,6 +32,9 @@ from app.services.seed_sync import sync_dkim_selectors
 from tests.support.socket_guard import db_endpoint, install
 
 SEED = tuple(s.name for s in list_selectors())
+SEED_PROVIDERS = seed_providers()
+WITH_PROVIDER = next(n for n in SEED if n in SEED_PROVIDERS)
+WITHOUT_PROVIDER = next(n for n in SEED if n not in SEED_PROVIDERS)
 
 
 @dataclass
@@ -81,7 +85,7 @@ def world(migrated_db_url: str) -> Iterator[World]:
 
 
 def test_only_the_synced_seed_equals_the_seed_list(world: World) -> None:
-    assert world.resolve(world.a) == ProbeSelectors(SEED, 0)
+    assert world.resolve(world.a) == ProbeSelectors(SEED, 0, SEED_PROVIDERS)
     assert list(SEED) == sorted(SEED)
 
 
@@ -121,7 +125,7 @@ def test_disabled_tenant_row_does_not_hide_an_enabled_global_row(world: World) -
 
 def test_empty_global_table_falls_back_to_the_seed(world: World) -> None:
     world.clear_global()
-    assert world.resolve(world.a) == ProbeSelectors(SEED, 0)
+    assert world.resolve(world.a) == ProbeSelectors(SEED, 0, SEED_PROVIDERS)
 
 
 def test_fallback_keeps_the_tenants_rows(world: World) -> None:
@@ -145,13 +149,13 @@ def test_unreadable_seed_on_fallback_leaves_the_error_to_the_check(
 
 def test_all_global_rows_disabled_is_an_empty_list_not_the_fallback(world: World) -> None:
     world.disable_global()
-    assert world.resolve(world.a) == ProbeSelectors((), 0)
+    assert world.resolve(world.a) == ProbeSelectors((), 0, {})
 
 
 def test_all_global_disabled_keeps_enabled_tenant_rows(world: World) -> None:
     world.disable_global()
     world.tenant(world.a, "mine")
-    assert world.resolve(world.a) == ProbeSelectors(("mine",), 0)
+    assert world.resolve(world.a) == ProbeSelectors(("mine",), 0, {})
 
 
 def test_rows_past_the_repository_limit_are_read(
@@ -182,6 +186,8 @@ def test_probe_cap(world: World, over: int, dropped: int) -> None:
     result = world.resolve(world.a)
     assert result.dropped == dropped
     assert result.names == tuple(expected[:MAX_PROBE_SELECTORS])
+    assert result.providers is not None
+    assert set(result.providers) <= set(result.names)
 
 
 def test_release_ends_the_transaction(world: World) -> None:
@@ -209,3 +215,104 @@ def test_registry_for_replaces_only_dkim() -> None:
             assert registry.get(check_id) is not base.get(check_id)
         else:
             assert registry.get(check_id) is base.get(check_id)
+
+
+# --- providers (M5-23b) --------------------------------------------------------------------------
+
+
+def test_seed_has_names_with_and_without_a_provider() -> None:
+    assert SEED_PROVIDERS and WITH_PROVIDER != WITHOUT_PROVIDER
+
+
+def test_tenant_provider_wins_inside_its_tenant_only(world: World) -> None:
+    world.tenant(world.a, WITH_PROVIDER, provider="a_custom")
+    world.tenant(world.b, WITH_PROVIDER, provider="b_custom")
+    a, b = world.resolve(world.a), world.resolve(world.b)
+    assert a.providers is not None and b.providers is not None
+    assert a.providers[WITH_PROVIDER] == "a_custom"
+    assert b.providers[WITH_PROVIDER] == "b_custom"
+    assert "b_custom" not in a.providers.values() and "a_custom" not in b.providers.values()
+
+
+def test_tenant_provider_on_a_name_without_a_global_one(world: World) -> None:
+    world.tenant(world.a, WITHOUT_PROVIDER, provider="a_only")
+    a, b = world.resolve(world.a), world.resolve(world.b)
+    assert a.providers is not None and b.providers is not None
+    assert a.providers[WITHOUT_PROVIDER] == "a_only"
+    assert WITHOUT_PROVIDER not in b.providers
+
+
+def test_empty_tenant_provider_falls_back_to_the_global_one(world: World) -> None:
+    world.tenant(world.a, WITH_PROVIDER)  # provider NULL
+    providers = world.resolve(world.a).providers
+    assert providers is not None
+    assert providers[WITH_PROVIDER] == SEED_PROVIDERS[WITH_PROVIDER]
+
+
+def test_disabled_tenant_row_contributes_no_provider(world: World) -> None:
+    world.tenant(world.a, WITH_PROVIDER, provider="a_custom", enabled=False)
+    world.tenant(world.a, "off-only", provider="a_off", enabled=False)
+    providers = world.resolve(world.a).providers
+    assert providers is not None
+    assert providers[WITH_PROVIDER] == SEED_PROVIDERS[WITH_PROVIDER]
+    assert "off-only" not in providers
+
+
+def test_disabled_global_row_contributes_no_provider(world: World) -> None:
+    world.disable_global(WITH_PROVIDER)
+    result = world.resolve(world.a)
+    assert result.names is not None and result.providers is not None
+    assert WITH_PROVIDER not in result.names and WITH_PROVIDER not in result.providers
+
+
+def test_tenant_only_row_provider_never_reaches_another_tenant(world: World) -> None:
+    world.tenant(world.a, "a-private", provider="a_secret")
+    b = world.resolve(world.b)
+    assert b.names is not None and b.providers is not None
+    assert "a-private" not in b.names and "a_secret" not in b.providers.values()
+
+
+def test_fallback_uses_seed_providers_and_tenant_override(world: World) -> None:
+    world.clear_global()
+    world.tenant(world.a, WITH_PROVIDER, provider="a_custom")
+    a, b = world.resolve(world.a), world.resolve(world.b)
+    assert a.providers is not None and b.providers is not None
+    assert a.providers[WITH_PROVIDER] == "a_custom"
+    assert dict(b.providers) == SEED_PROVIDERS
+
+
+def _row(selector: str, scope: str, provider: str | None, enabled: bool = True) -> Any:
+    return SimpleNamespace(selector=selector, scope=scope, provider=provider, enabled=enabled)
+
+
+@pytest.mark.parametrize(
+    ("rows", "seed", "expected"),
+    [
+        ([], {}, {}),
+        ([_row("s", "global", "g")], {}, {"s": "g"}),
+        ([_row("s", "global", "g"), _row("s", "tenant", "t")], {}, {"s": "t"}),
+        ([_row("s", "tenant", "t"), _row("s", "global", "g")], {}, {"s": "t"}),
+        ([_row("s", "global", "g"), _row("s", "tenant", None)], {}, {"s": "g"}),
+        ([_row("s", "global", "g"), _row("s", "tenant", "")], {}, {"s": "g"}),
+        ([_row("s", "global", "g"), _row("s", "tenant", "   ")], {}, {"s": "g"}),
+        ([_row("s", "global", "g"), _row("s", "tenant", "t", False)], {}, {"s": "g"}),
+        ([_row("s", "global", "g", False)], {}, {}),
+        ([_row("s", "global", None)], {}, {}),
+        ([_row("s", "global", "")], {"s": "seed"}, {"s": "seed"}),
+        ([], {"s": "seed"}, {"s": "seed"}),
+        ([_row("s", "tenant", "t")], {"s": "seed"}, {"s": "t"}),
+        ([_row("x", "tenant", "t")], {}, {}),  # not probed: no entry
+        ([_row("s", "bogus", "z")], {}, {}),  # malformed scope is ignored
+    ],
+)
+def test_provider_precedence(
+    rows: list[Any], seed: dict[str, str], expected: dict[str, str]
+) -> None:
+    assert dict(probe._providers(rows, seed, ("s",))) == expected
+
+
+def test_registry_for_passes_the_providers() -> None:
+    registry = registry_for(ProbeSelectors(("a",), 0, {"a": "prov"}))
+    check = registry.get(DkimCheck.id)
+    assert isinstance(check, DkimCheck)
+    assert check._provider_map() == {"a": "prov"}

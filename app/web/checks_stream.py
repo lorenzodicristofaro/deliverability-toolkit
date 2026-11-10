@@ -15,9 +15,10 @@ is a row in the `error` state, never an empty or "not found" row. The whole stre
 deadline (`STREAM_DEADLINE_S`); when it expires the probe is stopped and `done` says the result is
 incomplete (status `error`, no aggregate findings). The selector list of a domain stream is resolved
 and the database connection released before the stream starts, so no transaction is held during
-the probe; the free route stays on the seed list. A client disconnect cancels the response task;
-the `finally`
-closes the probe generator, which cancels its in-flight lookups.
+the probe; the free route stays on the seed list. Each row shows the selector's provider when the
+list has one (domain stream: tenant row, else global row; free stream: the seed), for every role
+that can see the domain; selector notes never reach a row. A client disconnect cancels the
+response task; the `finally` closes the probe generator, which cancels its in-flight lookups.
 
 The client (M3-17) must close its EventSource on `done`, otherwise the browser reconnects.
 """
@@ -27,14 +28,20 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from collections.abc import AsyncGenerator, AsyncIterator, Callable, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Callable, Mapping, Sequence
 from typing import Annotated, Final, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
 from app.api.v1.checks import ResolverDep
-from app.checks.dkim import DkimCheck, SelectorResult, probe_selectors, summarize
+from app.checks.dkim import (
+    DkimCheck,
+    SelectorResult,
+    probe_selectors,
+    seed_providers,
+    summarize,
+)
 from app.checks.dkim_selectors import KnowledgeError, list_selectors
 from app.checks.models import CheckContext, CheckResult, finding
 from app.core.domain_names import InvalidDomainName, to_ascii_domain, to_dns_name
@@ -131,6 +138,7 @@ def _render(lang: str, **context: object) -> str:
 def _row(res: SelectorResult) -> dict[str, object]:
     return {
         "selector": res.selector,
+        "provider": res.provider,
         "state": res.state,
         "reason": res.reason,
         "key_type": res.key_type,
@@ -182,15 +190,17 @@ async def dkim_events(
     *,
     selectors: Sequence[str] | None = None,
     dropped: int = 0,
+    providers: Mapping[str, str] | None = None,
     deadline_s: float = STREAM_DEADLINE_S,
     on_result: Callable[[CheckResult], None] | None = None,
 ) -> AsyncIterator[str]:
     """SSE frames for one probe run. Closing this generator closes the probe. A seed file that
-    cannot be read still ends with a `done` event, status `error`."""
+    cannot be read still ends with a `done` event, status `error`. `providers` None: the seed's."""
     try:
         names = (
             tuple(selectors) if selectors is not None else tuple(s.name for s in list_selectors())
         )
+        known = dict(providers) if providers is not None else seed_providers()
     except KnowledgeError:
         log.warning("dkim selector seed unreadable", extra={"event": "checks.dkim.seed_unreadable"})
         failed = _not_evaluated(ctx, domain)
@@ -203,7 +213,7 @@ async def dkim_events(
     started = ctx.clock()
     t0 = time.monotonic()
     # `probe_selectors` is an async generator; it is typed as an iterator, we need `aclose`.
-    probe = cast("AsyncGenerator[SelectorResult, None]", probe_selectors(ctx, domain, names))
+    probe = cast("AsyncGenerator[SelectorResult, None]", probe_selectors(ctx, domain, names, known))
     try:
         deadline = asyncio.get_running_loop().time() + deadline_s
         while True:
@@ -248,6 +258,7 @@ def _response(request: Request, resolver: Resolver, target: _Target) -> Streamin
         request_language(request.scope),
         selectors=target.probe.names,
         dropped=target.probe.dropped,
+        providers=target.probe.providers,
     )
     return StreamingResponse(events, media_type="text/event-stream", headers=HEADERS)
 

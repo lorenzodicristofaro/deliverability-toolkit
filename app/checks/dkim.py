@@ -25,6 +25,11 @@ caller cut from an over-long list: the result is incomplete (status ``error``) a
 
 ``probe_selectors`` yields each result as soon as it is ready (completion order), with
 bounded concurrency and no early stop; ``DkimCheck.run`` drains the same generator.
+
+Provider (M5-23b): each selector result carries the provider of its name, or None. The caller
+passes a name -> provider map (``providers``); ``None`` means "the seed's providers", which is
+what the tenant-less surfaces (free checks, CLI ``check``) get. Only the provider is ever copied
+into a result: selector ``notes`` are admin data and never reach a result.
 """
 
 from __future__ import annotations
@@ -32,8 +37,8 @@ from __future__ import annotations
 import asyncio
 import time
 from collections import deque
-from collections.abc import AsyncIterator, Iterable, Sequence
-from dataclasses import dataclass
+from collections.abc import AsyncIterator, Iterable, Mapping, Sequence
+from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Any, Literal
 
@@ -76,6 +81,12 @@ class SelectorResult:
     reason: str | None = None  # why the state is ``error``
     key_type: str | None = None
     bits: int | None = None
+    provider: str | None = None  # who operates the selector, from the selector list; never notes
+
+
+def seed_providers() -> dict[str, str]:
+    """name -> provider of the seed entries that name one. Raises ``KnowledgeError``."""
+    return {s.name: s.provider for s in list_selectors() if s.provider}
 
 
 def _error(selector: str, name: str, chain: list[str], reason: str) -> SelectorResult:
@@ -133,13 +144,18 @@ async def _follow(ctx: CheckContext, selector: str, name: str) -> SelectorResult
 
 
 async def probe_selectors(
-    ctx: CheckContext, domain: str, selectors: Iterable[str]
+    ctx: CheckContext,
+    domain: str,
+    selectors: Iterable[str],
+    providers: Mapping[str, str] | None = None,
 ) -> AsyncIterator[SelectorResult]:
     """Yield one :class:`SelectorResult` per distinct selector as soon as it is ready.
 
     At most :data:`PROBE_CONCURRENCY` selectors are in flight; none is skipped. Closing or
-    cancelling the generator cancels the in-flight probes and waits for them.
+    cancelling the generator cancels the in-flight probes and waits for them. A result gets the
+    provider ``providers`` maps its selector to (no map: none).
     """
+    known = providers or {}
     pending = deque(dict.fromkeys(selectors))
     total = len(pending)
     done: asyncio.Queue[SelectorResult] = asyncio.Queue()
@@ -147,7 +163,10 @@ async def probe_selectors(
     async def worker() -> None:
         while pending:
             selector = pending.popleft()
-            await done.put(await _probe_one(ctx, domain, selector))
+            res = await _probe_one(ctx, domain, selector)
+            if provider := known.get(selector):
+                res = replace(res, provider=provider)
+            await done.put(res)
 
     workers = [asyncio.create_task(worker()) for _ in range(min(PROBE_CONCURRENCY, total))]
     try:
@@ -200,6 +219,7 @@ def _key_findings(sel: dict[str, Any], key: DkimKey) -> list[Finding]:
 def _selector_data(res: SelectorResult) -> dict[str, Any]:
     return {
         "selector": res.selector,
+        "provider": res.provider,
         "state": res.state,
         "key_type": res.key_type,
         "bits": res.bits,
@@ -274,14 +294,24 @@ def summarize(
 class DkimCheck:
     id = "dkim"
 
-    def __init__(self, selectors: Sequence[str] | None = None, *, dropped: int = 0) -> None:
+    def __init__(
+        self,
+        selectors: Sequence[str] | None = None,
+        *,
+        dropped: int = 0,
+        providers: Mapping[str, str] | None = None,
+    ) -> None:
         self._selectors = tuple(selectors) if selectors is not None else None
         self._dropped = dropped
+        self._providers = dict(providers) if providers is not None else None
 
     def _names(self) -> tuple[str, ...]:
         if self._selectors is not None:
             return tuple(dict.fromkeys(self._selectors))
         return tuple(s.name for s in list_selectors())
+
+    def _provider_map(self) -> dict[str, str]:
+        return self._providers if self._providers is not None else seed_providers()
 
     async def run(self, ctx: CheckContext, target: Target) -> CheckResult:
         started = ctx.clock()
@@ -291,7 +321,8 @@ class DkimCheck:
         except InvalidDomainName:
             domain = target.domain.strip().lower().removesuffix(".")  # probes report the error
         names = self._names()
-        results = [r async for r in probe_selectors(ctx, domain, names)]
+        providers = self._provider_map()
+        results = [r async for r in probe_selectors(ctx, domain, names, providers)]
         return summarize(
             target.domain,
             results,
