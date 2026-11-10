@@ -66,18 +66,50 @@ def _strict_mode() -> Iterator[None]:
 
 @pytest.fixture(autouse=True)
 def attempts(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
-    """Block sockets (except the test database) and record every connection attempt."""
+    """Block sockets (except the test database); record every connect, resolve or send."""
     install(monkeypatch, "the M5 acceptance suite", db_endpoint())
-    allowed = resolved_addresses(db_endpoint())
+    endpoint = db_endpoint()
+    allowed = resolved_addresses(endpoint)
     seen: list[Any] = []
-    guarded = socket.socket.connect
 
-    def record(self: socket.socket, address: Any, *args: Any, **kwargs: Any) -> Any:
-        if not (isinstance(address, tuple) and (str(address[0]).lower(), address[1]) in allowed):
-            seen.append(address)
-        return guarded(self, address, *args, **kwargs)
+    def is_db_address(address: Any) -> bool:
+        return (
+            isinstance(address, tuple)
+            and len(address) >= 2
+            and (str(address[0]).lower(), address[1]) in allowed
+        )
 
-    monkeypatch.setattr(socket.socket, "connect", record)
+    def is_db_host(host: Any) -> bool:
+        return endpoint is not None and isinstance(host, str) and host.lower() == endpoint[0]
+
+    def recording(name: str, original: Any, is_db: Any) -> Any:
+        def wrapper(*args: Any, **kwargs: Any) -> Any:
+            if not is_db(args):
+                seen.append((name, args[1:] if name != "getaddrinfo" else args))
+            return original(*args, **kwargs)  # the guard still refuses it
+
+        return wrapper
+
+    def address_at_1(args: Any) -> bool:
+        return len(args) > 1 and is_db_address(args[1])
+
+    for method in ("connect", "connect_ex", "sendto"):
+        original = getattr(socket.socket, method)
+        monkeypatch.setattr(
+            socket.socket,
+            method,
+            recording(method, original, address_at_1 if method != "sendto" else lambda a: False),
+        )
+    monkeypatch.setattr(
+        socket,
+        "getaddrinfo",
+        recording("getaddrinfo", socket.getaddrinfo, lambda a: bool(a) and is_db_host(a[0])),
+    )
+    monkeypatch.setattr(
+        socket,
+        "gethostbyname",
+        recording("gethostbyname", socket.gethostbyname, lambda a: bool(a) and is_db_host(a[0])),
+    )
     return seen
 
 
@@ -219,13 +251,21 @@ def test_global_rule_is_visible_to_two_tenants_and_a_tenant_rule_to_one(world: W
     listing = call(world, "b_owner", "GET", RULES, tenant="b").json()
     assert "Tenant A only" not in json.dumps(listing)
 
+    # and the other way round: a tenant B rule never reaches tenant A
+    theirs = make_rule(
+        world, "b_owner", tenant="b", name="Tenant B only", pattern="zebraword", weight=0
+    )
+    assert "Tenant B only" in matched(analyze(world, "b_owner", "b"))
+    assert "Tenant B only" not in matched(analyze(world, "owner", "a"))
+    assert call(world, "owner", "GET", f"{RULES}/{theirs['id']}").status_code == 404
+
     # a global edit by the instance admin reaches both tenants on their next analysis
     item = f"{RULES}/{shared['id']}{GLOBAL_Q}"
     assert call(world, "root", "PATCH", item, json={"weight": 55}).status_code == 200
     assert score(analyze(world, "b_owner", "b")) == 55
     assert call(world, "root", "PATCH", item, json={"enabled": False}).status_code == 200
     assert set(matched(analyze(world, "owner", "a"))) == {"Tenant A only"}
-    assert matched(analyze(world, "b_owner", "b")) == {}
+    assert set(matched(analyze(world, "b_owner", "b"))) == {"Tenant B only"}
 
     # a tenant admin cannot write the global scope
     denied = call(world, "owner", "POST", RULES + GLOBAL_Q, json=rule(name="No"))
@@ -381,11 +421,14 @@ def test_service_api_cli_are_byte_equal_and_the_ui_shows_the_same_status_and_cod
     assert attempts == []
 
 
-def test_a_run_without_eml_cannot_evaluate_list_unsubscribe(world: World) -> None:
+def test_a_run_without_eml_cannot_evaluate_list_unsubscribe(
+    world: World, attempts: list[Any]
+) -> None:
     found = analyze(world, text="zebraword", subject="hello")
     assert found["unsubscribe"]["status"] == "not_evaluated"
     assert found["complete"] is False
     assert "unsubscribe" in found["not_evaluated_sections"]
+    assert attempts == []
 
 
 def test_the_guard_itself_blocks_connections(attempts: list[Any]) -> None:

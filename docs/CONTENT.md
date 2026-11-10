@@ -187,7 +187,7 @@ A content rule is a row in `content_rules`:
 | `kind` | `keyword` (case-folded substring, no Unicode normalization) or `regex` |
 | `pattern`, `flags` | regex flags allowed: ignorecase, multiline, dotall, verbose, ascii |
 | `weight` | 0 to 100; only matched rules score |
-| `category` | free label (at most 64 characters); the score is also summed per category |
+| `category` | lowercase slug matching `[a-z0-9][a-z0-9_.-]*` (at most 64 characters); the score is also summed per category |
 | `language` | null (all languages) or a lowercase code; see below |
 | `enabled`, `severity` | `critical` to `info`; `severity` is the finding severity |
 | `title`, `advice` | the text shown with the match (stored, plain text, escaped by renderers) |
@@ -235,8 +235,8 @@ ALL shipped `enabled: false`:
 | Key | Status | Basis |
 |---|---|---|
 | `subject_fake_reply_forward_prefix` | verified, `verified_on` 2026-11-08 | https://support.google.com/a/answer/81126 (Google "Email sender guidelines", message formatting). Disabled because the rule has no target field and no view of In-Reply-To/References, so as a plain pattern it would also flag real replies |
-| `shouting_punctuation` | `unverified` | generic heuristic, no primary source (runs of three or more `!` or `?`) |
-| `all_caps_run` | `unverified` | generic heuristic, no primary source |
+| `shouting_punctuation` | `unverified` (its `verified_on` is the day the basis was last reviewed, not a confirmation) | generic heuristic, no primary source (runs of three or more `!` or `?`) |
+| `all_caps_run` | `unverified` (same: `verified_on` is the last review of the basis) | generic heuristic, no primary source |
 
 `seeds/url_shorteners.yaml` (`verified_on` 2026-11-07): 9 entries. Verified: `bit.ly` (Bitly API
 reference, https://dev.bitly.com/api-reference/) and `goo.gl` (Google Developers Blog, URL
@@ -290,7 +290,7 @@ guarded outbound client. Nothing outside DNS is fetched in M5.
 
 Rules of the definition:
 
-- `name` is `{domain}` alone, or lowercase ASCII labels followed by `.{domain}`; the rendered name
+- `name` is `{domain}` alone, or lowercase ASCII labels followed by `.{domain}`; a label may start with an underscore (for example `_dmarc`); the rendered name
   can only be the target domain or a name under it. IDN is refused. Allowed record types: A, AAAA,
   CAA, CNAME, MX, NS, SOA, SRV, TLSA, TXT. Severity: `low`, `medium` or `high`.
 - Ids are `custom:<scope>:<key>` with scope `global` or `tenant`, so a global and a tenant check
