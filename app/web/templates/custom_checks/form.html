@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+{% set heading = t("web.custom_checks.form.edit") if record else t("web.custom_checks.form.new") %}
+{% set kind_text = {"dns_exists": t("web.custom_checks.kind.dns_exists"), "dns_matches": t("web.custom_checks.kind.dns_matches"), "dns_value_range": t("web.custom_checks.kind.dns_value_range"), "http_fetch": t("web.custom_checks.kind.http_fetch")} %}
+{% set severity_text = {"low": t("checks.severity.low"), "medium": t("checks.severity.medium"), "high": t("checks.severity.high")} %}
+{% set scope_text = {"tenant": t("web.custom_checks.scope.tenant"), "global": t("web.custom_checks.scope.global")} %}
+{% block title %}{{ heading }} · {{ app_name }}{% endblock %}
+{% block content %}
+<h1>{{ heading }}</h1>
+<p>{{ scope_text[scope] }}</p>
+{% include "custom_checks/_error.html" %}
+<form class="dns-form" method="post" action="{% if record %}/custom-checks/{{ record.id }}/edit{% else %}/custom-checks{% endif %}?scope={{ scope }}" data-testid="custom-form">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <p>
+    <label for="cc-key">{{ t("web.custom_checks.field.check_key") }}</label>
+    <input id="cc-key" name="check_key" type="text" size="30" maxlength="64" value="{{ form.check_key }}" autocomplete="off" spellcheck="false"{% if record %} readonly{% endif %}>
+  </p>
+  <p>
+    <label for="cc-name">{{ t("web.custom_checks.field.name") }}</label>
+    <input id="cc-name" name="name" type="text" size="50" maxlength="200" value="{{ form.name }}" autocomplete="off">
+  </p>
+  <p>
+    <label for="cc-description">{{ t("web.custom_checks.field.description") }}</label>
+    <input id="cc-description" name="description" type="text" size="60" maxlength="500" value="{{ form.description }}" autocomplete="off">
+  </p>
+  <p>
+    <label for="cc-kind">{{ t("web.custom_checks.field.kind") }}</label>
+    <select id="cc-kind" name="kind">
+      {% for k in kinds %}<option value="{{ k }}"{% if form.kind == k %} selected{% endif %}>{{ kind_text[k] }}</option>{% endfor %}
+      {% for k in reserved_kinds %}<option value="{{ k }}" disabled>{{ kind_text[k] }} ({{ t("web.custom_checks.kind.http_fetch_unavailable") }})</option>{% endfor %}
+    </select>
+  </p>
+  <p>
+    <label for="cc-rrtype">{{ t("web.custom_checks.field.rrtype") }}</label>
+    <select id="cc-rrtype" name="rrtype">
+      {% for k in rrtypes %}<option value="{{ k }}"{% if form.rrtype == k %} selected{% endif %}>{{ k }}</option>{% endfor %}
+    </select>
+  </p>
+  <p>
+    <label for="cc-template">{{ t("web.custom_checks.field.name_template") }}</label>
+    <input id="cc-template" name="name_template" type="text" size="50" maxlength="253" value="{{ form.name_template }}" autocomplete="off" spellcheck="false">
+    <br><small>{{ t("web.custom_checks.field.name_template_help") }}</small>
+  </p>
+  <p>
+    <label for="cc-pattern">{{ t("web.custom_checks.field.pattern") }}</label>
+    <input id="cc-pattern" name="pattern" type="text" size="60" maxlength="1024" value="{{ form.pattern }}" autocomplete="off" spellcheck="false">
+    <br><small>{{ t("web.custom_checks.field.pattern_help") }}</small>
+  </p>
+  <p>
+    <label for="cc-min">{{ t("web.custom_checks.field.min") }}</label>
+    <input id="cc-min" name="min" type="text" size="12" maxlength="64" value="{{ form.min }}" autocomplete="off" spellcheck="false">
+    <label for="cc-max">{{ t("web.custom_checks.field.max") }}</label>
+    <input id="cc-max" name="max" type="text" size="12" maxlength="64" value="{{ form.max }}" autocomplete="off" spellcheck="false">
+  </p>
+  <p>
+    <label for="cc-severity">{{ t("web.custom_checks.field.severity") }}</label>
+    <select id="cc-severity" name="severity">
+      {% for k in severities %}<option value="{{ k }}"{% if form.severity == k %} selected{% endif %}>{{ severity_text[k] }}</option>{% endfor %}
+    </select>
+  </p>
+  <p>
+    <label for="cc-rem-en">{{ t("web.custom_checks.field.remediation_en") }}</label>
+    <textarea id="cc-rem-en" name="remediation_en" rows="3" cols="60" maxlength="2000">{{ form.remediation_en }}</textarea>
+  </p>
+  <p>
+    <label for="cc-rem-it">{{ t("web.custom_checks.field.remediation_it") }}</label>
+    <textarea id="cc-rem-it" name="remediation_it" rows="3" cols="60" maxlength="2000">{{ form.remediation_it }}</textarea>
+  </p>
+  {% if scope == "global" %}
+  <p>
+    <label for="cc-rem-key">{{ t("web.custom_checks.field.remediation_key") }}</label>
+    <input id="cc-rem-key" name="remediation_key" type="text" size="50" maxlength="200" value="{{ form.remediation_key }}" autocomplete="off" spellcheck="false">
+    <br><small>{{ t("web.custom_checks.field.remediation_key_help") }}</small>
+  </p>
+  {% endif %}
+  <p>
+    <label><input type="checkbox" name="enabled" value="1"{% if form.enabled %} checked{% endif %}> {{ t("web.custom_checks.field.enabled") }}</label>
+  </p>
+  {% if domains %}
+  <p>
+    <label for="cc-domain">{{ t("web.custom_checks.test.domain") }}</label>
+    <select id="cc-domain" name="domain_id">
+      {% for d_id, d_name in domains %}<option value="{{ d_id }}"{% if form.domain_id|string == d_id|string %} selected{% endif %}>{{ d_name|visible }}</option>{% endfor %}
+    </select>
+    <button type="submit" formaction="/custom-checks/test?scope={{ scope }}{% if record %}&amp;check={{ record.id }}{% endif %}" data-testid="custom-test">{{ t("web.custom_checks.test.run") }}</button>
+  </p>
+  {% endif %}
+  <button type="submit">{{ t("web.custom_checks.action.save") }}</button>
+  <a href="/custom-checks?scope={{ scope }}">{{ t("web.custom_checks.action.cancel") }}</a>
+</form>
+{% if result %}
+<section data-testid="custom-test-result">
+  <h2>{{ t("web.custom_checks.test.result") }}</h2>
+  <p><small>{{ t("web.custom_checks.test.not_stored") }}</small></p>
+  {% include "checks/_result.html" %}
+</section>
+{% endif %}
+{% endblock %}

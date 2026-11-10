@@ -390,6 +390,23 @@ MATRIX: dict[tuple[str, str], Entry] = {
         Kind.RULE, body=_toggle, own=_RULE_WRITE_ON_B
     ),
     ("POST", "/dkim-selectors/{selector_id}/delete"): Entry(Kind.RULE, own=_RULE_WRITE_ON_B),
+    # custom checks UI (app.web.custom_checks): same permissions as the content rules UI; the dry
+    # run (`/test`) needs `rules.read`, so permitted roles stop at 422 (no domain in the body).
+    # The global tab is covered by tests/web/test_custom_checks_ui.py.
+    ("GET", "/custom-checks"): Entry(
+        Kind.COLLECTION, own=_RULES_READ, b_session={"instance_admin": 200}
+    ),
+    ("GET", "/custom-checks/new"): Entry(Kind.COLLECTION, own=_by_role(200, 403)),
+    ("POST", "/custom-checks"): Entry(Kind.DNS, body=_rule_form, own=_by_role(422, 403)),
+    ("POST", "/custom-checks/test"): Entry(Kind.DNS, body=_rule_form, own=_CONTENT_OWN),
+    ("POST", "/custom-checks/{custom_check_id}/edit"): Entry(
+        Kind.RULE, body=_rule_form, own=_RULE_WRITE_ON_B
+    ),
+    ("GET", "/custom-checks/{custom_check_id}/edit"): Entry(Kind.RULE, own=_RULE_WRITE_ON_B),
+    ("POST", "/custom-checks/{custom_check_id}/toggle"): Entry(
+        Kind.RULE, body=_toggle, own=_RULE_WRITE_ON_B
+    ),
+    ("POST", "/custom-checks/{custom_check_id}/delete"): Entry(Kind.RULE, own=_RULE_WRITE_ON_B),
     # DKIM SSE streams (app.web.checks_stream): check.run on the domain / dns.tools (free).
     # The free route needs `?name=`; without it permitted roles get 422 (decided before streaming).
     ("GET", "/domains/{domain_id}/authentication"): Entry(Kind.DOMAIN),
@@ -721,7 +738,9 @@ def _check_case(world: World, logs: pytest.LogCaptureFixture, case: Case) -> Non
     before_a, before_b = world.state("a"), world.state("b")
     rule_before = b_rule(world) if case.leaf.path.startswith(("/api/v1/rules", "/rules")) else None
     custom_before = (
-        b_custom_check(world) if case.leaf.path.startswith("/api/v1/custom-checks") else None
+        b_custom_check(world)
+        if case.leaf.path.startswith(("/api/v1/custom-checks", "/custom-checks"))
+        else None
     )
     selector_before = (
         b_selector(world)

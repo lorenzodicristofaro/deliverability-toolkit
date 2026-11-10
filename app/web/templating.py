@@ -139,8 +139,9 @@ def content_tools_nav(request: Request) -> bool:
 
 
 def rules_tools_nav(request: Request) -> bool:
-    """Whether the nav shows the rules and DKIM selectors links: `rules.read` in the active tenant
-    or `rules.manage` on the global scope, either one opens a tab (fail closed, no DB access)."""
+    """Whether the nav shows the rules, DKIM selectors and custom checks links: `rules.read` in the
+    active tenant or `rules.manage` on the global scope, either one opens a tab (fail closed, no DB
+    access)."""
     from app.core.permissions import (  # lazy: deps imports this module
         Action,
         RuleScope,
@@ -185,6 +186,7 @@ def render(request: Request, template: str, status_code: int = 200, **context: A
         show_content_tools=content_tools_nav(request),
         show_rules_tools=rules_tools_nav(request),
         show_dkim_selector_tools=rules_tools_nav(request),
+        show_custom_check_tools=rules_tools_nav(request),
         **context,
     )
     response = HTMLResponse(html, status_code=status_code)

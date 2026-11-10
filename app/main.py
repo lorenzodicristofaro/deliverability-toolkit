@@ -22,6 +22,7 @@ from app.web.auth import router as auth_router
 from app.web.authentication import router as authentication_router
 from app.web.checks_stream import router as checks_stream_router
 from app.web.content import router as content_router
+from app.web.custom_checks import router as custom_checks_router
 from app.web.deps import _session_factory
 from app.web.dkim_selectors import router as dkim_selectors_router
 from app.web.dns_tools import router as dns_tools_router
@@ -113,6 +114,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     web_app.include_router(content_router)
     web_app.include_router(rules_router)
     web_app.include_router(dkim_selectors_router)
+    web_app.include_router(custom_checks_router)
     web_app.include_router(checks_stream_router)
     web_app.include_router(api_router)
     web_app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")

@@ -31,6 +31,9 @@
         {% if show_dkim_selector_tools is defined and show_dkim_selector_tools %}
         <li><a href="/dkim-selectors" data-testid="nav-dkim-selectors">{{ t("nav.tools.dkim_selectors") }}</a></li>
         {% endif %}
+        {% if show_custom_check_tools is defined and show_custom_check_tools %}
+        <li><a href="/custom-checks" data-testid="nav-custom-checks">{{ t("nav.tools.custom_checks") }}</a></li>
+        {% endif %}
         {% if logged_in is defined and logged_in and csrf_token is not none %}
         <li>
           <form class="logout" method="post" action="/logout">

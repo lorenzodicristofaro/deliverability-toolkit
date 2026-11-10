@@ -1,0 +1,6 @@
+{% extends "base.html" %}
+{% block title %}{{ t("web.custom_checks.denied") }} · {{ app_name }}{% endblock %}
+{% block content %}
+<h1 data-testid="forbidden">{{ t("web.custom_checks.denied") }}</h1>
+<p><a href="/">{{ t("ui.nav.home") }}</a></p>
+{% endblock %}
