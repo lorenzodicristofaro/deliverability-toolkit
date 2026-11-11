@@ -14,5 +14,5 @@ Acceptance criteria:
 - End-to-end API test on a fake resolver: tenant owner assigns an ESP, runs `esp`, sees the findings; a client viewer on a domain assigned to them reads the assigned ESPs and the `esp` result but gets 403 on assign/remove; a client viewer on a domain not assigned to them, and a user of another tenant, get the denial the existing ESP endpoints already return (404). No network anywhere. (GM 2026-11-11: corrected per the maintainer decision of 2026-11-10 implemented in M6-06c; the old "a client viewer gets 403" was outdated.)
 - docs/CHECKS.md documents the `esp` check, its finding codes and error semantics.
 New i18n keys: none
-Status: in-review
+Status: done
 Coder note: mutations that a profile cannot have are skipped parameters with id `<profile>-<mutation>-not_applicable` and the reason (no `spf.includes`, no selectors, no patterned selector, no return path/tracking, or the part is unverified); `test_mutation_kinds_are_exercised` keeps every kind live. Added an `ESP_DKIM_WRONG_TYPE` mutation, target-variant table and detection of each unassigned shipped profile. No app bug found, no xfail.

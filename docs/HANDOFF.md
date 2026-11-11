@@ -1,14 +1,12 @@
-# HANDOFF — 2026-11-11 (M6 in progress)
+# HANDOFF — 2026-11-11 (M6 tickets done; dev → qa pending green CI)
 
 Resume with `/gm`. No coder is running.
 
 ## State
 - M1–M5 accepted; `main` = `qa` (M1–M5) via PR #1.
 - Maintainer decisions 2026-11-11: repository public; Actions minutes unlimited; rulesets `protect-qa` and `protect-main` active; private vulnerability reporting enabled (maintainer confirmed). Done as M6-14 (docs, deny rules for gh pr merge/release/api/repo/secret) and M6-15 (CodeQL advanced setup, tests/ excluded).
-- M6 done on dev: M6-00, 01, 02, 03, 04, 05, 06, 06b, 06c, 07, 08, 09, 10, 12, 13, 13b, 14, 15. Last gate: M6-10 merge 298feed (QA full suite 30033 passed on the branch, identical content).
-- M6 open, in this order:
-  1. M6-11 acceptance tests over every shipped profile + docs/CHECKS.md.
-  M6-08..10 edit the locale files: run them one at a time. Vendor facts only from official docs; anything not confirmable is `unverified` and goes to the maintainer.
+- M6 done on dev: M6-00, 01, 02, 03, 04, 05, 06, 06b, 06c, 07, 08, 09, 10, 11, 12, 13, 13b, 14, 15. Last gate: M6-11 merge fe7a698 (QA full suite 30286 passed on the branch, identical content).
+- M6 tickets all done; dev → qa after green CI (GM). Vendor facts only from official docs; anything not confirmable is `unverified` and goes to the maintainer.
 - Maintainer decision 2026-11-10: client viewers read ESP data on assigned domains (assigned + detected ESPs + full `esp` result), no writes; SPEC §3 updated.
 
 ## GM decisions in M6
@@ -39,6 +37,6 @@ Resume with `/gm`. No coder is running.
 - Carried over: M4 provider samples; Mailchimp/Postmark/HubSpot DKIM sources; the PSL licence; SecLists terms; HTMX under CSP.
 
 ## Next 3 steps
-1. M6-11 acceptance tests over every shipped profile + docs/CHECKS.md (Brevo absent until the maintainer supplies its page).
-2. Then the full suite on `dev` and docs/reports/M6.md; M6 is accepted when every shipped profile has `verified_on` + sources and sample domains give the expected findings.
-3. Maintainer items: Italian wording of profile notes; flaky wall-clock tests (test_received, test_message, test_dmarc) to fix together; carried items below.
+1. dev → qa once CI on dev is green; maintainer: qa → main PR (switch CodeQL to Advanced first).
+2. Maintainer items (vendor pages for SendGrid/Mailgun/Brevo, Italian review, SPF include-host question).
+3. Plan M7 from TODO.md.
