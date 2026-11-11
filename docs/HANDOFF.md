@@ -4,7 +4,6 @@ Resume with `/gm`. The maintainer asked to stop after the M6-07 QA round; no cod
 
 ## State
 - M1–M5 accepted; `qa` → `main` pending the maintainer for M1–M5.
-- Local-only until 2026-12-21 (no pushes). Local `dev` is ahead of origin by all M6 work; the full PostgreSQL suite on local `dev` is the gate.
 - M6 done on local dev: M6-00, 01, 02, 03, 04, 05, 06, 06b, 06c, 07, 12, 13, 13b. Last gate: merge ba0ee68, full PostgreSQL suite 30033 passed, lint clean.
 - M6 open, in this order:
   1. M6-08 profiles: SendGrid, Amazon SES, Mailgun (sonnet coder, QA opus).
@@ -32,9 +31,8 @@ Resume with `/gm`. The maintainer asked to stop after the M6-07 QA round; no cod
 
 ## Open maintainer decisions
 - SPEC §5 still lists HTTP custom checks; `http_fetch` is deferred to M7 (M5-22). The wording needs the maintainer.
-- Check GitHub branch protection: if `lint-test` is required, replace it with `lint`, `test-sqlite`, `test-postgres`.
 - Gmail clipping and URL shorteners unverified (t.co, tinyurl.com, ow.ly, buff.ly, lnkd.in, is.gd, j.mp).
-- Carried over: M4 provider samples; `qa` → `main` for M1–M4; Mailchimp/Postmark/HubSpot DKIM sources; the PSL licence; SecLists terms; HTMX under CSP.
+- Carried over: M4 provider samples; Mailchimp/Postmark/HubSpot DKIM sources; the PSL licence; SecLists terms; HTMX under CSP.
 
 ## Next 3 steps
 1. M6-08 (coder sonnet, QA opus) from the current `dev` hash; then M6-09, M6-10 one at a time; record every unverified vendor fact for the maintainer.
