@@ -167,9 +167,10 @@ Carried over from M0-07 QA:
   - [x] M6-16 ESP profiles from maintainer-supplied pages: SendGrid link branding, Mailgun, Brevo
   - [x] M6-17 MailUp SPF: apply maintainer decision, include only when an SPF record exists (opus, depends on M6-16)
   - [x] M6-12 contributor guide docs/ESP_PROFILES.md
-  - [ ] M6-18 DKIM seed: add mailchef (Emailchef) and brevo1/brevo2 (Brevo) (sonnet, depends on M6-17)
+  - [x] M6-18 DKIM seed: add mailchef (Emailchef) and brevo1/brevo2 (Brevo) (sonnet, depends on M6-17); merged e158ab4, QA APPROVE
+  - [ ] M6-18 follow-up (QA nit): seeds/dkim_selectors.yaml:4 file-level verified_on stays 2026-11-06 while mailchef/brevo1/brevo2 were verified 2026-11-11; load_dkim_selector_seed (app/services/seed_sync.py:200-217) gives every synced row the file-level date. Bump the file-level date once all entries are re-read, or support per-entry verified_on.
   - [ ] M6-19 esp check: report DNS failures on an ESP's SPF include host (opus, depends on M6-17)
-  - [x] M6-20 deps: upgrade dnspython to 2.9.0, CVE-2026-114605 (opus, no dependencies)
+  - [x] M6-20 deps: upgrade dnspython to 2.9.0, CVE-2026-114605 (opus, no dependencies); dev CI green at 390cf69
   - [ ] M6-21 deps: dnspython 2.9.2 plus compression-pointer regression test (opus, depends on M6-20)
   - [ ] Optional, pending maintainer decision (GM proposed 2026-11-11): add `pip-audit` as a CI job on dev
 

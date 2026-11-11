@@ -18,4 +18,4 @@ Acceptance criteria:
 - `tests/checks/test_dkim_selectors.py`: `_VENDOR_HOSTS` extended (`"help.brevo.com": "brevo"`, plus the Emailchef host) if the test requires it; existing seed tests (format, vendor/host match, sync) pass with the new entries.
 - No network in unit tests; `uv run pytest -q --tb=short` and the lint commands pass.
 New i18n keys: none
-Status: todo
+Status: done (merge e158ab4)
