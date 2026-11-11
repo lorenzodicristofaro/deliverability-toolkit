@@ -41,6 +41,7 @@ underscore (`_spf`).
 | `name` | yes | Text, at most 100 characters, no control characters. |
 | `homepage` | yes | `https` URL, lowercase host, no credentials, no port, ASCII, no spaces, at most 2048 characters. |
 | `spf.includes` | yes | List (may be empty) of host names, at most 20, no duplicates. |
+| `spf.only_if_record` | no | Boolean, default `false` (M6-17). `true`: the includes are expected only when the sending domain already publishes an SPF record; a domain with no SPF record is not reported as missing them. Only with a non-empty `includes`. Set it only when the ESP's docs or a recorded maintainer decision say so (MailUp: maintainer decision 2026-11-11). |
 | `dkim.selectors` | yes | List (may be empty), at most 20 entries. Each: `name` (lowercase DNS label, unique), `type` (`cname` or `txt`), optional `target_pattern`. |
 | `dkim.selectors[].target_pattern` | no | Only on `cname` selectors. Restricted glob, see below. |
 | `return_path` | no | `{type, optional, notes_key}`: `type` is `cname`, `txt` or `mx`; `optional` is a boolean (default false); `notes_key` optional. |

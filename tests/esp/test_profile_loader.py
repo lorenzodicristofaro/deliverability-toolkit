@@ -114,6 +114,19 @@ def test_minimal_profile_parses() -> None:
     assert p.return_path is None and p.tracking_domain is None and p.pitfalls == ()
 
 
+@pytest.mark.parametrize(
+    ("spf", "expected"),
+    [
+        ({"includes": ["a.example.com"]}, False),
+        ({"includes": ["a.example.com"], "only_if_record": False}, False),
+        ({"includes": ["a.example.com"], "only_if_record": True}, True),
+        ({"includes": [], "only_if_record": False}, False),
+    ],
+)
+def test_spf_only_if_record(spf: dict[str, Any], expected: bool) -> None:
+    assert _parse(_doc(spf=spf)).spf_only_if_record is expected
+
+
 def test_result_is_immutable() -> None:
     p = _parse(GOOD)
     with pytest.raises(dataclasses.FrozenInstanceError):
@@ -195,6 +208,26 @@ BAD_CASES: list[tuple[str, Any, str]] = [
     ("include unicode", _doc(spf={"includes": ["bücher.example.com"]}), "label"),
     ("include dup", _doc(spf={"includes": ["a.example.com", "a.example.com"]}), "duplicate"),
     ("include not str", _doc(spf={"includes": [1]}), "non-empty string"),
+    (
+        "only_if_record str",
+        _doc(spf={"includes": ["a.example.com"], "only_if_record": "yes"}),
+        "true or false",
+    ),
+    (
+        "only_if_record int",
+        _doc(spf={"includes": ["a.example.com"], "only_if_record": 1}),
+        "true or false",
+    ),
+    (
+        "only_if_record null",
+        _doc(spf={"includes": ["a.example.com"], "only_if_record": None}),
+        "true or false",
+    ),
+    (
+        "only_if_record no includes",
+        _doc(spf={"includes": [], "only_if_record": True}),
+        "non-empty spf.includes",
+    ),
     (
         "include too many",
         _doc(spf={"includes": [f"a{i}.example.com" for i in range(21)]}),

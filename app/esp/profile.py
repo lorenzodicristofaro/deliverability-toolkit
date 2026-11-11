@@ -9,6 +9,7 @@ directory (cached), no network access. The contributor guide (M6-12) documents t
     homepage: https://esp.example.com
     spf:
       includes: [spf.esp.example.com]          # host names, may be empty
+      only_if_record: false                    # optional (M6-17), see Decisions
     dkim:
       selectors:                               # may be empty
         - {name: s1, type: cname, target_pattern: "s1.dkim.*.esp.example.com"}
@@ -32,6 +33,9 @@ Decisions:
   checks must skip them (`EspProfile.is_verified`). Allowed paths: `spf.includes`,
   `dkim.selectors`, `dkim.selectors.<name>`, `return_path`, `tracking_domain`, `pitfalls`,
   `pitfalls.<code>`; each must name something present in the profile.
+- `spf.only_if_record` (optional boolean, default false, M6-17): when true, the includes are
+  expected only if the sending domain already publishes an SPF record; a domain with no SPF
+  record at all is not reported as missing them. Only allowed with a non-empty `includes`.
 - Files are parsed with a `yaml.SafeLoader` subclass that additionally rejects duplicate keys,
   anchors/aliases and merge keys; each file is capped at MAX_FILE_BYTES.
 - The directory load is all-or-nothing: one bad file raises, no partial result.
@@ -155,6 +159,7 @@ class EspProfile:
     sources: tuple[str, ...]
     status: str
     unverified_fields: frozenset[str]
+    spf_only_if_record: bool = False
 
     def is_verified(self, field: str) -> bool:
         """False if `field` (e.g. `dkim.selectors.s1`) or one of its parents is unverified.
@@ -401,13 +406,18 @@ def _parse(data: object, file_id: str, today: date) -> EspProfile:
         raise _fail("id", f"must match [a-z0-9][a-z0-9-]{{0,39}}: {pid!r}")
     if pid != file_id:
         raise _fail("id", f"must equal the file name {file_id!r}: {pid!r}")
-    spf = _check_keys(d["spf"], "spf", {"includes"})
+    spf = _check_keys(d["spf"], "spf", {"includes"}, frozenset({"only_if_record"}))
     includes = tuple(
         _hostname(h, f"spf.includes[{i}]")
         for i, h in enumerate(_list(spf["includes"], "spf.includes", MAX_INCLUDES))
     )
     if len(set(includes)) != len(includes):
         raise _fail("spf.includes", "duplicate host name")
+    only_if_record = False
+    if "only_if_record" in spf:
+        only_if_record = _bool(spf["only_if_record"], "spf.only_if_record")
+        if only_if_record and not includes:
+            raise _fail("spf.only_if_record", "needs a non-empty spf.includes")
     dkim = _check_keys(d["dkim"], "dkim", {"selectors"})
     selectors = _selectors(dkim["selectors"], "dkim.selectors")
     return_path = _record(d["return_path"], "return_path") if "return_path" in d else None
@@ -449,6 +459,7 @@ def _parse(data: object, file_id: str, today: date) -> EspProfile:
         sources=_sources(d["sources"], "sources"),
         status=status,
         unverified_fields=unverified,
+        spf_only_if_record=only_if_record,
     )
 
 

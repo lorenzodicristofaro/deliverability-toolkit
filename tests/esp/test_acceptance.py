@@ -533,3 +533,45 @@ async def test_unassigned_esp_records_are_detected(pid: str) -> None:
     assert [d["id"] for d in r.data["detection"]["detected"]] == [pid]
     assert "ESP_DETECTION_TRUNCATED" not in _failures(r)
     assert r.status == "warn"
+
+
+# --- MailUp SPF: include only when an SPF record exists (M6-17, maintainer decision) ------------
+
+_MAILUP_SPF_CASES: list[tuple[str, list[str] | ResultState | None, list[str], str, str]] = [
+    # (id, domain TXT (None: absent), non-advisory codes, status (info: pitfalls), spf part state)
+    ("record_with_include", [spf_record(["musvc.com"])], [], "info", "ok"),
+    ("record_without_include", [spf_record([])], ["ESP_SPF_INCLUDE_MISSING"], "fail", "missing"),
+    ("no_record", None, [], "info", "no_record"),
+    ("txt_but_no_spf", ["site-verification=abc"], [], "info", "no_record"),
+    ("dns_failure", ResultState.servfail, ["ESP_DNS_ERROR"], "error", "error"),
+    ("dns_timeout", ResultState.timeout, ["ESP_DNS_ERROR"], "error", "error"),
+]
+
+
+@pytest.mark.parametrize(
+    ("txt", "codes", "status", "state"),
+    [c[1:] for c in _MAILUP_SPF_CASES],
+    ids=[c[0] for c in _MAILUP_SPF_CASES],
+)
+async def test_mailup_spf_include_only_when_a_record_exists(
+    txt: list[str] | ResultState | None, codes: list[str], status: str, state: str
+) -> None:
+    mailup = BY_ID["mailup"]
+    assert mailup.spf_only_if_record and mailup.is_verified("spf.includes")
+    zone = dict(correct_zone(mailup))
+    if txt is None:
+        del zone[(DOMAIN, "TXT")]
+    else:
+        zone[(DOMAIN, "TXT")] = txt
+    r, _ = await _run(zone, [mailup])
+    assert _failures(r) == codes
+    assert r.status == status
+    (section,) = r.data["esps"]
+    assert section["spf"]["state"] == state
+    pitfalls = {f.params["pitfall"] for f in r.findings if f.code == "ESP_PITFALL"}
+    assert "ESP_MAILUP_SPF_ONLY_IF_PUBLISHED" in pitfalls
+
+
+def test_only_mailup_opts_in_to_spf_only_if_record() -> None:
+    """Other shipped profiles keep the default (include expected even without an SPF record)."""
+    assert [p.id for p in PROFILES if p.spf_only_if_record] == ["mailup"]
