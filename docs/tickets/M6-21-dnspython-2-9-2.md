@@ -26,4 +26,4 @@ Acceptance criteria:
 - Note with the quoted changelog lines for 2.9.1 and 2.9.2.
 
 New i18n keys: none
-Status: todo
+Status: done (merge 9b0d610)
