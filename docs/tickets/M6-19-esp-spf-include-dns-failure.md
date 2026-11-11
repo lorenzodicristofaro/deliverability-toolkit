@@ -19,4 +19,4 @@ Acceptance criteria:
 - If ESP_DNS_ERROR needs a new param or text, add i18n keys en + it; otherwise none.
 - No ARCHITECTURE.md edit by the PM; the coder reports if the change affects it.
 New i18n keys: none expected (only if a new detail text is needed, en + it)
-Status: todo
+Status: done (merge 00bed63, QA APPROVE round 2; round 1 CHANGES REQUESTED for one-ESP truncation at/below the include host giving ok, fixed in f702381)
