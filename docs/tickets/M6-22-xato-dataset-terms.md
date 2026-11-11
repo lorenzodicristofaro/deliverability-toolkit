@@ -30,4 +30,4 @@ Acceptance criteria:
 - Test suite passes (SQLite; PostgreSQL per the usual one-suite-at-a-time rule if the GM asks).
 
 New i18n keys: none
-Status: todo
+Status: done (merge ac8a1ce, QA APPROVE)
