@@ -196,6 +196,7 @@ name: Example ESP
 homepage: https://esp.example.com
 spf:
   includes: ["spf.esp.example.com"]
+  only_if_record: false          # optional (M6-17): true = includes expected only if an SPF record exists
 dkim:
   selectors:
     - { name: s1, type: cname, target_pattern: "s1.dkim.*.esp.example.com" }

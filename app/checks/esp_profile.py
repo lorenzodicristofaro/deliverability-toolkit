@@ -16,6 +16,10 @@ unverified with `EspProfile.is_verified`):
   Otherwise, a host not found while some record in the tree is a permerror that `resolve_spf`
   does not follow (several SPF records at one name, or a syntax error) is not evaluated either:
   state `permerror`, `ESP_SPF_PERMERROR` naming that record; never "missing".
+  A profile with `spf.only_if_record` (M6-17) expects its includes only when the domain already
+  publishes an SPF record: when the domain's TXT query completed (NXDOMAIN, NODATA, or TXT
+  records none of which is SPF) the part is `no_record`, each include `not_required`, and no
+  finding is added. A failed root lookup is still `ESP_DNS_ERROR` / `error`, never `no_record`.
 - `dkim.selectors.<name>` at `<name>._domainkey.<domain>`:
   - `cname`: NXDOMAIN is missing; NODATA is `wrong_type` when the name holds a TXT record, else
     missing. A CNAME is followed hop by hop (at most MAX_CNAME_HOPS, loops stop it) until one
@@ -114,6 +118,7 @@ PartState = Literal[
     "permerror",
     "not_configured",
     "skipped_unverified",
+    "no_record",
 ]
 
 
@@ -202,6 +207,12 @@ async def _spf(run: _Run, esp: EspProfile) -> dict[str, Any]:
     if tree is None:
         run.dns_error(esp, "spf.includes", run.domain, "TXT", failed or "error")
         return _part("error", includes=[])
+    if esp.spf_only_if_record and tree.root.no_record and not tree.errors:
+        # The root TXT query completed without an SPF record (a failure never sets no_record).
+        return _part(
+            "no_record",
+            includes=[{"host": h, "state": "not_required"} for h in sorted(esp.spf_includes)],
+        )
     targets = _spf_targets(tree)
     broken = _broken_node(tree)
     unknown: PartState | None = None

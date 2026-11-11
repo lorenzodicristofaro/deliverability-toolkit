@@ -160,7 +160,12 @@ What it checks, for each ESP assigned to the domain (one section per profile in
 
 - **SPF includes** (`spf.includes`): each include host must appear as an `include:` or
   `redirect=` target anywhere in the domain's resolved SPF tree (nested includes count). Only the
-  term must be present; the ESP's own record is the SPF check's business.
+  term must be present; the ESP's own record is the SPF check's business. A profile with
+  `spf.only_if_record: true` (M6-17, opt-in; MailUp) expects its includes only when the domain
+  already has an SPF record: when the domain's TXT query completes without an SPF record
+  (NXDOMAIN, NODATA, or only non-SPF TXT) the part state is `no_record`, each include
+  `not_required`, and no finding is added. A DNS failure on that lookup is still
+  `ESP_DNS_ERROR` and `error`; several SPF records or a syntax error are still `ESP_SPF_PERMERROR`.
 - **DKIM selectors** at `<selector>._domainkey.<domain>`: a `cname` selector must be a CNAME
   whose chain (at most 8 hops) reaches a target that fits the profile's `target_pattern`
   (a `*` label is exactly one DNS label; no pattern: any target fits); a `txt` selector must
