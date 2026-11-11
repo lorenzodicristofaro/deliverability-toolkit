@@ -1,4 +1,4 @@
-# HANDOFF — 2026-11-11 (M6 incl. M6-16..21 done; promoted to qa (M6-22 included); qa → main with the maintainer)
+# HANDOFF — 2026-11-11 (M6 incl. M6-16..22 done; promoted to qa 3f3a4c1; qa → main with the maintainer)
 
 Resume with `/gm`. No coder is running.
 
@@ -8,7 +8,7 @@ Resume with `/gm`. No coder is running.
 - M6 incl. M6-16..21 done on dev; dev CI green on f16e363; promoted dev → qa at 0ac78cb.
 - M6-16..21: vendor profiles from maintainer pages, MailUp `spf.only_if_record`, DKIM seed, esp check DNS failures, dnspython 2.9.2 (CVE-2026-114605). Details in docs/reports/M6.md.
 - Vendor facts only from official docs; anything not confirmable is `unverified` and goes to the maintainer. ESP profiles serve detection/association; required/optional vendor disputes are not escalated (maintainer 2026-11-11).
-- M6-22 (xato.net dataset terms and attribution) is merged on dev with QA APPROVE; not yet in qa.
+- M6-22 (xato.net dataset terms and attribution) merged on dev (CI green on ac8a1ce) and promoted to qa at 3f3a4c1.
 - Maintainer decision 2026-11-10: client viewers read ESP data on assigned domains (assigned + detected ESPs + full `esp` result), no writes; SPEC §3 updated.
 
 ## GM decisions in M6
