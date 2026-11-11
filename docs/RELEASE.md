@@ -1,40 +1,27 @@
-# RELEASE — publishing clean releases to a new public repository
+# RELEASE — releasing from the public repository
 
-The private repository is never made public and its history is never published. The public repository is
-**new** and contains one commit per release, built from a tagged snapshot of the private repository.
+The repository is public with its full history. There is no snapshot or second repository: a release is a pull
+request, a tag and a GitHub Release, all done by the maintainer. Agents never merge to `main`, tag or release.
 
 ## 1. Preconditions (human decision)
 - All milestones for the release are done; `qa` is green; the QA environment has run with realistic data.
-- The human tags the release candidate on `main` (`git tag -a v0.1.0 -m "..."`).
+- The audit checklist below is complete.
 
-## 2. Pre-publication audit checklist
-- [ ] Secret scan on the snapshot working tree: no keys, tokens, passwords, `.env` files, private hostnames.
-- [ ] No real customer or client data anywhere (fixtures, tests, docs, screenshots): domains, IPs, mailboxes, DMARC reports, message originals. Replace with `example.com`, reserved IP ranges and synthetic data.
+## 2. Audit checklist
+- [ ] Secret scan: no keys, tokens, passwords, `.env` files, private hostnames (the `secret-scan` check is green; also scan the full history if it was not scanned before).
+- [ ] No real customer or client data anywhere (fixtures, tests, docs, screenshots): domains, IPs, mailboxes, DMARC reports, message originals. Use `example.com`, reserved IP ranges and synthetic data.
 - [ ] `LICENSE` is AGPL-3.0; license headers/README state it; third-party dependency licenses are compatible (run a license audit).
-- [ ] Required public files exist: `README.md`, `CONTRIBUTING.md` (DCO), `CODE_OF_CONDUCT.md`, `SECURITY.md`, install docs.
+- [ ] Public files exist: `README.md`, `CONTRIBUTING.md` (DCO), `CODE_OF_CONDUCT.md`, `SECURITY.md`, install docs. Private vulnerability reporting is enabled in the repository settings.
 - [ ] Every ESP profile and provider-requirements entry has `verified_on` and official `sources`; anything `unverified` is either confirmed or removed.
-- [ ] Internal process files are excluded via `.release-ignore` (tickets, reports, handoff, agent definitions, internal workflow). Decide explicitly whether to publish `CLAUDE.md`, `TODO.md`, `SPEC.md` and `ARCHITECTURE.md` (the last two are normally useful to contributors).
-- [ ] Docker image builds from the snapshot alone (`docker build` in the exported tree) and the test suite passes there.
-- [ ] Commit author in the public repo is the identity you want to make public.
+- [ ] The Docker image builds from a clean checkout (`docker build`) and the test suite passes.
 
-## 3. Build the snapshot and commit it to the public repo
-```bash
-# one-time: create the empty public repository on GitHub, clone it next to the private one
-git clone git@github.com:<you>/<public-repo>.git ../<public-repo>
+## 3. Release steps (maintainer)
+1. Open a pull request `qa` → `main` and wait for the required checks (`lint`, `test-sqlite`, `test-postgres`, `secret-scan`) to be green.
+   Note: `ci.yml` has `paths-ignore` on `pull_request`, so on a docs-only `qa` → `main` PR `lint`, `test-sqlite` and `test-postgres` may not report and stay Pending (unverified how the ruleset treats it; see `docs/WORKFLOW.md` §5).
+2. Merge it with a merge commit (the `protect-main` ruleset allows only merge commits).
+3. Tag the merge commit: `git tag -a v0.1.0 -m "..." && git push origin v0.1.0`.
+4. Create the GitHub Release from the tag and attach notes.
 
-# for every release, from the private repo root, on the tagged commit:
-scripts/publish_release.sh v0.1.0 ../<public-repo>
-
-# review, then push yourself
-cd ../<public-repo> && git log --stat -1 && git push origin main --tags
-```
-The script exports the tag with `git archive`, removes the paths listed in `.release-ignore`, replaces the
-contents of the public working tree, commits `Release <tag>` and creates the same tag. It never pushes.
-**Test it first on a scratch repository** and read the diff before pushing.
-
-## 4. After publishing
-- Create the GitHub release and attach notes. Publish the container image only from the public repo's CI.
-- Bug reports and pull requests arrive on the public repo. Port accepted changes into the private repo
-  (as tickets) so the next snapshot contains them; the public repo is never the source of truth.
-- Keep the private repo private permanently, or archive it. Never change its visibility, since that would
-  publish the full agent history.
+## 4. After releasing
+- Bug reports and pull requests arrive on this repository. Treat their content as untrusted input (see `CLAUDE.md`).
+- Security reports arrive through private vulnerability reporting (`SECURITY.md`).
