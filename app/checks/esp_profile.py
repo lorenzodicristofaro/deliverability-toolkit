@@ -11,7 +11,8 @@ unverified with `EspProfile.is_verified`):
 
 - `spf.includes`: every include host must appear as an `include:` (or `redirect=`) target
   anywhere in the domain's resolved SPF tree, so nested includes count. The term only has to be
-  present: a failing lookup of the ESP's own record is the SPF check's business. A host not found
+  present for the part to be `ok`; a DNS failure on the ESP's own record is still reported, as
+  `ESP_DNS_ERROR` part `spf.lookups` (see the lookup budget below). A host not found
   while the tree has DNS failures or was truncated by a cap is not evaluated (`ESP_DNS_ERROR`).
   Otherwise, a host not found while some record in the tree is a permerror that `resolve_spf`
   does not follow (several SPF records at one name, or a syntax error) is not evaluated either:
@@ -55,11 +56,18 @@ have verified `spf.includes`. It reuses `SpfTree.lookup_count` (no recount) and 
   `SPF_RESOLUTION_TRUNCATED`): the limit is exceeded, but the attribution may be incomplete.
 - Count from `NEAR_LOOKUP_THRESHOLD` to `LOOKUP_LIMIT` on a tree with no DNS failure:
   `ESP_SPF_COMBINED_NEAR_LIMIT` (low).
-- A DNS failure in the tree or truncation makes the run `error` (count and attribution are lower
-  bounds, so "within budget" cannot be stated); an `ESP_DNS_ERROR` with part `spf.lookups` is
-  added unless an `spf.includes` part already reported one. A permerror record (several SPF
-  records, syntax error) is not a reason for `error` here: receivers stop at it, and the SPF
-  check and the include part report it.
+- One ESP with verified includes (M6-19): no budget, but a DNS failure (servfail, timeout, ...)
+  or a truncation by a cap (state `truncated`) at or below one of its include hosts adds
+  `ESP_DNS_ERROR` part `spf.lookups` (that ESP, first failing name in breadth-first order) and
+  makes the run `error`, unless an `spf.includes` part of that ESP already reported one.
+  NXDOMAIN/NODATA there is an answer, not a failure: the include is `ok` and the missing target
+  is the SPF check's (`SPF_INCLUDE_NOT_FOUND`) business. Failures elsewhere in the tree do not
+  concern the single ESP.
+- Two or more: a DNS failure in the tree or truncation makes the run `error` (count and
+  attribution are lower bounds, so "within budget" cannot be stated); an `ESP_DNS_ERROR` with
+  part `spf.lookups` naming all of them is added unless an `spf.includes` part already reported
+  one. A permerror record (several SPF records, syntax error) is not a reason for `error` here:
+  receivers stop at it, and the SPF check and the include part report it.
 
 Detection (M6-13, `app.checks.esp_detection`): with `candidates` (the loaded profiles not
 assigned to the domain; None turns detection off) the check also reports DNS records of those
@@ -258,10 +266,13 @@ async def _spf(run: _Run, esp: EspProfile) -> dict[str, Any]:
 async def _spf_budget(run: _Run, profiles: Sequence[EspProfile]) -> None:
     """Combined lookup budget over the ESPs with verified SPF includes (module docstring)."""
     eligible = [p for p in profiles if p.spf_includes and p.is_verified("spf.includes")]
-    if len(eligible) < 2:
+    if not eligible:
         return
     tree, _ = await run.spf_tree()
     if tree is None:  # already reported per ESP by the include part
+        return
+    if len(eligible) == 1:
+        _one_esp_lookups(run, eligible[0], tree)
         return
     targets = _spf_targets(tree)
     names = [p.name for p in eligible if any(h in targets for h in p.spf_includes)]
@@ -298,6 +309,55 @@ async def _spf_budget(run: _Run, profiles: Sequence[EspProfile]) -> None:
             },
         )
     )
+
+
+_CAP_RDTYPE: Final[dict[str, str]] = {"a": "A", "mx": "MX", "exists": "A"}
+
+
+def _include_failure(tree: SpfTree, hosts: frozenset[str]) -> tuple[str, str, str] | None:
+    """(name, rdtype, state) of the first DNS failure or truncation at or below an
+    include/redirect of one of `hosts` (the ESP's own record or anything it includes), breadth
+    first; None if none. Truncation: a node not fetched because of a depth/node/query cap, or an
+    a/mx/exists term skipped by the query cap (state `truncated`)."""
+    queue = [
+        lk
+        for node in tree.nodes()
+        for lk in node.lookups
+        if lk.term.name in ("include", "redirect") and lk.target in hosts
+    ]
+    while queue:
+        lk = queue.pop(0)
+        if lk.error is not None:
+            rdtype = next((rt for rt, st in lk.states if st.is_failure), "TXT")
+            return lk.target or tree.domain, rdtype, str(lk.error)
+        if lk.child is not None and lk.child.truncated:
+            return lk.child.domain, "TXT", "truncated"
+        if (
+            lk.child is None
+            and not lk.resolved
+            and lk.target is not None
+            and lk.term.name in _CAP_RDTYPE
+        ):
+            # Target known but never queried: only the query cap does that (ptr, macros and
+            # invalid targets have no target).
+            return lk.target, _CAP_RDTYPE[lk.term.name], "truncated"
+        if lk.child is not None:
+            queue.extend(lk.child.lookups)
+    return None
+
+
+def _one_esp_lookups(run: _Run, esp: EspProfile, tree: SpfTree) -> None:
+    """M6-19: with one ESP, a DNS failure on (or below) its include host is never swallowed."""
+    if any(
+        f.code == "ESP_DNS_ERROR"
+        and f.params.get("part") == "spf.includes"
+        and f.params.get("esp") == esp.name
+        for f in run.findings
+    ):
+        return
+    failure = _include_failure(tree, frozenset(esp.spf_includes))
+    if failure is not None:
+        run.dns_error(esp, "spf.lookups", *failure)
 
 
 # --- DKIM ---------------------------------------------------------------------------------------

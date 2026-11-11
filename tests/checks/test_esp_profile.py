@@ -183,10 +183,11 @@ CASES: list[tuple[str, Zone | dict[Any, Any], set[str], str, tuple[str, str] | N
         ("spf", "ok"),
     ),
     (
+        # M6-19: the term is present (part ok) but the failure is reported (spf.lookups).
         "spf_esp_record_fails_but_term_present",
         {("spf.esp.example.com", "TXT"): ResultState.servfail},
-        set(),
-        "ok",
+        {"ESP_DNS_ERROR"},
+        "error",
         ("spf", "ok"),
     ),
     (

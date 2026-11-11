@@ -159,8 +159,13 @@ What it checks, for each ESP assigned to the domain (one section per profile in
 `data["esps"]`, sorted by id):
 
 - **SPF includes** (`spf.includes`): each include host must appear as an `include:` or
-  `redirect=` target anywhere in the domain's resolved SPF tree (nested includes count). Only the
-  term must be present; the ESP's own record is the SPF check's business. A profile with
+  `redirect=` target anywhere in the domain's resolved SPF tree (nested includes count). The
+  part is `ok` when the term is present, but a DNS failure (servfail, timeout, ...) on the ESP's
+  own record or on anything it includes, or a cap stopping resolution there, is never swallowed
+  (M6-19): it adds `ESP_DNS_ERROR` with part `spf.lookups` and the result is `error`, with one
+  ESP as with several. NXDOMAIN or NODATA
+  on the include host is an answer, not a failure: the part stays `ok` and the missing target is
+  reported by the SPF check (`SPF_INCLUDE_NOT_FOUND`). A profile with
   `spf.only_if_record: true` (M6-17, opt-in; MailUp) expects its includes only when the domain
   already has an SPF record: when the domain's TXT query completes without an SPF record
   (NXDOMAIN, NODATA, or only non-SPF TXT) the part state is `no_record`, each include
@@ -175,7 +180,11 @@ What it checks, for each ESP assigned to the domain (one section per profile in
   No host entered: `ESP_HOST_NOT_CONFIGURED`.
 - **Combined SPF lookup budget**: when two or more assigned ESPs with verified includes are
   found in the SPF tree, the tree's lookup count is attributed to them
-  (`ESP_SPF_COMBINED_OVER_LIMIT` above 10, `ESP_SPF_COMBINED_NEAR_LIMIT` from 9).
+  (`ESP_SPF_COMBINED_OVER_LIMIT` above 10, `ESP_SPF_COMBINED_NEAR_LIMIT` from 9). With two or
+  more such ESPs, any DNS failure or truncation in the tree adds one `ESP_DNS_ERROR` with part
+  `spf.lookups` naming all of them (`esp` "A, B"). With one, only a failure or a truncation
+  (a record or query a cap stopped, state `truncated`) at or below its own include hosts does
+  (`esp` that ESP); a failure elsewhere in the tree is the SPF check's.
 - **Detection**: the loaded profiles that are not assigned are probed for their verified SPF
   include hosts (on the same SPF tree) and their verified `cname` selectors with a
   `target_pattern` (one CNAME query each, first target only, at most 32 names, 8 in flight).
@@ -186,7 +195,7 @@ What it checks, for each ESP assigned to the domain (one section per profile in
 **`error` semantics.** Only NXDOMAIN and NODATA count as absence. Any other DNS state on a name
 the check needs (servfail, refused, timeout, truncated, malformed, network_error, blocked,
 error), a name that cannot be built, an SPF tree with a DNS failure or truncated by a cap (when
-an include was not found, or for the lookup budget), or an SPF record `resolve_spf` cannot follow
+an include was not found, at or below an ESP's include host, or for the lookup budget), or an SPF record `resolve_spf` cannot follow
 (several records, syntax error: `ESP_SPF_PERMERROR`) makes that part not evaluated and the
 result `error`, never `ok` and never "missing". In detection, a failed DKIM probe makes the
 result `error` and stops new probes; an SPF tree with a failure, truncation or permerror makes
