@@ -130,6 +130,8 @@ _VENDOR_HOSTS = {
     "mailchimp.com": "mailchimp_transactional",
     "help.klaviyo.com": "klaviyo",
     "help.activecampaign.com": "activecampaign",
+    "emailchef.com": "emailchef",
+    "help.brevo.com": "brevo",
 }
 # MailUp's official help centre is hosted on Atlassian Cloud. An atlassian.net subdomain is
 # tenant-specific, so it is allowed only as this exact host for this exact provider.
