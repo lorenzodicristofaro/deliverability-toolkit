@@ -1,0 +1,14 @@
+id: mailgun
+name: Mailgun
+homepage: https://www.mailgun.com
+spf:
+  includes: [mailgun.org]
+dkim:
+  selectors: []
+tracking_domain: {type: cname, optional: false, notes_key: esp.mailgun.tracking}
+pitfalls:
+  - {code: ESP_MAILGUN_DKIM_SELECTOR_IN_CONSOLE, notes_key: esp.mailgun.dkim_selector_in_console, severity: info}
+verified_on: 2026-11-11
+sources:
+  - https://documentation.mailgun.com/docs/mailgun/user-manual/domains/domains-verify
+status: verified
