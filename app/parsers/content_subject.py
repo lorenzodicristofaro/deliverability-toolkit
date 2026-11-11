@@ -1,0 +1,283 @@
+"""Offline Subject line facts (M5-11). Facts only: findings and i18n live in M5-14.
+
+The Subject is hostile input. ``analyze_subject`` never raises on text and does no I/O.
+
+Input: normally the *decoded* Subject (M4-01). With ``encoded=True`` the value is treated as
+a raw header value: folding (``\r?\n`` immediately followed by space or tab) is removed and
+RFC 2047 encoded words are decoded with the M4 decoder (``app.parsers.message.decode_rfc2047``,
+not a copy). A bare CR or LF that is not folding stays in the text and counts as a control
+character (e.g. ``"Re: x\r\nBcc: y"``). ``decode_warnings`` holds the decoder's warning codes
+(failed encoded words stay raw); it is ``None`` when ``encoded=False``.
+
+Evaluation contract: a fact that could not be evaluated is ``None``, never ``False``.
+``subject=None`` (header absent) leaves every fact ``None`` except ``present=False``.
+
+Length methods:
+- ``length_codepoints``: ``len(str)`` of the (unfolded, decoded) text.
+- ``length_bytes``: UTF-8 length; lone surrogates count as 3 bytes (``surrogatepass``).
+- ``length_graphemes``: grapheme-ish approximation, NOT full UAX #29 (stdlib has no segmenter).
+  Not counted as own units: combining marks (Mn/Me/Mc), ZWJ/ZWNJ, variation selectors,
+  emoji skin-tone modifiers (U+1F3FB-1F3FF), tag characters, and the second regional
+  indicator of a flag pair. Hangul jamo sequences and Indic conjuncts are not merged.
+  Emoji ZWJ sequences count as one unit.
+
+Heuristics: every threshold in this module (``SUBJECT_*`` constants) is a heuristic chosen
+by this project. They are `unverified`: no official Gmail/Outlook/other vendor source has
+been checked for them and none must be attributed to a vendor. Findings must be advisory.
+
+Caveats: the caps ratio only considers cased letters, so scripts without case (CJK, Arabic,
+Hebrew, Thai, ...) are excluded; ``caseless_letters`` reports how many were skipped. Emoji
+detection is range based (approximation). ``empty`` is True when the text is empty or holds
+only whitespace and format characters (category Cf: zero-width, bidi controls, ...), i.e.
+nothing visible; the bidi/control facts still report those characters.
+
+Script detection (stdlib has no Unicode Script property, so this is an approximation):
+only letters of category Lu/Ll/Lt/Lo count; modifier letters (Lm, e.g. U+30FC, U+3005),
+marks, digits and other Common/Inherited characters are left out, as are the non-script
+letters in ``_NOT_SCRIPT`` (MICRO SIGN, ordinal indicators) and the Letterlike Symbols block.
+The script is the first word of the Unicode name (after a FULLWIDTH/HALFWIDTH prefix), then
+mapped through ``_SCRIPT_GROUPS``: Han, Hiragana, Katakana and Bopomofo are one group
+``CJK`` because Japanese (and Chinese) text mixes them normally.
+Size facts (code points, bytes) describe the full text; all other facts describe the first
+``max_chars`` characters (``capped=True`` when the text was longer).
+"""
+
+from __future__ import annotations
+
+import re
+import unicodedata
+from dataclasses import dataclass
+
+from app.parsers.message import _Warnings, decode_rfc2047
+
+# --- Heuristic thresholds (unverified, project-chosen, NOT vendor guidance) -------------
+SUBJECT_LONG_GRAPHEMES = 100
+SUBJECT_CAPS_RATIO = 0.7
+SUBJECT_CAPS_MIN_CASED_LETTERS = 8
+SUBJECT_PUNCT_RUN_MIN = 2
+SUBJECT_MAX_ANALYSED_CHARS = 10_000  # input cap; analysis runs on the prefix
+
+
+@dataclass(frozen=True)
+class SubjectLimits:
+    max_chars: int = SUBJECT_MAX_ANALYSED_CHARS
+    long_graphemes: int = SUBJECT_LONG_GRAPHEMES
+    caps_ratio: float = SUBJECT_CAPS_RATIO
+    caps_min_cased_letters: int = SUBJECT_CAPS_MIN_CASED_LETTERS
+    punct_run_min: int = SUBJECT_PUNCT_RUN_MIN
+
+
+@dataclass(frozen=True)
+class SubjectFacts:
+    present: bool
+    length_codepoints: int | None = None
+    length_bytes: int | None = None
+    length_graphemes: int | None = None  # of the analysed prefix
+    is_long: bool | None = None  # graphemes > limits.long_graphemes (heuristic)
+    empty: bool | None = None  # nothing visible: only whitespace / Cf format chars
+    capped: bool | None = None  # analysis ran on the first max_chars characters only
+    cased_letters: int | None = None
+    caseless_letters: int | None = None
+    caps_ratio: float | None = None  # None when no cased letters
+    all_caps: bool | None = None  # None when too few cased letters to judge
+    max_punct_run: int | None = None  # longest run of ! / ? (ASCII and fullwidth)
+    has_punct_run: bool | None = None
+    emoji_count: int | None = None
+    reply_prefix: str | None = None  # "re" or "fwd" (normalised) when present
+    reply_prefix_without_in_reply_to: bool | None = None  # None if header state unknown
+    control_chars: int | None = None  # Cc other than tab (NUL included)
+    has_nul: bool | None = None
+    bidi_controls: int | None = None
+    has_bidi_override: bool | None = None  # U+202A-202E, U+2066-2069
+    scripts: tuple[str, ...] | None = None
+    mixed_scripts: bool | None = None
+    mixed_script_word: bool | None = None  # one word mixing scripts (e.g. Latin + Cyrillic)
+    decode_warnings: tuple[str, ...] | None = None  # RFC 2047 decoder codes; None unless encoded
+
+
+_FOLD = re.compile(r"\r?\n(?=[ \t])")
+_REPLY = re.compile(r"^\s*(re|fwd?)\s*(?:\[\d{1,4}\])?\s*:", re.IGNORECASE)
+_PUNCT = frozenset("!?！？")
+_BIDI_ALL = frozenset([0x061C, 0x200E, 0x200F, *range(0x202A, 0x202F), *range(0x2066, 0x206A)])
+_BIDI_OVERRIDE = frozenset([*range(0x202A, 0x202F), *range(0x2066, 0x206A)])
+_ZERO_WIDTH_JOIN = frozenset([0x200C, 0x200D])
+_SCRIPT_GROUPS = {
+    "HIRAGANA": "CJK",
+    "KATAKANA": "CJK",
+    "KATAKANA-HIRAGANA": "CJK",
+    "CJK": "CJK",
+    "IDEOGRAPHIC": "CJK",
+    "BOPOMOFO": "CJK",
+}
+_SCRIPT_CATEGORIES = frozenset(["Lu", "Ll", "Lt", "Lo"])
+_NOT_SCRIPT = frozenset([0x00AA, 0x00B5, 0x00BA])  # ordinal indicators, MICRO SIGN
+_WIDTH_PREFIXES = frozenset(["FULLWIDTH", "HALFWIDTH"])
+_MISC_EMOJI = frozenset(
+    [0x231A, 0x231B, 0x23E9, 0x23F0, 0x2B05, 0x2B06, 0x2B07, 0x2934, 0x2935, 0x2B1B, 0x2B1C]
+)
+
+
+def _is_emoji_base(cp: int) -> bool:
+    return (
+        0x1F300 <= cp <= 0x1FAFF
+        or 0x2600 <= cp <= 0x27BF
+        or 0x1F000 <= cp <= 0x1F2FF
+        or 0x2B50 <= cp <= 0x2B55
+        or cp in _MISC_EMOJI
+    )
+
+
+def _is_extender(ch: str) -> bool:
+    cp = ord(ch)
+    return (
+        cp in _ZERO_WIDTH_JOIN
+        or 0xFE00 <= cp <= 0xFE0F
+        or 0x1F3FB <= cp <= 0x1F3FF
+        or 0xE0020 <= cp <= 0xE007F
+        or unicodedata.category(ch) in ("Mn", "Me", "Mc")
+    )
+
+
+def _segment(text: str) -> tuple[int, int]:
+    """Return (grapheme-ish units, emoji units) for ``text``."""
+    units = 0
+    emoji = 0
+    i = 0
+    n = len(text)
+    while i < n:
+        cp = ord(text[i])
+        units += 1
+        is_emoji = _is_emoji_base(cp)
+        i += 1
+        if 0x1F1E6 <= cp <= 0x1F1FF:  # flag: pair of regional indicators
+            if i < n and 0x1F1E6 <= ord(text[i]) <= 0x1F1FF:
+                i += 1
+            is_emoji = True
+        elif (0x30 <= cp <= 0x39 or cp in (0x23, 0x2A)) and text[i : i + 2] == "️⃣":
+            is_emoji = True  # keycap sequence
+        while i < n and _is_extender(text[i]):
+            if ord(text[i]) == 0x200D and i + 1 < n and _is_emoji_base(ord(text[i + 1])):
+                i += 2  # ZWJ joins the next emoji into the same unit
+                is_emoji = True
+                continue
+            i += 1
+        if is_emoji:
+            emoji += 1
+    return units, emoji
+
+
+def _script(ch: str, cat: str) -> str | None:
+    """Script group of a letter, or None when it is not a real script letter."""
+    cp = ord(ch)
+    if cat not in _SCRIPT_CATEGORIES or cp in _NOT_SCRIPT or 0x2100 <= cp <= 0x214F:
+        return None
+    words = unicodedata.name(ch, "UNKNOWN").split(" ", 2)
+    first = words[1] if words[0] in _WIDTH_PREFIXES and len(words) > 1 else words[0]
+    return _SCRIPT_GROUPS.get(first, first)
+
+
+def analyze_subject(
+    subject: str | None,
+    *,
+    limits: SubjectLimits | None = None,
+    has_in_reply_to: bool | None = None,
+    encoded: bool = False,
+) -> SubjectFacts:
+    """Compute facts about ``subject``. ``has_in_reply_to`` is supplied by the caller."""
+    lim = limits or SubjectLimits()
+    if subject is None:
+        return SubjectFacts(present=False)
+
+    text = subject
+    decode_warnings: tuple[str, ...] | None = None
+    if encoded:
+        text = _FOLD.sub("", text)  # unfold: line break removed, the whitespace stays
+        warnings = _Warnings()
+        text = decode_rfc2047(text, 0, warnings)
+        decode_warnings = tuple(w.code for w in warnings.items)
+    length_cp = len(text)
+    length_bytes = len(text.encode("utf-8", errors="surrogatepass"))
+    capped = length_cp > lim.max_chars
+    body = text[: lim.max_chars]
+
+    graphemes, emoji = _segment(body)
+    upper = lower = caseless = 0
+    controls = nul = bidi = bidi_override = 0
+    run = max_run = 0
+    scripts: set[str] = set()
+    mixed_word = False
+    word_scripts: set[str] = set()
+    for ch in body + " ":
+        cp = ord(ch)
+        cat = unicodedata.category(ch)
+        if cat == "Cc" and ch != "\t":
+            controls += 1
+            nul += cp == 0
+        if cp in _BIDI_ALL:
+            bidi += 1
+            bidi_override += cp in _BIDI_OVERRIDE
+        if ch in _PUNCT:
+            run += 1
+            max_run = max(max_run, run)
+        else:
+            run = 0
+        if ch.isalpha():
+            if cat == "Lt" or ch.isupper():  # titlecase (e.g. U+01C5) counts as upper
+                upper += 1
+            elif ch.islower():
+                lower += 1
+            else:
+                caseless += 1
+            sc = _script(ch, cat)
+            if sc is not None:
+                scripts.add(sc)
+                word_scripts.add(sc)
+        elif cat not in ("Mn", "Mc", "Me", "Nd") and cp not in _ZERO_WIDTH_JOIN:
+            if len(word_scripts) > 1:
+                mixed_word = True
+            word_scripts = set()
+
+    cased = upper + lower
+    ratio = upper / cased if cased else None
+    all_caps: bool | None = None
+    if ratio is not None and cased >= lim.caps_min_cased_letters:
+        all_caps = ratio >= lim.caps_ratio
+
+    prefix = None
+    m = _REPLY.match(body)
+    if m:
+        prefix = "re" if m.group(1).lower() == "re" else "fwd"
+    without_irt: bool | None
+    if prefix is None:
+        without_irt = False
+    elif has_in_reply_to is None:
+        without_irt = None
+    else:
+        without_irt = not has_in_reply_to
+
+    return SubjectFacts(
+        present=True,
+        length_codepoints=length_cp,
+        length_bytes=length_bytes,
+        length_graphemes=graphemes,
+        is_long=graphemes > lim.long_graphemes,
+        empty=not capped and all(c.isspace() or unicodedata.category(c) == "Cf" for c in body),
+        capped=capped,
+        cased_letters=cased,
+        caseless_letters=caseless,
+        caps_ratio=ratio,
+        all_caps=all_caps,
+        max_punct_run=max_run,
+        has_punct_run=max_run >= lim.punct_run_min,
+        emoji_count=emoji,
+        reply_prefix=prefix,
+        reply_prefix_without_in_reply_to=without_irt,
+        control_chars=controls,
+        has_nul=nul > 0,
+        bidi_controls=bidi,
+        has_bidi_override=bidi_override > 0,
+        scripts=tuple(sorted(scripts)),
+        mixed_scripts=len(scripts) > 1,
+        mixed_script_word=mixed_word,
+        decode_warnings=decode_warnings,
+    )

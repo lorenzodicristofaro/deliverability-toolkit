@@ -1,0 +1,18 @@
+# M3-11: failing lookups at the external authorization name. Hand-written, reserved names only.
+zones:
+  default:
+    - {name: _dmarc.servfail.example.com, type: TXT, ttl: 300, rdata: ["v=DMARC1; p=reject; rua=mailto:r@reports.example.net"]}
+    - {name: servfail.example.com._report._dmarc.reports.example.net, type: TXT, state: servfail, rcode: 2}
+    - {name: _dmarc.timeout.example.com, type: TXT, ttl: 300, rdata: ["v=DMARC1; p=reject; rua=mailto:r@reports.example.net"]}
+    - {name: timeout.example.com._report._dmarc.reports.example.net, type: TXT, state: timeout}
+    - {name: _dmarc.refused.example.com, type: TXT, ttl: 300, rdata: ["v=DMARC1; p=reject; rua=mailto:r@reports.example.net"]}
+    - {name: refused.example.com._report._dmarc.reports.example.net, type: TXT, state: refused, rcode: 5}
+    - {name: _dmarc.truncated.example.com, type: TXT, ttl: 300, rdata: ["v=DMARC1; p=reject; rua=mailto:r@reports.example.net"]}
+    - {name: truncated.example.com._report._dmarc.reports.example.net, type: TXT, state: truncated}
+    - {name: _dmarc.malformed.example.com, type: TXT, ttl: 300, rdata: ["v=DMARC1; p=reject; rua=mailto:r@reports.example.net"]}
+    - {name: malformed.example.com._report._dmarc.reports.example.net, type: TXT, state: malformed}
+    - {name: _dmarc.down.example.com, type: TXT, ttl: 300, rdata: ["v=DMARC1; p=reject; rua=mailto:r@reports.example.net"]}
+    - {name: down.example.com._report._dmarc.reports.example.net, type: TXT, state: network_error}
+    # One destination fails, another is unauthorized: still error (nothing fail-level found).
+    - {name: _dmarc.mixed.example.com, type: TXT, ttl: 300, rdata: ["v=DMARC1; p=reject; rua=mailto:r@reports.example.net,mailto:r@noauth.example.net"]}
+    - {name: mixed.example.com._report._dmarc.reports.example.net, type: TXT, state: servfail, rcode: 2}

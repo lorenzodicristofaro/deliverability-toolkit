@@ -1,0 +1,102 @@
+{% extends "base.html" %}
+{% block title %}{{ t("web.rules.title") }} · {{ app_name }}{% endblock %}
+{% macro rule_table(rows, section) %}
+{% set severity_text = {"critical": t("checks.severity.critical"), "high": t("checks.severity.high"), "medium": t("checks.severity.medium"), "low": t("checks.severity.low"), "info": t("checks.severity.info")} %}
+{% set kind_text = {"regex": t("web.rules.kind.regex"), "keyword": t("web.rules.kind.keyword")} %}
+<table data-testid="rules-{{ section }}">
+  <thead><tr>
+    <th scope="col">{{ t("web.rules.col.name") }}</th>
+    <th scope="col">{{ t("web.rules.col.kind") }}</th>
+    <th scope="col">{{ t("web.rules.col.pattern") }}</th>
+    <th scope="col">{{ t("web.rules.col.seed_key") }}</th>
+    <th scope="col">{{ t("web.rules.col.category") }}</th>
+    <th scope="col">{{ t("web.rules.col.severity") }}</th>
+    <th scope="col">{{ t("web.rules.col.weight") }}</th>
+    <th scope="col">{{ t("web.rules.col.language") }}</th>
+    <th scope="col">{{ t("web.rules.col.enabled") }}</th>
+    <th scope="col">{{ t("web.rules.col.verification") }}</th>
+    <th scope="col">{{ t("web.rules.col.actions") }}</th>
+  </tr></thead>
+  <tbody>
+  {% for row in rows %}
+    {% set r = row.record %}
+    <tr data-rule="{{ r.id }}">
+      <td class="dns-wrap">{{ row.title|visible }}{% if r.title is none and r.seed_key %}<br><small>{{ t("web.rules.seeded") }}</small>{% endif %}{% if r.locally_modified %}<br><small>{{ t("web.rules.pinned") }}</small>{% endif %}{% if row.override_enabled is true %}<br><small data-testid="rule-overridden">{{ t("web.rules.overridden") }}</small>{% elif row.override_enabled is false %}<br><small data-testid="rule-overridden-disabled">{{ t("web.rules.overridden_disabled") }}</small>{% endif %}</td>
+      <td>{{ kind_text[r.kind] }}</td>
+      <td class="dns-wrap"><code>{{ r.pattern|visible }}</code></td>
+      <td class="dns-wrap">{% if r.seed_key %}<code>{{ r.seed_key|visible }}</code>{% endif %}</td>
+      <td class="dns-wrap">{{ r.category|visible }}</td>
+      <td>{{ severity_text[r.severity] }}</td>
+      <td>{{ r.weight }}</td>
+      <td class="dns-wrap">{{ (r.language or "")|visible }}</td>
+      <td>{{ t("web.rules.enabled.yes") if r.enabled else t("web.rules.enabled.no") }}</td>
+      <td class="dns-wrap">
+        {% if r.status == "unverified" %}<strong data-testid="badge-unverified">{{ t("web.rules.badge.unverified") }}</strong>
+        {% elif r.status == "verified" %}<span data-testid="badge-verified">{{ t("web.rules.badge.verified") }}</span>
+        {% endif %}
+        {% if r.verified_on %}<br>{{ t("web.rules.verified_on") }}: {{ r.verified_on.isoformat() }}{% endif %}
+        {% if r.sources %}<br>{{ t("web.rules.sources") }}: {% for s in r.sources %}<code>{{ s|visible }}</code>{% if not loop.last %}, {% endif %}{% endfor %}{% endif %}
+      </td>
+      <td>
+        {% if row.can_edit %}
+        <a href="/rules/{{ r.id }}/edit?scope={{ scope }}">{{ t("web.rules.action.edit") }}</a>
+        <form class="inline" method="post" action="/rules/{{ r.id }}/toggle?scope={{ scope }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <input type="hidden" name="enabled" value="{{ "0" if r.enabled else "1" }}">
+          <button type="submit">{{ t("web.rules.action.disable") if r.enabled else t("web.rules.action.enable") }}</button>
+        </form>
+        {% endif %}
+        {% if row.can_delete %}
+        <form class="inline" method="post" action="/rules/{{ r.id }}/delete?scope={{ scope }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button type="submit">{{ t("web.rules.action.delete") }}</button>
+        </form>
+        {% endif %}
+      </td>
+    </tr>
+  {% else %}
+    <tr><td colspan="11" class="empty-state">{{ t("web.rules.empty") }}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endmacro %}
+{% block content %}
+<h1>{{ t("web.rules.title") }}</h1>
+<p>{{ t("web.rules.intro") }}</p>
+<p>
+  {% if show_tenant_tab %}<a href="/rules?scope=tenant" {% if scope == "tenant" %}aria-current="page"{% endif %} data-testid="tab-tenant">{{ t("web.rules.tab.tenant") }}</a>{% endif %}
+  {% if show_global_tab %}{% if show_tenant_tab %} · {% endif %}<a href="/rules?scope=global" {% if scope == "global" %}aria-current="page"{% endif %} data-testid="tab-global">{{ t("web.rules.tab.global") }}</a>{% endif %}
+  {% if can_manage %} · <a href="/rules/new?scope={{ scope }}" data-testid="rules-new">{{ t("web.rules.action.new") }}</a> · <a href="/rules/test?scope={{ scope }}" data-testid="rules-test-link">{{ t("web.rules.test.title") }}</a>{% endif %}
+</p>
+{% if flash %}<p class="dns-state dns-state-ok" role="status" data-testid="rules-flash">{{ t(flash) }}</p>{% endif %}
+{% if error %}<p class="form-error" role="alert" data-testid="rules-error">{{ t(error) }}</p>{% endif %}
+
+{#- A section with rows only on another page is left out rather than shown as empty. -#}
+{% if scope == "tenant" %}
+{% if tenant_rows or not has_tenant_rows %}
+<section>
+  <h2>{{ t("web.rules.section.tenant") }}</h2>
+  {{ rule_table(tenant_rows, "tenant") }}
+</section>
+{% endif %}
+{% if global_rows or not has_global_rows %}
+<section>
+  <h2>{{ t("web.rules.section.global") }}</h2>
+  <p>{{ t("web.rules.global_readonly") }}</p>
+  {{ rule_table(global_rows, "global") }}
+</section>
+{% endif %}
+{% else %}
+<section>
+  <h2>{{ t("web.rules.section.global") }}</h2>
+  {{ rule_table(global_rows, "global") }}
+</section>
+{% endif %}
+{% if last_page > 1 %}
+<p data-testid="rules-pages">
+  {% if page > 1 %}<a href="/rules?scope={{ scope }}&amp;page={{ page - 1 }}" data-testid="rules-page-prev">{{ t("web.rules.page.prev") }}</a> · {% endif %}
+  <span data-testid="rules-page-status">{{ t("web.rules.page.status", page=page, pages=last_page) }}</span>
+  {% if page < last_page %} · <a href="/rules?scope={{ scope }}&amp;page={{ page + 1 }}" data-testid="rules-page-next">{{ t("web.rules.page.next") }}</a>{% endif %}
+</p>
+{% endif %}
+{% endblock %}

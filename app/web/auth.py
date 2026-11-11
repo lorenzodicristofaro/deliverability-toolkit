@@ -33,7 +33,7 @@ from app.core.i18n import t
 from app.core.security import DEFAULT_HASHER, SESSION_COOKIE_NAME, session_cookie_settings
 from app.models import UserSession
 from app.repositories import UserMembershipsRepository
-from app.repositories.base import coerce_id
+from app.repositories.base import parse_id
 from app.services.auth import (
     IssuedSession,
     SessionPolicy,
@@ -52,7 +52,6 @@ logger = logging.getLogger("app.auth")
 TENANT_SWITCH_DENIED_KEY = "auth.tenant_switch.denied"
 # Tests replace this with a fast hasher; production uses the argon2 defaults.
 PASSWORD_HASHER: PasswordHasher = DEFAULT_HASHER
-_MAX_ID_DIGITS = 19
 _THROTTLE_STATE_ATTR = "login_throttle"
 
 router = APIRouter()
@@ -201,12 +200,6 @@ async def logout(auth: CurrentSession, db: DbDep, settings: SettingsDep) -> Resp
     return response
 
 
-def _parse_tenant_id(raw: str) -> int | None:
-    if not raw.isascii() or not raw.isdigit() or len(raw) > _MAX_ID_DIGITS:
-        return None
-    return coerce_id(int(raw))
-
-
 def _switch(
     db: Session, settings: Settings, auth: CurrentSession, tenant_id: int | None
 ) -> IssuedSession | None:
@@ -242,7 +235,7 @@ async def switch_tenant(
     form = await read_form(request)
     if form is None:
         return Response(status_code=413)
-    tenant_id = _parse_tenant_id(form_value(form, "tenant_id"))
+    tenant_id = parse_id(form_value(form, "tenant_id"))
     next_path = safe_next(form_value(form, "next"))
     issued = await run_in_threadpool(_switch, db, settings, auth, tenant_id)
     if issued is None:

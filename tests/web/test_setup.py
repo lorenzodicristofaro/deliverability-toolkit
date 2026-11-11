@@ -1,6 +1,6 @@
 """M1-17 first-run setup wizard: token lifecycle, redirect gate, validation, single admin.
 
-DB tests run on SQLite and, when TEST_DATABASE_URL is set, on PostgreSQL (shared `db_url`
+DB tests run on SQLite and, when TEST_DATABASE_URL is set, on PostgreSQL (shared `migrated_db_url`
 fixture); the schema is built by Alembic. A fast argon2 hasher keeps the suite quick. No network.
 """
 
@@ -17,8 +17,6 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from alembic import command
-from alembic.config import Config
 from argon2 import PasswordHasher
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -111,17 +109,16 @@ def _strict_mode() -> Iterator[None]:
 
 @pytest.fixture
 def env(
-    db_url: str, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    migrated_db_url: str, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> Iterator[Env]:
-    monkeypatch.setenv("DATABASE_URL", db_url)
+    monkeypatch.setenv("DATABASE_URL", migrated_db_url)
     monkeypatch.setenv("SECRET_KEY", KEY)
     monkeypatch.setenv("ENCRYPTION_KEY", KEY)
     monkeypatch.setattr(web_auth, "PASSWORD_HASHER", FAST)
-    command.upgrade(Config(str(ROOT / "alembic.ini")), "head")
     caplog.set_level(logging.DEBUG)
-    engine = create_db_engine(db_url)
+    engine = create_db_engine(migrated_db_url)
     try:
-        yield Env(db_url, create_session_factory(engine), caplog)
+        yield Env(migrated_db_url, create_session_factory(engine), caplog)
     finally:
         engine.dispose()
 

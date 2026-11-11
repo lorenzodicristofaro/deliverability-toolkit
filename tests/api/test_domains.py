@@ -1,6 +1,6 @@
 """M1-18 `/api/v1/domains` through the real app and middleware (CSRF, sessions, i18n).
 
-DB tests run on SQLite and, when TEST_DATABASE_URL is set, on PostgreSQL (shared `db_url`
+DB tests run on SQLite and, when TEST_DATABASE_URL is set, on PostgreSQL (shared `migrated_db_url`
 fixture); the schema is built by Alembic. Sessions are created directly with
 `app.services.auth.create_session` (no password hashing). No network.
 
@@ -17,8 +17,6 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from alembic import command
-from alembic.config import Config
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -114,15 +112,14 @@ def _seed(db: Session) -> tuple[int, int, dict[str, int], dict[str, int]]:
 
 
 @pytest.fixture
-def world(db_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[World]:
-    monkeypatch.setenv("DATABASE_URL", db_url)
+def world(migrated_db_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[World]:
+    monkeypatch.setenv("DATABASE_URL", migrated_db_url)
     monkeypatch.setenv("SECRET_KEY", KEY)
     monkeypatch.setenv("ENCRYPTION_KEY", KEY)
-    command.upgrade(Config(str(ROOT / "alembic.ini")), "head")
-    engine = create_db_engine(db_url)
+    engine = create_db_engine(migrated_db_url)
     db = create_session_factory(engine)()
     tenant_a, tenant_b, users, domains = _seed(db)
-    settings = Settings(database_url=db_url, secret_key=KEY, encryption_key=KEY)  # type: ignore[call-arg]
+    settings = Settings(database_url=migrated_db_url, secret_key=KEY, encryption_key=KEY)  # type: ignore[call-arg]
     application = create_app(settings)
     try:
         with TestClient(application, raise_server_exceptions=True) as client:
@@ -408,14 +405,14 @@ def test_rename_to_name_of_other_tenant_is_allowed(world: World) -> None:
 INVALID_NAMES = [
     "",
     " ",
-    " example.com",
-    "example.com ",
     "exa mple.com",
-    "example.com\n",
     "example.com\u0000",
     "\u0000",
     "exa\u0000mple.com",
     "example.com\u0001",
+    "example.com\u001f",
+    "\u0085example.com",
+    "example.com\u000b",
     "example\u001f.com",
     "example.com\u007f",
     "example\u0085.com",
@@ -435,6 +432,17 @@ INVALID_NAMES = [
     "user@example.com",
     "♥.com",
 ]
+
+
+@pytest.mark.parametrize(
+    "name", [" example.com", "example.com ", "example.com\n", " \texample.com\r\n"]
+)
+@pytest.mark.parametrize("method", ["POST", "PATCH"])
+def test_surrounding_whitespace_is_trimmed(world: World, name: str, method: str) -> None:
+    path = BASE if method == "POST" else f"{BASE}/{world.domains['assigned']}"
+    response = call(world, "owner", method, path, json={"name": name})
+    assert response.status_code in (200, 201), response.text
+    assert response.json()["name"] == "example.com"
 
 
 @pytest.mark.parametrize("name", INVALID_NAMES)

@@ -91,6 +91,78 @@ def request_language(scope: Scope) -> str:
     )
 
 
+def dns_tools_nav(request: Request) -> bool:
+    """Whether the nav shows the DNS tools link: the request's session principal holds
+    `dns.tools` in its active tenant. False for anonymous, without a tenant, and on any error
+    (fail closed). Uses only the session already resolved by `optional_session` for this request;
+    it never touches the DB (pages that resolve no session, e.g. /login or an unknown-path 404,
+    show no link and must not extend idle sessions)."""
+    from app.core.permissions import Action, TenantResource, can  # lazy: deps imports this module
+
+    try:
+        auth = getattr(request.state, "auth_session", None)
+        if auth is None or auth.active_tenant_id is None:
+            return False
+        return bool(can(auth.principal, Action.DNS_TOOLS, TenantResource(auth.active_tenant_id)))
+    except Exception:
+        return False
+
+
+def message_tools_nav(request: Request) -> bool:
+    """Like `dns_tools_nav` for `message.analyze` (fail closed, no DB access)."""
+    from app.core.permissions import Action, TenantResource, can  # lazy: deps imports this module
+
+    try:
+        auth = getattr(request.state, "auth_session", None)
+        if auth is None or auth.active_tenant_id is None:
+            return False
+        return bool(
+            can(auth.principal, Action.MESSAGE_ANALYZE, TenantResource(auth.active_tenant_id))
+        )
+    except Exception:
+        return False
+
+
+def content_tools_nav(request: Request) -> bool:
+    """Like `dns_tools_nav` for `content.analyze` (fail closed, no DB access)."""
+    from app.core.permissions import Action, TenantResource, can  # lazy: deps imports this module
+
+    try:
+        auth = getattr(request.state, "auth_session", None)
+        if auth is None or auth.active_tenant_id is None:
+            return False
+        return bool(
+            can(auth.principal, Action.CONTENT_ANALYZE, TenantResource(auth.active_tenant_id))
+        )
+    except Exception:
+        return False
+
+
+def rules_tools_nav(request: Request) -> bool:
+    """Whether the nav shows the rules, DKIM selectors and custom checks links: `rules.read` in the
+    active tenant or `rules.manage` on the global scope, either one opens a tab (fail closed, no DB
+    access)."""
+    from app.core.permissions import (  # lazy: deps imports this module
+        Action,
+        RuleScope,
+        RuleScopeResource,
+        TenantResource,
+        can,
+    )
+
+    try:
+        auth = getattr(request.state, "auth_session", None)
+        if auth is None:
+            return False
+        if can(auth.principal, Action.RULES_MANAGE, RuleScopeResource(RuleScope.GLOBAL, None)):
+            return True
+        if auth.active_tenant_id is None:
+            return False
+        return bool(can(auth.principal, Action.RULES_READ, TenantResource(auth.active_tenant_id)))
+    except Exception:
+        return False
+
+
 def render(request: Request, template: str, status_code: int = 200, **context: Any) -> HTMLResponse:
     """Render `template` for `request` (language, CSRF token and current path in the context)."""
     lang = request_language(request.scope)
@@ -109,6 +181,12 @@ def render(request: Request, template: str, status_code: int = 200, **context: A
         csrf_token=csrf_token,
         current_path=request.url.path,
         supported_languages=SUPPORTED_LANGUAGES,
+        show_dns_tools=dns_tools_nav(request),
+        show_message_tools=message_tools_nav(request),
+        show_content_tools=content_tools_nav(request),
+        show_rules_tools=rules_tools_nav(request),
+        show_dkim_selector_tools=rules_tools_nav(request),
+        show_custom_check_tools=rules_tools_nav(request),
         **context,
     )
     response = HTMLResponse(html, status_code=status_code)

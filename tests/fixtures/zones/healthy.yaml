@@ -1,0 +1,21 @@
+# Hand-written. Reserved names and documentation address ranges only.
+zones:
+  default:
+    - {name: example.com, type: A, ttl: 300, rdata: [192.0.2.10, 192.0.2.11]}
+    - {name: example.com, type: AAAA, ttl: 300, rdata: ["2001:db8::10"]}
+    - {name: example.com, type: MX, ttl: 3600, rdata: ["10 mx1.example.com", "20 mx2.example.com"]}
+    - name: example.com
+      type: TXT
+      ttl: 300
+      rdata:
+        - "v=spf1 ip4:192.0.2.0/24 -all"
+        - ["v=DKIM1; k=rsa; ", "p=AAAABBBB"]
+    - {name: example.com, type: NS, ttl: 86400, rdata: [ns1.example.net, ns2.example.net]}
+    - name: example.com
+      type: SOA
+      ttl: 3600
+      rdata: ["ns1.example.net hostmaster.example.com 2026010101 7200 3600 1209600 300"]
+    - {name: example.com, type: CAA, ttl: 3600, rdata: ['0 issue "ca.example.net"']}
+    - {name: _dmarc.example.com, type: TXT, ttl: 300, rdata: ["v=DMARC1; p=none; rua=mailto:dmarc@example.com"]}
+    - {name: s1._domainkey.example.com, type: TXT, ttl: 300, rdata: ["v=DKIM1; k=rsa; p=AAAABBBB"]}
+    - {name: signed.example.com, type: A, ttl: 300, ad: true, rdata: [192.0.2.20]}

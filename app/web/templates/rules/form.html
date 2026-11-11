@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% set heading = t("web.rules.form.edit") if record else t("web.rules.form.new") %}
+{% set severity_text = {"critical": t("checks.severity.critical"), "high": t("checks.severity.high"), "medium": t("checks.severity.medium"), "low": t("checks.severity.low"), "info": t("checks.severity.info")} %}
+{% set kind_text = {"regex": t("web.rules.kind.regex"), "keyword": t("web.rules.kind.keyword")} %}
+{% set flag_text = {"i": t("web.rules.flag.i"), "m": t("web.rules.flag.m"), "s": t("web.rules.flag.s"), "x": t("web.rules.flag.x"), "a": t("web.rules.flag.a")} %}
+{% set scope_text = {"tenant": t("web.rules.scope.tenant"), "global": t("web.rules.scope.global")} %}
+{% block title %}{{ heading }} · {{ app_name }}{% endblock %}
+{% block content %}
+<h1>{{ heading }}</h1>
+<p>{{ scope_text[scope] }}</p>
+{% if seeded %}<p class="dns-state dns-state-absent" data-testid="rules-seeded-note">{{ t("web.rules.form.seeded_note") }}</p>{% endif %}
+{% include "rules/_error.html" %}
+<form class="dns-form" method="post" action="{% if record %}/rules/{{ record.id }}/edit{% else %}/rules{% endif %}?scope={{ scope }}" data-testid="rules-form">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <p>
+    <label for="rule-name">{{ t("web.rules.field.name") }}</label><br>
+    <input id="rule-name" name="name" type="text" size="60" maxlength="200" value="{{ form.name }}" autocomplete="off">
+  </p>
+  <p>
+    <label for="rule-kind">{{ t("web.rules.field.kind") }}</label>
+    <select id="rule-kind" name="kind">
+      {% for k in kinds %}<option value="{{ k }}"{% if form.kind == k %} selected{% endif %}>{{ kind_text[k] }}</option>{% endfor %}
+    </select>
+  </p>
+  <p>
+    <label for="rule-pattern">{{ t("web.rules.field.pattern") }}</label><br>
+    <textarea id="rule-pattern" name="pattern" rows="3" cols="80" maxlength="1024" spellcheck="false" autocomplete="off" wrap="off">
+{{ form.pattern }}</textarea>
+  </p>
+  <fieldset>
+    <legend>{{ t("web.rules.field.flags") }}</legend>
+    {% for f in flag_letters %}
+    <label><input type="checkbox" name="flags" value="{{ f }}"{% if f in form.flags %} checked{% endif %}> {{ flag_text[f] }}</label>
+    {% endfor %}
+  </fieldset>
+  <p>
+    <label for="rule-weight">{{ t("web.rules.field.weight") }}</label>
+    <input id="rule-weight" name="weight" type="text" inputmode="numeric" size="4" maxlength="7" value="{{ form.weight }}" autocomplete="off">
+  </p>
+  <p>
+    <label for="rule-category">{{ t("web.rules.field.category") }}</label>
+    <input id="rule-category" name="category" type="text" size="30" maxlength="64" value="{{ form.category }}" autocomplete="off">
+  </p>
+  <p>
+    <label for="rule-severity">{{ t("web.rules.field.severity") }}</label>
+    <select id="rule-severity" name="severity">
+      {% for s in severities %}<option value="{{ s }}"{% if form.severity == s %} selected{% endif %}>{{ severity_text[s] }}</option>{% endfor %}
+    </select>
+  </p>
+  <p>
+    <label for="rule-language">{{ t("web.rules.field.language") }}</label>
+    <input id="rule-language" name="language" type="text" size="8" maxlength="16" value="{{ form.language }}" autocomplete="off">
+  </p>
+  <p>
+    <label for="rule-title">{{ t("web.rules.field.title") }}</label><br>
+    <input id="rule-title" name="title" type="text" size="60" maxlength="200" value="{{ form.title }}" autocomplete="off">
+    {% if seeded %}<br><small>{{ t("web.rules.form.title_blank_note") }}</small>{% endif %}
+  </p>
+  <p>
+    <label for="rule-advice">{{ t("web.rules.field.advice") }}</label><br>
+    <textarea id="rule-advice" name="advice" rows="4" cols="80" maxlength="2000" autocomplete="off">
+{{ form.advice }}</textarea>
+  </p>
+  {% if scope == "tenant" %}
+  <p>
+    <label for="rule-seed-key">{{ t("web.rules.field.seed_key") }}</label>
+    <input id="rule-seed-key" name="seed_key" type="text" size="30" maxlength="128" value="{{ form.seed_key }}" autocomplete="off"><br>
+    <small>{{ t("web.rules.form.seed_key_note") }}</small>
+  </p>
+  {% endif %}
+  <p>
+    <label><input type="checkbox" name="enabled" value="1"{% if form.enabled %} checked{% endif %}> {{ t("web.rules.field.enabled") }}</label>
+  </p>
+  <button type="submit">{{ t("web.rules.action.save") }}</button>
+  <a href="/rules?scope={{ scope }}">{{ t("web.rules.action.cancel") }}</a>
+</form>
+{% endblock %}

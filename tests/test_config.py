@@ -1,4 +1,5 @@
 import json
+import logging
 from ipaddress import IPv6Address
 from pathlib import Path
 
@@ -8,6 +9,7 @@ from app.core.config import (
     RESOLVER_ADDR_INVALID_KEY,
     ConfigError,
     ResolverAddr,
+    Settings,
     parse_resolver_addrs,
 )
 
@@ -91,3 +93,38 @@ def test_i18n_keys_present_in_en_and_it() -> None:
         messages = json.loads((locales / f"{lang}.json").read_text(encoding="utf-8"))
         assert RESOLVER_ADDR_INVALID_KEY in messages
         assert "{entry}" in messages[RESOLVER_ADDR_INVALID_KEY]
+
+
+# M2-03: startup INFO log of the resolver mode and the trusted addresses.
+@pytest.mark.parametrize(
+    ("mode", "addrs", "expected"),
+    [
+        ("system", "", "resolver mode=system addrs=-"),
+        (
+            "custom",
+            "1.1.1.1, [2606:4700::1111]:53",
+            "resolver mode=custom addrs=1.1.1.1:53,[2606:4700::1111]:53",
+        ),
+        ("unbound", "172.28.53.2:5353", "resolver mode=unbound addrs=172.28.53.2:5353"),
+    ],
+)
+def test_log_resolver_config(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    mode: str,
+    addrs: str,
+    expected: str,
+) -> None:
+    for name in ("DATABASE_URL", "RESOLVER_MODE", "RESOLVER_ADDRS", "LOG_LEVEL"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("SECRET_KEY", "k" * 40)
+    monkeypatch.setenv("ENCRYPTION_KEY", "e" * 40)
+    monkeypatch.setenv("RESOLVER_MODE", mode)
+    monkeypatch.setenv("RESOLVER_ADDRS", addrs)
+    settings = Settings()  # type: ignore[call-arg]
+    with caplog.at_level(logging.INFO, logger="app.config"):
+        settings.log_resolver_config()
+    records = [r for r in caplog.records if r.name == "app.config"]
+    assert [r.levelno for r in records] == [logging.INFO]
+    assert records[0].getMessage() == expected
+    assert records[0].__dict__["event"] == "config.resolver"

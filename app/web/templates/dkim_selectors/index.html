@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% block title %}{{ t("web.dkim_selectors.title") }} · {{ app_name }}{% endblock %}
+{% macro selector_table(rows, section) %}
+{% set type_text = {"txt": t("web.dkim_selectors.record_type.txt"), "cname": t("web.dkim_selectors.record_type.cname"), "either": t("web.dkim_selectors.record_type.either")} %}
+<table data-testid="dkim-{{ section }}">
+  <thead><tr>
+    <th scope="col">{{ t("web.dkim_selectors.col.selector") }}</th>
+    <th scope="col">{{ t("web.dkim_selectors.col.provider") }}</th>
+    <th scope="col">{{ t("web.dkim_selectors.col.record_type") }}</th>
+    <th scope="col">{{ t("web.dkim_selectors.col.notes") }}</th>
+    <th scope="col">{{ t("web.dkim_selectors.col.enabled") }}</th>
+    <th scope="col">{{ t("web.dkim_selectors.col.verification") }}</th>
+    <th scope="col">{{ t("web.dkim_selectors.col.actions") }}</th>
+  </tr></thead>
+  <tbody>
+  {% for row in rows %}
+    {% set r = row.record %}
+    <tr data-selector="{{ r.id }}">
+      <td class="dns-wrap"><code>{{ r.selector|visible }}</code>{% if r.locally_modified %}<br><small>{{ t("web.dkim_selectors.pinned") }}</small>{% endif %}{% if row.also_tenant %}<br><small data-testid="dkim-also-tenant">{{ t("web.dkim_selectors.also_tenant") }}</small>{% endif %}</td>
+      <td class="dns-wrap">{{ (r.provider or "")|visible }}</td>
+      <td>{{ type_text[r.record_type] }}</td>
+      <td class="dns-wrap">{{ (r.notes or "")|visible }}</td>
+      <td>{{ t("web.dkim_selectors.enabled.yes") if r.enabled else t("web.dkim_selectors.enabled.no") }}</td>
+      <td class="dns-wrap">
+        {% if r.status == "unverified" %}<strong data-testid="badge-unverified">{{ t("web.dkim_selectors.badge.unverified") }}</strong>
+        {% elif r.status == "verified" %}<span data-testid="badge-verified">{{ t("web.dkim_selectors.badge.verified") }}</span>
+        {% endif %}
+        {% if r.verified_on %}<br>{{ t("web.dkim_selectors.verified_on") }}: {{ r.verified_on.isoformat() }}{% endif %}
+        {% if r.sources %}<br>{{ t("web.dkim_selectors.sources") }}: {% for s in r.sources %}<code>{{ s|visible }}</code>{% if not loop.last %}, {% endif %}{% endfor %}{% endif %}
+      </td>
+      <td>
+        {% if row.can_edit %}
+        <a href="/dkim-selectors/{{ r.id }}/edit?scope={{ scope }}">{{ t("web.dkim_selectors.action.edit") }}</a>
+        <form class="inline" method="post" action="/dkim-selectors/{{ r.id }}/toggle?scope={{ scope }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <input type="hidden" name="enabled" value="{{ "0" if r.enabled else "1" }}">
+          <button type="submit">{{ t("web.dkim_selectors.action.disable") if r.enabled else t("web.dkim_selectors.action.enable") }}</button>
+        </form>
+        {% endif %}
+        {% if row.can_delete %}
+        <form class="inline" method="post" action="/dkim-selectors/{{ r.id }}/delete?scope={{ scope }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button type="submit">{{ t("web.dkim_selectors.action.delete") }}</button>
+        </form>
+        {% endif %}
+      </td>
+    </tr>
+  {% else %}
+    <tr><td colspan="7" class="empty-state">{{ t("web.dkim_selectors.empty") }}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endmacro %}
+{% block content %}
+<h1>{{ t("web.dkim_selectors.title") }}</h1>
+<p>{{ t("web.dkim_selectors.intro") }}</p>
+<p>
+  {% if show_tenant_tab %}<a href="/dkim-selectors?scope=tenant" {% if scope == "tenant" %}aria-current="page"{% endif %} data-testid="tab-tenant">{{ t("web.dkim_selectors.tab.tenant") }}</a>{% endif %}
+  {% if show_global_tab %}{% if show_tenant_tab %} · {% endif %}<a href="/dkim-selectors?scope=global" {% if scope == "global" %}aria-current="page"{% endif %} data-testid="tab-global">{{ t("web.dkim_selectors.tab.global") }}</a>{% endif %}
+  {% if can_manage %} · <a href="/dkim-selectors/new?scope={{ scope }}" data-testid="dkim-new">{{ t("web.dkim_selectors.action.new") }}</a>{% endif %}
+</p>
+{% if flash %}<p class="dns-state dns-state-ok" role="status" data-testid="dkim-flash">{{ t(flash) }}</p>{% endif %}
+{% if error %}<p class="form-error" role="alert" data-testid="dkim-error">{{ t(error) }}</p>{% endif %}
+
+{#- A section with rows only on another page is left out rather than shown as empty. -#}
+{% if scope == "tenant" %}
+{% if tenant_rows or not has_tenant_rows %}
+<section>
+  <h2>{{ t("web.dkim_selectors.section.tenant") }}</h2>
+  {{ selector_table(tenant_rows, "tenant") }}
+</section>
+{% endif %}
+{% if global_rows or not has_global_rows %}
+<section>
+  <h2>{{ t("web.dkim_selectors.section.global") }}</h2>
+  <p>{{ t("web.dkim_selectors.global_readonly") }}</p>
+  {{ selector_table(global_rows, "global") }}
+</section>
+{% endif %}
+{% else %}
+<section>
+  <h2>{{ t("web.dkim_selectors.section.global") }}</h2>
+  {{ selector_table(global_rows, "global") }}
+</section>
+{% endif %}
+{% if last_page > 1 %}
+<p data-testid="dkim-pages">
+  {% if page > 1 %}<a href="/dkim-selectors?scope={{ scope }}&amp;page={{ page - 1 }}" data-testid="dkim-page-prev">{{ t("web.dkim_selectors.page.prev") }}</a> · {% endif %}
+  <span data-testid="dkim-page-status">{{ t("web.dkim_selectors.page.status", page=page, pages=last_page) }}</span>
+  {% if page < last_page %} · <a href="/dkim-selectors?scope={{ scope }}&amp;page={{ page + 1 }}" data-testid="dkim-page-next">{{ t("web.dkim_selectors.page.next") }}</a>{% endif %}
+</p>
+{% endif %}
+{% endblock %}

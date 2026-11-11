@@ -1,6 +1,6 @@
 """M1-18 DomainAccessRepository: assign, unassign, list assigned, replace, cross-tenant isolation.
 
-Runs on SQLite and, when TEST_DATABASE_URL is set, on PostgreSQL (shared `db_url` fixture); the
+Runs on SQLite and, when TEST_DATABASE_URL is set, on PostgreSQL (shared DB fixture); the
 schema is built by Alembic. No network.
 """
 
@@ -9,8 +9,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
-from alembic import command
-from alembic.config import Config
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -21,7 +19,7 @@ from app.repositories.domain_access import MAX_ASSIGNMENTS, DomainAccessReposito
 
 ROOT = Path(__file__).resolve().parents[2]
 KEY = "k" * 40
-MALFORMED_IDS = [None, "1", "abc", 1.0, True, False, 0, -1, 2**63, [1], b"1"]
+MALFORMED_IDS = [None, "1", "abc", 1.0, True, False, 0, -1, 2**31, 2**63 - 1, 2**63, [1], b"1"]
 
 
 @dataclass
@@ -46,12 +44,11 @@ class World:
 
 
 @pytest.fixture
-def world(db_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[World]:
-    monkeypatch.setenv("DATABASE_URL", db_url)
+def world(migrated_db_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[World]:
+    monkeypatch.setenv("DATABASE_URL", migrated_db_url)
     monkeypatch.setenv("SECRET_KEY", KEY)
     monkeypatch.setenv("ENCRYPTION_KEY", KEY)
-    command.upgrade(Config(str(ROOT / "alembic.ini")), "head")
-    engine = create_db_engine(db_url)
+    engine = create_db_engine(migrated_db_url)
     session = create_session_factory(engine)()
     try:
         ta, tb = Tenant(name="A", slug="a"), Tenant(name="B", slug="b")

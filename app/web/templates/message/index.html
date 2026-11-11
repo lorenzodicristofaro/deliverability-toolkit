@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}{{ t("message.page.title") }} · {{ app_name }}{% endblock %}
+{% block content %}
+<h1>{{ t("message.page.title") }}</h1>
+<p>{{ t("message.page.intro") }}</p>
+
+<form class="dns-form" method="post" action="/tools/message" data-testid="message-form">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <p>
+    <label for="message-raw">{{ t("message.form.label") }}</label><br>
+    <textarea id="message-raw" name="raw" rows="16" cols="100" required spellcheck="false" autocomplete="off" wrap="off"></textarea>
+  </p>
+  <p id="message-file-row" hidden>
+    <label for="message-file">{{ t("message.form.file") }}</label>
+    <input id="message-file" type="file" accept=".eml,message/rfc822,text/plain"
+           data-target="message-raw" data-max-bytes="{{ max_raw_bytes }}"
+           data-too-large-text="{{ t('message.form.file_too_large') }}"
+           data-unreadable-text="{{ t('message.form.file_unreadable') }}">
+  </p>
+  {% if error %}<p class="form-error" role="alert" data-testid="message-error">{{ t(error) }}</p>{% endif %}
+  <button type="submit">{{ t("message.form.submit") }}</button>
+</form>
+<script src="/static/js/message_file.js" defer></script>
+
+{% if analysis is not none %}{% include "message/_result.html" %}{% endif %}
+{% endblock %}

@@ -1,0 +1,171 @@
+# DKIM selector probe candidates (M3-12; vendor entries from M3-20). Generic names remain unverified guesses:
+# unverified entries carry no provider. Verified entries cite a vendor-domain page that states the selector.
+# Promote an entry to `verified` only with an official vendor URL in its `sources`.
+verified_on: 2026-11-06
+sources: []
+selectors:
+  - name: default
+    provider: null
+    record_type: txt
+    notes: commonly seen generic selector name; provenance unverified
+    status: unverified
+    sources: []
+  - name: dkim
+    provider: null
+    record_type: txt
+    notes: commonly seen generic selector name; provenance unverified
+    status: unverified
+    sources: []
+  - name: mail
+    provider: null
+    record_type: txt
+    notes: commonly seen generic selector name; provenance unverified
+    status: unverified
+    sources: []
+  - name: s1
+    provider: sendgrid
+    record_type: cname
+    notes: Twilio SendGrid DKIM CNAME with automated security on; documented default, a custom selector can be set
+    status: verified
+    sources:
+      - https://www.twilio.com/docs/sendgrid/ui/account-and-settings/how-to-set-up-domain-authentication
+  - name: s2
+    provider: sendgrid
+    record_type: cname
+    notes: Twilio SendGrid DKIM CNAME with automated security on; documented default, a custom selector can be set
+    status: verified
+    sources:
+      - https://www.twilio.com/docs/sendgrid/ui/account-and-settings/how-to-set-up-domain-authentication
+  - name: k1
+    provider: null
+    record_type: either
+    notes: commonly seen generic selector name; provenance unverified
+    status: unverified
+    sources: []
+  - name: selector1
+    provider: microsoft365
+    record_type: cname
+    notes: Microsoft 365 DKIM CNAME; fixed hostname for all organizations (selector1 and selector2)
+    status: verified
+    sources:
+      - https://learn.microsoft.com/en-us/defender-office-365/email-authentication-dkim-configure
+  - name: selector2
+    provider: microsoft365
+    record_type: cname
+    notes: Microsoft 365 DKIM CNAME; fixed hostname for all organizations (selector1 and selector2)
+    status: verified
+    sources:
+      - https://learn.microsoft.com/en-us/defender-office-365/email-authentication-dkim-configure
+  - name: google
+    provider: google_workspace
+    record_type: txt
+    notes: Google Workspace default prefix selector; the admin may choose another prefix
+    status: verified
+    sources:
+      - https://knowledge.workspace.google.com/admin/security/set-up-dkim
+  - name: m1
+    provider: sendgrid
+    record_type: txt
+    notes: Twilio SendGrid DKIM TXT with automated security off; documented default, a custom selector can be set
+    status: verified
+    sources:
+      - https://www.twilio.com/docs/sendgrid/ui/account-and-settings/how-to-set-up-domain-authentication
+  - name: mte1
+    provider: mailchimp_transactional
+    record_type: cname
+    notes: Mailchimp Transactional (Mandrill) DKIM CNAME pointing to dkim1.mandrillapp.com
+    status: verified
+    sources:
+      - https://mailchimp.com/developer/transactional/docs/authentication-delivery
+  - name: mte2
+    provider: mailchimp_transactional
+    record_type: cname
+    notes: Mailchimp Transactional (Mandrill) DKIM CNAME pointing to dkim2.mandrillapp.com
+    status: verified
+    sources:
+      - https://mailchimp.com/developer/transactional/docs/authentication-delivery
+  - name: km1
+    provider: klaviyo
+    record_type: cname
+    notes: Klaviyo static-routing DKIM CNAME, marketing send type; numbering continues with the next pair for further domains
+    status: verified
+    sources:
+      - https://help.klaviyo.com/hc/en-us/articles/115000357752
+  - name: km2
+    provider: klaviyo
+    record_type: cname
+    notes: Klaviyo static-routing DKIM CNAME, marketing send type; numbering continues with the next pair for further domains
+    status: verified
+    sources:
+      - https://help.klaviyo.com/hc/en-us/articles/115000357752
+  - name: kt1
+    provider: klaviyo
+    record_type: cname
+    notes: Klaviyo static-routing DKIM CNAME, transactional send type; numbering continues with the next pair for further domains
+    status: verified
+    sources:
+      - https://help.klaviyo.com/hc/en-us/articles/115000357752
+  - name: kt2
+    provider: klaviyo
+    record_type: cname
+    notes: Klaviyo static-routing DKIM CNAME, transactional send type; numbering continues with the next pair for further domains
+    status: verified
+    sources:
+      - https://help.klaviyo.com/hc/en-us/articles/115000357752
+  - name: ks1
+    provider: klaviyo
+    record_type: cname
+    notes: Klaviyo static-routing DKIM CNAME, service send type; numbering continues with the next pair for further domains
+    status: verified
+    sources:
+      - https://help.klaviyo.com/hc/en-us/articles/115000357752
+  - name: ks2
+    provider: klaviyo
+    record_type: cname
+    notes: Klaviyo static-routing DKIM CNAME, service send type; numbering continues with the next pair for further domains
+    status: verified
+    sources:
+      - https://help.klaviyo.com/hc/en-us/articles/115000357752
+  - name: kl1
+    provider: klaviyo
+    record_type: cname
+    notes: Klaviyo static-routing DKIM CNAME, legacy static send type; numbering continues with the next pair for further domains
+    status: verified
+    sources:
+      - https://help.klaviyo.com/hc/en-us/articles/115000357752
+  - name: kl2
+    provider: klaviyo
+    record_type: cname
+    notes: Klaviyo static-routing DKIM CNAME, legacy static send type; numbering continues with the next pair for further domains
+    status: verified
+    sources:
+      - https://help.klaviyo.com/hc/en-us/articles/115000357752
+  # ml01/ml02 and acdkim1/acdkim2 verified_on 2026-11-07 (the file has only a file-level verified_on, no per-entry field)
+  - name: ml01
+    provider: mailup
+    record_type: cname
+    notes: MailUp DKIM CNAME; fixed pair; CNAME to mlNN.dkim.musvc.com; source is MailUp's help centre hosted on Atlassian, supplied by the maintainer
+    status: verified
+    sources:
+      - https://helpmailup.atlassian.net/wiki/spaces/MM/pages/37519747/DKIM+non+trovato
+  - name: ml02
+    provider: mailup
+    record_type: cname
+    notes: MailUp DKIM CNAME; fixed pair; CNAME to mlNN.dkim.musvc.com; source is MailUp's help centre hosted on Atlassian, supplied by the maintainer
+    status: verified
+    sources:
+      - https://helpmailup.atlassian.net/wiki/spaces/MM/pages/37519747/DKIM+non+trovato
+  - name: acdkim1
+    provider: activecampaign
+    record_type: cname
+    notes: ActiveCampaign DKIM CNAME; fixed pair; CNAME; stated in the DNS-records screenshot of the official article (UI shows the name as 'acdkim1.domainkey'); target truncated in source
+    status: verified
+    sources:
+      - https://help.activecampaign.com/hc/en-us/articles/206903370-SPF-DKIM-and-DMARC-Authentication
+  - name: acdkim2
+    provider: activecampaign
+    record_type: cname
+    notes: ActiveCampaign DKIM CNAME; fixed pair; CNAME; stated in the DNS-records screenshot of the official article (UI shows the name as 'acdkim2.domainkey'); target truncated in source
+    status: verified
+    sources:
+      - https://help.activecampaign.com/hc/en-us/articles/206903370-SPF-DKIM-and-DMARC-Authentication

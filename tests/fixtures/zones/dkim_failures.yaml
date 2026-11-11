@@ -1,0 +1,39 @@
+# Failing lookups at every point the DKIM probe depends on. `other` is always nxdomain.
+zones:
+  default:
+    - {name: sel._domainkey.t-servfail.example.com, type: TXT, state: servfail}
+    - {name: sel._domainkey.c-servfail.example.com, type: CNAME, state: servfail}
+    - {name: sel._domainkey.m-servfail.example.com, type: CNAME, ttl: 300, rdata: ["mid-servfail.dkim.example.net."]}
+    - {name: mid-servfail.dkim.example.net, type: TXT, state: servfail}
+    - {name: sel._domainkey.n-servfail.example.com, type: CNAME, ttl: 300, rdata: ["mid2-servfail.dkim.example.net."]}
+    - {name: mid2-servfail.dkim.example.net, type: CNAME, state: servfail}
+    - {name: sel._domainkey.t-refused.example.com, type: TXT, state: refused}
+    - {name: sel._domainkey.c-refused.example.com, type: CNAME, state: refused}
+    - {name: sel._domainkey.m-refused.example.com, type: CNAME, ttl: 300, rdata: ["mid-refused.dkim.example.net."]}
+    - {name: mid-refused.dkim.example.net, type: TXT, state: refused}
+    - {name: sel._domainkey.n-refused.example.com, type: CNAME, ttl: 300, rdata: ["mid2-refused.dkim.example.net."]}
+    - {name: mid2-refused.dkim.example.net, type: CNAME, state: refused}
+    - {name: sel._domainkey.t-timeout.example.com, type: TXT, state: timeout}
+    - {name: sel._domainkey.c-timeout.example.com, type: CNAME, state: timeout}
+    - {name: sel._domainkey.m-timeout.example.com, type: CNAME, ttl: 300, rdata: ["mid-timeout.dkim.example.net."]}
+    - {name: mid-timeout.dkim.example.net, type: TXT, state: timeout}
+    - {name: sel._domainkey.n-timeout.example.com, type: CNAME, ttl: 300, rdata: ["mid2-timeout.dkim.example.net."]}
+    - {name: mid2-timeout.dkim.example.net, type: CNAME, state: timeout}
+    - {name: sel._domainkey.t-truncated.example.com, type: TXT, state: truncated}
+    - {name: sel._domainkey.c-truncated.example.com, type: CNAME, state: truncated}
+    - {name: sel._domainkey.m-truncated.example.com, type: CNAME, ttl: 300, rdata: ["mid-truncated.dkim.example.net."]}
+    - {name: mid-truncated.dkim.example.net, type: TXT, state: truncated}
+    - {name: sel._domainkey.n-truncated.example.com, type: CNAME, ttl: 300, rdata: ["mid2-truncated.dkim.example.net."]}
+    - {name: mid2-truncated.dkim.example.net, type: CNAME, state: truncated}
+    - {name: sel._domainkey.t-malformed.example.com, type: TXT, state: malformed}
+    - {name: sel._domainkey.c-malformed.example.com, type: CNAME, state: malformed}
+    - {name: sel._domainkey.m-malformed.example.com, type: CNAME, ttl: 300, rdata: ["mid-malformed.dkim.example.net."]}
+    - {name: mid-malformed.dkim.example.net, type: TXT, state: malformed}
+    - {name: sel._domainkey.n-malformed.example.com, type: CNAME, ttl: 300, rdata: ["mid2-malformed.dkim.example.net."]}
+    - {name: mid2-malformed.dkim.example.net, type: CNAME, state: malformed}
+    - {name: sel._domainkey.t-network-error.example.com, type: TXT, state: network_error}
+    - {name: sel._domainkey.c-network-error.example.com, type: CNAME, state: network_error}
+    - {name: sel._domainkey.m-network-error.example.com, type: CNAME, ttl: 300, rdata: ["mid-network-error.dkim.example.net."]}
+    - {name: mid-network-error.dkim.example.net, type: TXT, state: network_error}
+    - {name: sel._domainkey.n-network-error.example.com, type: CNAME, ttl: 300, rdata: ["mid2-network-error.dkim.example.net."]}
+    - {name: mid2-network-error.dkim.example.net, type: CNAME, state: network_error}

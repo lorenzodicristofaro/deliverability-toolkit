@@ -1,0 +1,20 @@
+# M3-07 SPF DNS failures, malformed and missing records. Hand-written; reserved names only.
+zones:
+  default:
+    - {name: sf.example.com, type: TXT, ttl: 300, rdata: ["v=spf1 include:broken.example.net ip4:192.0.2.1 -all"]}
+    - {name: broken.example.net, type: TXT, state: servfail, rcode: 2}
+    - {name: to.example.com, type: TXT, ttl: 300, rdata: ["v=spf1 a:slow.example.net -all"]}
+    - {name: slow.example.net, type: A, state: timeout}
+    - {name: trunc.example.com, type: TXT, ttl: 300, rdata: ["v=spf1 include:big.example.net -all"]}
+    - {name: big.example.net, type: TXT, state: truncated}
+    - {name: rootfail.example.com, type: TXT, state: servfail, rcode: 2}
+    - {name: mal.example.com, type: TXT, ttl: 300, rdata: ["v=spf1 include:badrec.example.net -all"]}
+    - {name: badrec.example.net, type: TXT, ttl: 300, rdata: ["v=spf1 foo:bar ip4:300.1.1.1 include:okinc.example.net include: -all"]}
+    - {name: okinc.example.net, type: TXT, ttl: 300, rdata: ["v=spf1 -all"]}
+    - {name: multi.example.com, type: TXT, ttl: 300, rdata: ["v=spf1 -all", "v=spf1 include:okinc.example.net ~all"]}
+    - {name: incmulti.example.com, type: TXT, ttl: 300, rdata: ["v=spf1 include:multi.example.com -all"]}
+    - {name: nospf.example.com, type: TXT, ttl: 300, rdata: ["hello", "v=spf10 -all"]}
+    - {name: incmissing.example.com, type: TXT, ttl: 300, rdata: ["v=spf1 include:absent.example.org -all"]}
+    - {name: redirmissing.example.com, type: TXT, ttl: 300, rdata: ["v=spf1 redirect=absent.example.org"]}
+    - {name: blk.example.com, type: TXT, ttl: 300, rdata: ["v=spf1 include:blocked.example.net -all"]}
+    - {name: synroot.example.com, type: TXT, ttl: 300, rdata: ["v=spf1 include:okinc.example.net foo -all"]}

@@ -1,6 +1,6 @@
 """M1-13 auth service: login, sessions, revocation, rehash-on-login.
 
-DB tests run on SQLite and, when TEST_DATABASE_URL is set, on PostgreSQL (shared `db_url`
+DB tests run on SQLite and, when TEST_DATABASE_URL is set, on PostgreSQL (shared `migrated_db_url`
 fixture); the schema is built by Alembic. A fast argon2 hasher keeps the suite quick; the default
 parameters are pinned in tests/core/test_security.py.
 """
@@ -13,8 +13,6 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from alembic import command
-from alembic.config import Config
 from argon2 import PasswordHasher
 from pydantic import SecretStr
 from sqlalchemy import event, select, text
@@ -56,12 +54,11 @@ class Env:
 
 
 @pytest.fixture
-def env(db_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[Env]:
-    monkeypatch.setenv("DATABASE_URL", db_url)
+def env(migrated_db_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[Env]:
+    monkeypatch.setenv("DATABASE_URL", migrated_db_url)
     monkeypatch.setenv("SECRET_KEY", KEY)
     monkeypatch.setenv("ENCRYPTION_KEY", KEY)
-    command.upgrade(Config(str(ROOT / "alembic.ini")), "head")
-    engine = create_db_engine(db_url)
+    engine = create_db_engine(migrated_db_url)
     db = create_session_factory(engine)()
     try:
         tenant = Tenant(name="Agency", slug="agency")

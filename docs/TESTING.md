@@ -1,8 +1,51 @@
 # Testing
 
 Commands are in `CLAUDE.md`. DB tests run on SQLite and, when `TEST_DATABASE_URL` is set, on
-PostgreSQL (shared `db_url` fixture in `tests/conftest.py`; the tenancy suite has its own
-module-scoped `world` fixture in `tests/tenancy/conftest.py` with the same two parameters).
+PostgreSQL. In `tests/conftest.py`, `migrated_db_url` gives each test an empty migrated schema
+(SQLite copies a migrated session template; PostgreSQL TRUNCATEs the project tables per test).
+`db_url` stays truly empty and is for tests that run real migrations through
+`real_migrations_engine`. The tenancy suite keeps its own module-scoped `world` fixture in
+`tests/tenancy/conftest.py` with the same two parameters.
+
+## CI jobs and PostgreSQL
+
+Workflow `.github/workflows/ci.yml` runs lint and type checks in `lint` and splits the tests into
+two jobs on separate runners, selected by the `--db-backend` option (`tests/conftest.py`):
+
+| Job | Command | Runs | Database |
+|-----|---------|------|----------|
+| `test-sqlite` | `uv run pytest --db-backend=sqlite` | every test except the PostgreSQL params: non-DB tests and the SQLite params | none |
+| `test-postgres` | `uv run pytest --db-backend=postgresql` | only the PostgreSQL params | `postgres:17` service |
+
+A test is a PostgreSQL param if it carries the skip marker with `PG_SKIP_REASON`, that is, exactly
+the tests that would be skipped without PostgreSQL. The two sides are disjoint and together are the
+whole collection. `--db-backend=postgresql` without `TEST_DATABASE_URL` is a usage error, so the job
+cannot skip every test and pass. Without the option, pytest runs both sides as before.
+
+Run the PostgreSQL params locally against a throwaway database:
+
+```
+TEST_DATABASE_URL=postgresql://USER:PASSWORD@localhost:5432/ci_test uv run pytest -q --tb=short
+```
+
+Add `--db-backend=postgresql` for that side only. `TEST_DATABASE_URL` must point to a database
+with "test" in its name and different from `DATABASE_URL`: the suite drops its tables, and pytest
+refuses to start otherwise. Only one suite may use that database at a time, so do not run two
+PostgreSQL runs in parallel against it.
+
+Changes that touch only root `*.md` files or the docs listed under `paths-ignore` in `ci.yml` skip
+that workflow entirely. A skipped workflow reports no result: a required check on it stays Pending
+and blocks the pull request. `docs/TESTING.md` is not ignored because
+`test_exemptions_are_documented` reads it. Secret scanning is in `secret-scan.yml`, which has no path
+filter and runs on docs-only changes too.
+
+## Seed sync at app startup
+
+`app.main` runs the real seed sync at every app start. The modules in `SEEDLESS_MODULES`
+(`tests/conftest.py`) start the app very often and never use the global knowledge tables, so their
+startup skips it. The `seed_table_access` fixture fails any test in those modules that reads or
+writes `content_rules` or `dkim_selectors`; such a module must be removed from the set. Everything
+else, including seed sync, content rule, DKIM, check and acceptance tests, keeps the real sync.
 
 ## Tenancy matrix (M1-20)
 
@@ -32,6 +75,9 @@ create data on purpose (the successful UI "smuggle" create) delete it before the
    - `COLLECTION`: list/create in the active tenant; give the expected status per role for the
      own-tenant request (`own=` for GET, `smuggle=` for writes that also try to pass a tenant B id).
    - `LANDING`, `SESSION`, `SWITCH`: see the module docstring.
+   - `DNS`: tenant-level `dns.tools` routes (M2-12); anonymous 401, a session whose active tenant
+     is B 404, and per-role `own=` statuses (client viewer 403). The tenancy world overrides the
+     `dns_backend` dependency with fixtures, so no request touches the network.
    - Pass `body=` for writes. A new resource type (not a domain) needs a new `Kind` with its
      cross-tenant target and an explicit expectation in `_expected`.
 2. Every matrix route must depend on `app.web.deps.current_session`

@@ -1,5 +1,5 @@
 """M1-10 core tenancy models and migration 0002. Every DB test runs on SQLite and, when
-TEST_DATABASE_URL is set, on PostgreSQL (via the shared `db_url` fixture); the schema is always
+TEST_DATABASE_URL is set, on PostgreSQL (via the shared DB fixtures); the schema is always
 built by Alembic, never by create_all, so the migration itself is what gets tested."""
 
 import warnings
@@ -42,12 +42,11 @@ def _cfg() -> Config:
 
 
 @pytest.fixture
-def migrated(db_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[Engine]:
-    monkeypatch.setenv("DATABASE_URL", db_url)
+def migrated(migrated_db_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[Engine]:
+    monkeypatch.setenv("DATABASE_URL", migrated_db_url)
     monkeypatch.setenv("SECRET_KEY", KEY)
     monkeypatch.setenv("ENCRYPTION_KEY", KEY)
-    command.upgrade(_cfg(), "head")
-    engine = create_db_engine(db_url)
+    engine = create_db_engine(migrated_db_url)
     try:
         yield engine
     finally:
@@ -80,17 +79,17 @@ def _count(engine: Engine, table: str, where: str = "1=1") -> int:
 # --- migration ---------------------------------------------------------------------------------
 
 
-def test_upgrade_downgrade_roundtrip(migrated: Engine) -> None:
-    assert set(inspect(migrated).get_table_names()) >= CORE_TABLES
+def test_upgrade_downgrade_roundtrip(real_migrations_engine: Engine) -> None:
+    assert set(inspect(real_migrations_engine).get_table_names()) >= CORE_TABLES
     command.downgrade(_cfg(), "0001")
-    assert not CORE_TABLES & set(inspect(migrated).get_table_names())
+    assert not CORE_TABLES & set(inspect(real_migrations_engine).get_table_names())
     command.downgrade(_cfg(), "base")
     command.upgrade(_cfg(), "head")
-    assert set(inspect(migrated).get_table_names()) >= CORE_TABLES
+    assert set(inspect(real_migrations_engine).get_table_names()) >= CORE_TABLES
 
 
-def test_no_autogenerate_diff_after_upgrade(migrated: Engine) -> None:
-    with migrated.connect() as conn, warnings.catch_warnings():
+def test_no_autogenerate_diff_after_upgrade(real_migrations_engine: Engine) -> None:
+    with real_migrations_engine.connect() as conn, warnings.catch_warnings():
         # SQLite cannot reflect expression indexes (uq_users_email_lower); Alembic skips them
         # with a warning. PostgreSQL compares them. Uniqueness is tested below on both.
         warnings.filterwarnings("ignore", message=".*expression-based index.*")
