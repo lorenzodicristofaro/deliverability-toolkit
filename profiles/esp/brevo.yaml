@@ -1,0 +1,19 @@
+id: brevo
+name: Brevo
+homepage: https://www.brevo.com
+spf:
+  includes: []
+dkim:
+  selectors:
+    - {name: brevo1, type: cname}
+    - {name: brevo2, type: cname}
+pitfalls:
+  - {code: ESP_BREVO_DKIM_TXT_SETUP, notes_key: esp.brevo.dkim_txt_setup, severity: info}
+  - {code: ESP_BREVO_CODE_NOT_CHECKED, notes_key: esp.brevo.brevo_code_not_checked, severity: info}
+  - {code: ESP_BREVO_SPF_DEDICATED_IP_ONLY, notes_key: esp.brevo.spf_dedicated_ip_only, severity: info}
+verified_on: 2026-11-11
+sources:
+  - https://help.brevo.com/hc/it/articles/12163873383186-Autenticazione-del-dominio-con-Brevo-codice-Brevo-DKIM-DMARC
+  - https://help.brevo.com/hc/it/articles/16045394674066-Risoluzione-dei-problemi-Autenticazione-del-dominio
+  - https://help.brevo.com/hc/en-us/articles/16045394674066-Troubleshooting-Domain-authentication
+status: verified

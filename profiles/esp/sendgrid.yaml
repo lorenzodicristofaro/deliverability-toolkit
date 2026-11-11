@@ -15,6 +15,5 @@ pitfalls:
 verified_on: 2026-11-11
 sources:
   - https://www.twilio.com/docs/sendgrid/ui/account-and-settings/how-to-set-up-domain-authentication
-status: unverified
-unverified_fields:
-  - tracking_domain
+  - https://www.twilio.com/docs/sendgrid/ui/account-and-settings/how-to-set-up-link-branding
+status: verified

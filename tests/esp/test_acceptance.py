@@ -11,7 +11,7 @@ kind applies to at least one shipped profile.
 from __future__ import annotations
 
 import itertools
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
 from typing import Any
 
@@ -390,11 +390,33 @@ def _unverified_keys(profile: EspProfile) -> list[tuple[str, str]]:
     return keys
 
 
-UNVERIFIED = [p for p in PROFILES if p.status == "unverified"]
+def _all_unverified(profile: EspProfile) -> EspProfile:
+    """The shipped profile with every part present marked unverified (M6-16: once no shipped
+    profile is unverified, this keeps the skip path exercised on real profile shapes)."""
+    fields = {
+        name
+        for name, present in (
+            ("spf.includes", profile.spf_includes),
+            ("dkim.selectors", profile.dkim_selectors),
+            ("return_path", profile.return_path),
+            ("tracking_domain", profile.tracking_domain),
+            ("pitfalls", profile.pitfalls),
+        )
+        if present
+    }
+    return replace(profile, status="unverified", unverified_fields=frozenset(fields))
+
+
+UNVERIFIED = [p for p in PROFILES if p.status == "unverified"] + [
+    _all_unverified(p) for p in PROFILES if p.status == "verified"
+]
+UNVERIFIED_IDS = [
+    f"{p.id}-{'shipped' if BY_ID[p.id] is p else 'all_unverified'}" for p in UNVERIFIED
+]
 
 
 @pytest.mark.parametrize("record", ["removed", "dns_failure"])
-@pytest.mark.parametrize("profile", UNVERIFIED, ids=[p.id for p in UNVERIFIED])
+@pytest.mark.parametrize("profile", UNVERIFIED, ids=UNVERIFIED_IDS)
 async def test_unverified_fields_get_no_verdict(profile: EspProfile, record: str) -> None:
     keys = _unverified_keys(profile)
     zone = correct_zone(profile)
@@ -426,10 +448,11 @@ async def test_unverified_fields_get_no_verdict(profile: EspProfile, record: str
     )
 
 
-def test_shipped_profiles_include_an_unverified_one() -> None:
-    """Otherwise the unverified test above runs on nothing; drop this test (and keep the one
-    above) only when no shipped profile is unverified any more."""
-    assert UNVERIFIED
+def test_unverified_path_has_profiles_to_run_on() -> None:
+    """Otherwise the unverified test above runs on nothing. Every shipped profile is covered,
+    as shipped when unverified, else with every part marked unverified."""
+    assert {p.id for p in UNVERIFIED} == set(BY_ID)
+    assert all(p.status == "unverified" and p.unverified_fields for p in UNVERIFIED)
 
 
 # --- combined SPF over the lookup limit ---------------------------------------------------------
