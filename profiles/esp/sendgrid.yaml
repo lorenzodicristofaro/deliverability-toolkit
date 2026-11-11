@@ -2,7 +2,7 @@ id: sendgrid
 name: Twilio SendGrid
 homepage: https://sendgrid.com
 spf:
-  includes: [sendgrid.net]
+  includes: []
 dkim:
   selectors:
     - {name: s1, type: cname, target_pattern: "s1.domainkey.*.*.sendgrid.net"}
@@ -17,5 +17,4 @@ sources:
   - https://www.twilio.com/docs/sendgrid/ui/account-and-settings/how-to-set-up-domain-authentication
 status: unverified
 unverified_fields:
-  - spf.includes
   - tracking_domain
