@@ -1,0 +1,14 @@
+id: emailchef
+name: Emailchef
+homepage: https://emailchef.com
+spf:
+  includes: [spf.emailchef.com]
+dkim:
+  selectors:
+    - {name: mailchef, type: txt}
+pitfalls:
+  - {code: ESP_EMAILCHEF_CHECK_PARAMETERS_IN_ACCOUNT, notes_key: esp.emailchef.check_parameters_in_account, severity: info}
+verified_on: 2026-11-11
+sources:
+  - https://emailchef.com/knowledge-base/how-to-set-up-the-domain-authentication-mode/
+status: verified

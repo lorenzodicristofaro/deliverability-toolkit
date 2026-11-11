@@ -15,4 +15,34 @@ Acceptance criteria:
 - i18n key rule: `notes_key` values must not contain hyphens (the loader regex `_NOTES_KEY` in app/esp/profile.py rejects them). The key segment is the profile id with `-` replaced by `_`. Profile ids and file names may keep hyphens.
 - `target_pattern` `*` matches exactly one whole DNS label. A partial-label prefix such as `selector1-<domain>` can only be written as a whole `*`; do not write partial-label patterns.
 New i18n keys: esp.mailup.* (and the other chosen ids) notes and pitfall keys (en + it)
-Status: todo
+Status: in-review
+
+## Note (coder, 2026-11-11)
+All pages fetched 2026-11-11 with `curl -sL` (HTTP 200) and quotes copied from the raw page text (Atlassian pages are server-rendered; the text sits in the HTML).
+
+### mailup (status: verified)
+Sources (helpmailup.atlassian.net/wiki/spaces/MM/pages/): 37519747 "DKIM non trovato", 810156046 "Configurazione Record SPF", 809926670 "Parametri di configurazione SPF, DKIM e DMARC".
+- DKIM: "Chiedigli di creare questi due CNAME" ; "ml01._domainkey.mydomain.com ... e fallo puntare a ml01.dkim.musvc.com." (same for ml02). Selectors are fixed; `target_pattern` is the literal target (no wildcard). Agrees with `seeds/dkim_selectors.yaml` (ml01, ml02).
+- SPF: "Se è già attivo un record SPF è necessario aggiungere la stringa "include:musvc.com" prima della keyword finale "~all"." Where: the pages refer to the sending domain ("mydomain.com va sostituito con il dominio mittente utilizzato per gli invii"); no subdomain or CNAME host is involved, so `spf.includes: [musvc.com]`.
+- Pitfall SPF_ONLY_IF_PUBLISHED: "Se non pubblicato, non è necessario creare un record SPF." (verified, quoted).
+- Pitfall DKIM_TXT_ALTERNATIVE: "Se non è possible creare un CNAME, puoi anche implementare l'autenticazione DKIM facendo delle modifiche ad alcuni record TXT delle impostazioni DNS. In tal caso, contattaci per maggiori dettagli" (verified; TXT details not published, so not modelled).
+- Pitfall UNAUTHENTICATED_VIA: "Se non autentichi le email, lo faremo noi per te." and Outlook/Gmail may show "tramite" / "per conto" (verified).
+- Not modelled (no DNS record documented in the help centre pages read): return path/bounce (no page found), tracking domain (page 37328870 "Dominio di tracciamento - personalizzazione base" describes the feature but states no DNS record type, host or target). Both are simply absent, not marked unverified.
+
+### emailchef (status: verified)
+Source: https://emailchef.com/knowledge-base/how-to-set-up-the-domain-authentication-mode/
+- SPF: "include:spf.emailchef.com after the v=spf1 string"; if absent, "create a TXT record to add to your email address domain (yourdomain.com)": `v=spf1 a mx include:spf.emailchef.com ?all`. Root domain, so the include goes in `spf.includes`.
+- DKIM: "The DKIM record must be added to the subdomain 'mailchef._domainkey'. Like the SPF, the DKIM record can also be inserted as a TXT record." -> selector `mailchef`, type txt. The public key on the page is deliberately not copied.
+- Pitfall: "the parameters provided may be different to the parameters on your domain" (verified, quoted).
+- Not modelled: bounces ("Emailchef handles your bounces", no DNS record) and tracking (not on the page).
+- `mailchef` is not in `seeds/dkim_selectors.yaml` (no overlap, no conflict); the maintainer may want to add it there.
+
+### Skipped candidates
+- Contactlab/Experian, Agile Telecom, Aruba: homepages reachable (HTTP 200), but I did not search their documentation for a setup page; the ticket allows at most two profiles and two were verified. Not evaluated, not rejected: no claim about whether they have public docs or serve third-party domains.
+
+### Unverified list for the maintainer
+- None marked unverified. Open point: the SPF pages do not say "root domain" in so many words; inferred from "dominio mittente".
+
+### Italian wording to review
+All 4 new it strings (esp.mailup.* x3, esp.emailchef.check_parameters_in_account). The Emailchef it label "Autenticazione dominio (Domain Authentication)" is not verified against the Italian UI (the page read is the English one).
+Schema gaps: none found.
