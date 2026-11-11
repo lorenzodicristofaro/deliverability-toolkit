@@ -3,7 +3,7 @@
 Resume with `/gm`. The maintainer asked to stop after the M6-07 QA round; no coder is running.
 
 ## State
-- M1–M5 accepted; `qa` → `main` pending the maintainer for M1–M5.
+- M1–M5 accepted; `main` = `qa` (M1–M5) via PR #1.
 - M6 done on local dev: M6-00, 01, 02, 03, 04, 05, 06, 06b, 06c, 07, 12, 13, 13b. Last gate: merge ba0ee68, full PostgreSQL suite 30033 passed, lint clean.
 - M6 open, in this order:
   1. M6-08 profiles: SendGrid, Amazon SES, Mailgun (sonnet coder, QA opus).

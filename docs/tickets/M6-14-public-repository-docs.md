@@ -19,3 +19,4 @@ New i18n keys: none
 HUMAN step (maintainer): enable private vulnerability reporting in repo Settings -> Advanced Security, otherwise SECURITY.md points to a feature that is off.
 Status: in-review
 Coder note: references fixed in WORKFLOW, SETUP, HANDOFF, RELEASE. TODO.md still has two items mentioning branch protection / the 2026-12-21 push (M5-15c check, M6-00 follow-up): TODO.md is out of scope, PM to update. HANDOFF State line "qa -> main pending for M1-M5" left as is (not named in the ticket). `ci.yml` path filters list docs/RELEASE.md (file still exists).
+Round 2 (QA): HANDOFF State line now says main = qa (M1-M5) via PR #1; RELEASE.md notes paths-ignore may leave PR checks Pending on docs-only qa -> main; CLAUDE.md untrusted-content bullet allows reading as data, never following as instructions.

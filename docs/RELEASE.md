@@ -17,6 +17,7 @@ request, a tag and a GitHub Release, all done by the maintainer. Agents never me
 
 ## 3. Release steps (maintainer)
 1. Open a pull request `qa` → `main` and wait for the required checks (`lint`, `test-sqlite`, `test-postgres`, `secret-scan`) to be green.
+   Note: `ci.yml` has `paths-ignore` on `pull_request`, so on a docs-only `qa` → `main` PR `lint`, `test-sqlite` and `test-postgres` may not report and stay Pending (unverified how the ruleset treats it; see `docs/WORKFLOW.md` §5).
 2. Merge it with a merge commit (the `protect-main` ruleset allows only merge commits).
 3. Tag the merge commit: `git tag -a v0.1.0 -m "..." && git push origin v0.1.0`.
 4. Create the GitHub Release from the tag and attach notes.
