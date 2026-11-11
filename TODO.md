@@ -173,6 +173,7 @@ Carried over from M0-07 QA:
   - [ ] M6-19 follow-up (QA nit, round 2): app/checks/esp_profile.py:335-343 — for an `a` term where the A query succeeded but AAAA hit the query cap, the ESP_DNS_ERROR finding says rdtype "A" instead of "AAAA" (cosmetic; status is still error). Optional: a direct MAX_NODES test (same branch as the depth cap).
   - [x] M6-20 deps: upgrade dnspython to 2.9.0, CVE-2026-114605 (opus, no dependencies); dev CI green at 390cf69
   - [x] M6-21 deps: dnspython 2.9.2 plus compression-pointer regression test (opus, depends on M6-20); merged 9b0d610, QA APPROVE
+  - [x] M6-22 docs: record the xato.net dataset terms (public domain, Mark Burnett) in the password list header and THIRD_PARTY_NOTICES, add attribution (sonnet; resolves the "MAINTAINER TO CONFIRM ... xato.net" item below)
   - [ ] M6-21 nit (QA, optional): tests/dns/test_backends.py:229-247 — add a pointer-chain variant whose chain resolves to the qname itself, to prove a vulnerable parser cannot yield a spoofed ok.
   - [ ] Optional, pending maintainer decision (GM proposed 2026-11-11): add `pip-audit` as a CI job on dev
 
@@ -309,7 +310,7 @@ Carried over from M0-07 QA:
 - [ ] `services.auth.rotate_session` helper (`_switch` reads the sessions row directly)
 - [ ] Dispose of the DB engine at shutdown via the lifespan
 - [ ] A breached-password corpus check, offline
-- [ ] MAINTAINER TO CONFIRM before the public release: the terms of the original xato.net dataset behind the SecLists password list are unverified
+- [x] MAINTAINER TO CONFIRM before the public release: the terms of the original xato.net dataset behind the SecLists password list are unverified: resolved by M6-22 (public domain per the original 2015 post; attribution to Mark Burnett added)
 - [ ] A TenantMembershipRepository.create() helper (setup uses memberships.add(model(...)))
 - [ ] NFC normalisation of email and password (login and setup together)
 - [ ] A dedicated permission action for domain access management, replacing the USER_MANAGE+DOMAIN_UPDATE combination on PUT /domains/{id}/access
