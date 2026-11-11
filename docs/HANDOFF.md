@@ -1,11 +1,11 @@
-# HANDOFF — 2026-11-11 (M6 incl. M6-16..21 done on dev; promotion to qa pending green dev CI)
+# HANDOFF — 2026-11-11 (M6 incl. M6-16..21 done; promoted to qa 0ac78cb; qa → main with the maintainer)
 
 Resume with `/gm`. No coder is running.
 
 ## State
 - M1–M5 accepted; `main` = `qa` (M1–M5) via PR #1.
 - Maintainer decisions 2026-11-11: repository public; Actions minutes unlimited; rulesets `protect-qa` and `protect-main` active; private vulnerability reporting enabled. Done as M6-14 (docs, deny rules for gh pr merge/release/api/repo/secret) and M6-15 (CodeQL advanced setup, tests/ excluded).
-- M6 incl. M6-16..21 done on dev (9b0d610, CI pending). `qa` is still at 3a24120 (M6 up to M6-15). Promotion dev → qa waits for green dev CI.
+- M6 incl. M6-16..21 done on dev; dev CI green on f16e363; promoted dev → qa at 0ac78cb.
 - M6-16..21: vendor profiles from maintainer pages, MailUp `spf.only_if_record`, DKIM seed, esp check DNS failures, dnspython 2.9.2 (CVE-2026-114605). Details in docs/reports/M6.md.
 - Vendor facts only from official docs; anything not confirmable is `unverified` and goes to the maintainer. ESP profiles serve detection/association; required/optional vendor disputes are not escalated (maintainer 2026-11-11).
 - Maintainer decision 2026-11-10: client viewers read ESP data on assigned domains (assigned + detected ESPs + full `esp` result), no writes; SPEC §3 updated.
@@ -39,6 +39,6 @@ Resume with `/gm`. No coder is running.
 - Carried over: M4 provider samples; Mailchimp/Postmark/HubSpot DKIM sources; PSL licence; HTMX under CSP; Gmail clipping and URL shorteners (t.co, tinyurl.com, ow.ly, buff.ly, lnkd.in, is.gd, j.mp) unverified.
 
 ## Next 3 steps
-1. Promote dev → qa when dev CI is green.
-2. Maintainer: qa → main PR (CodeQL first).
+1. Maintainer: qa → main PR for M6 (switch CodeQL Default → Advanced first).
+2. Maintainer items: second Dependabot alert, pip-audit CI job, Italian review, SecLists terms.
 3. Plan M7 from TODO.md; review SPEC §5 HTTP custom checks wording at M7 start (`http_fetch` deferred, M5-22).
