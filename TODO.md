@@ -158,6 +158,8 @@ Carried over from M0-07 QA:
   - [x] M6-13 detect ESPs configured in DNS but not assigned (opus, depends on M6-06, M6-04/05)
   - [x] M6-13b bounded, fail-fast DKIM detection probes (opus, depends on M6-13; M6-08..10 depend on it)
   - [x] M6-07 domain page ESPs tab (depends on M6-06, M6-06b, M6-06c, M6-13; client viewers read-only)
+  - [ ] M6-14 public repository: workflow, release, security docs and agent permissions (maintainer decision 2026-11-11, run before M6-08)
+  - [ ] M6-15 CI: CodeQL advanced setup excluding tests (maintainer decision 2026-11-11, run before M6-08; depends on M6-14)
   - [ ] M6-08 profiles: SendGrid, Amazon SES, Mailgun (official docs only)
   - [ ] M6-09 profiles: MailUp/TeamSystem + up to two Italian ESPs (official docs only)
   - [ ] M6-10 profiles: Google Workspace, Microsoft 365, Brevo (official docs only)
