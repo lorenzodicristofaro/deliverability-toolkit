@@ -25,4 +25,4 @@ Acceptance criteria:
   - (a) `esp.mailgun.tracking` en + it: mention that Mailgun's domain verification docs list the tracking CNAME as required for tracking.
   - (b) locales/it.json `esp.sendgrid.tracking` (line ~235): "da cui serve i link" becomes "da cui distribuisce i link".
 New i18n keys: rewritten `esp.mailup.spf_only_if_published` (en + it) and any new `esp.mailup.*` key (en + it); changed `esp.mailgun.tracking` (en + it) and `esp.sendgrid.tracking` (it)
-Status: todo
+Status: done (merge 8eac9cb)

@@ -165,7 +165,7 @@ Carried over from M0-07 QA:
   - [x] M6-10 profiles: Google Workspace, Microsoft 365, Brevo (official docs only) (Brevo skipped)
   - [x] M6-11 acceptance: sample domains produce expected findings, docs/CHECKS.md
   - [x] M6-16 ESP profiles from maintainer-supplied pages: SendGrid link branding, Mailgun, Brevo
-  - [ ] M6-17 MailUp SPF: apply maintainer decision, include only when an SPF record exists (opus, depends on M6-16)
+  - [x] M6-17 MailUp SPF: apply maintainer decision, include only when an SPF record exists (opus, depends on M6-16)
   - [x] M6-12 contributor guide docs/ESP_PROFILES.md
   - [ ] M6-18 DKIM seed: add mailchef (Emailchef) and brevo1/brevo2 (Brevo) (sonnet, depends on M6-17)
   - [ ] M6-19 esp check: report DNS failures on an ESP's SPF include host (opus, depends on M6-17)
@@ -207,6 +207,7 @@ Carried over from M0-07 QA:
 - [ ] ESP schema gaps (M6-16, later milestone): per-domain generated DKIM selector names (Mailgun TXT, Mailgun ASS pdk-like CNAMEs); DKIM "TXT or CNAME" alternatives (Brevo, Mailgun, SendGrid m1 vs s1/s2); verification TXT records (Brevo code); target for tracking_domain/return_path; Brevo new-flow branded CNAMEs (help article 35337929909778, "only available to some accounts").
 - [x] DKIM seed (M6-16): brevo1/brevo2 confirmed on help.brevo.com; adding them needs `"help.brevo.com": "brevo"` in `_VENDOR_HOSTS` in tests/checks/test_dkim_selectors.py. Moved to M6-18.
 - [ ] SendGrid domain-authentication page documentation error recorded (M6-16 QA): it says "To route click and open tracking statistics ... Twilio SendGrid requires this CNAME record" under the bullet describing the s1/s2 DKIM CNAMEs, and mentions a selector "s" while the table uses s1/s2; profile values follow the table. "optional" for link branding rests on "If you choose No, you can add Link Branding later".
+- [ ] M6-17 QA nits: (a) docs/templates/esp-profile.example.yaml: add a commented `only_if_record` line pointing to the docs/ESP_PROFILES.md table (new opt-in field `spf.only_if_record`, used only by MailUp). (b) locales/it.json:227 `esp.mailup.spf_only_if_published`: avoid repeating "il DMARC" (e.g. "...perché verifica l'SPF sul dominio del return-path..."); fold into the maintainer Italian review. (c) Optional test: opt-in profile with an "ok" DNS answer carrying no TXT records (classified as error), same path as the existing failure-state test.
 - [ ] Test nit (M6-16 QA): tests/esp/test_acceptance.py:393-419 could add a variant per profile with only one part unverified.
 - [ ] nit (M6-08 QA): SendGrid Note quote reads '...and supports SPF'; the page says '...supports SPF and DKIM'.
 - [ ] ESPs tab (M6-07 QA): should-fix test gap: tests/web/test_domain_esps_ui.py:295-311 has no regression test for hostile DNS evidence (an SPF include or CNAME target carrying `"><script>` from a fake-DNS zone, asserted escaped in `esps-detected` and the per-ESP group); QA checked it by hand and it is escaped. Nits: removing an already-removed assignment shows the full 404 page (app/web/domain_esps.py:291), a redirect with a notice is friendlier; the M6-07 ticket says app/web/__init__.py but routers register in app/main.py. Per-user rate limiting of DNS-running GETs is a project-wide gap (app/api/v1/checks.py:33).
