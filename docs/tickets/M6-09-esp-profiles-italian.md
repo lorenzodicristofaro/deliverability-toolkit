@@ -15,7 +15,7 @@ Acceptance criteria:
 - i18n key rule: `notes_key` values must not contain hyphens (the loader regex `_NOTES_KEY` in app/esp/profile.py rejects them). The key segment is the profile id with `-` replaced by `_`. Profile ids and file names may keep hyphens.
 - `target_pattern` `*` matches exactly one whole DNS label. A partial-label prefix such as `selector1-<domain>` can only be written as a whole `*`; do not write partial-label patterns.
 New i18n keys: esp.mailup.* (and the other chosen ids) notes and pitfall keys (en + it)
-Status: in-review
+Status: done
 
 ## Note (coder, 2026-11-11)
 All pages fetched 2026-11-11 with `curl -sL` (HTTP 200) and quotes copied from the raw page text (Atlassian pages are server-rendered; the text sits in the HTML).

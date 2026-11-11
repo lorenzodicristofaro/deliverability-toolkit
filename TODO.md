@@ -161,7 +161,7 @@ Carried over from M0-07 QA:
   - [x] M6-14 public repository: workflow, release, security docs and agent permissions (maintainer decision 2026-11-11, run before M6-08)
   - [x] M6-15 CI: CodeQL advanced setup excluding tests (maintainer decision 2026-11-11, run before M6-08; depends on M6-14)
   - [x] M6-08 profiles: SendGrid, Amazon SES, Mailgun (official docs only)
-  - [ ] M6-09 profiles: MailUp/TeamSystem + up to two Italian ESPs (official docs only)
+  - [x] M6-09 profiles: MailUp/TeamSystem + up to two Italian ESPs (official docs only)
   - [ ] M6-10 profiles: Google Workspace, Microsoft 365, Brevo (official docs only)
   - [ ] M6-11 acceptance: sample domains produce expected findings, docs/CHECKS.md
   - [x] M6-12 contributor guide docs/ESP_PROFILES.md
@@ -192,6 +192,7 @@ Carried over from M0-07 QA:
 - [ ] Security review checklist, dependency/license audit, v0.1.0 release
 
 ## Follow-ups (post-M1)
+- [ ] MAINTAINER (M6-09): MailUp help pages conflict on domains without an SPF record (810156046/809926670 'non è necessario'; 37519762 asks for v=spf1 include:musvc.com ~all, needed for DMARC) — the pitfall reports both; decide. Add `mailchef` (Emailchef, TXT) to seeds/dkim_selectors.yaml? Review the Italian wording of the esp.mailup.* and esp.emailchef.* strings. Contactlab/Experian, Agile Telecom, Aruba not evaluated (two-profile cap).
 - [ ] ESP schema gap (M6-08): DKIM selectors that are per-identity (Amazon SES, names shown in the console) or not documented (Mailgun) cannot be expressed; both profiles ship `selectors: []` plus a pitfall. Plan a schema extension (e.g. per-assignment selector names) in a later ticket. A future SES target pattern must not assume dkim.<region>.amazonses.com (hosted zone varies by Region and identity).
 - [ ] MAINTAINER (M6-08 vendor facts, unverified): SendGrid link-branding/tracking CNAME (host, target, optional); Mailgun DKIM selector name, tracking host, whether Automatic Sender Security/key rotation makes DKIM a CNAME, whether the tracking CNAME is required with tracking off. Maintainer is collecting the official pages (2026-11-11).
 - [ ] nit (M6-08 QA): SendGrid Note quote reads '...and supports SPF'; the page says '...supports SPF and DKIM'.
