@@ -14,6 +14,7 @@ pitfalls:
 verified_on: 2026-11-11
 sources:
   - https://helpmailup.atlassian.net/wiki/spaces/MM/pages/37519747/DKIM+non+trovato
+  - https://helpmailup.atlassian.net/wiki/spaces/MM/pages/37519762/SPF+non+trovato
   - https://helpmailup.atlassian.net/wiki/spaces/MM/pages/810156046/Configurazione+Record+SPF
   - https://helpmailup.atlassian.net/wiki/spaces/MM/pages/809926670/Parametri+di+configurazione+SPF+DKIM+e+DMARC
 status: verified
