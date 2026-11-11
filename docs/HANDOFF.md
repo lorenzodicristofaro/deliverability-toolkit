@@ -1,4 +1,4 @@
-# HANDOFF — 2026-11-11 (M6 incl. M6-16..21 done; promoted to qa 0ac78cb; qa → main with the maintainer)
+# HANDOFF — 2026-11-11 (M6 incl. M6-16..21 done; promoted to qa (M6-22 included); qa → main with the maintainer)
 
 Resume with `/gm`. No coder is running.
 
