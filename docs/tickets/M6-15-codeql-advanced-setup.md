@@ -18,4 +18,8 @@ Acceptance criteria:
 New i18n keys: none
 HUMAN step (maintainer): switch CodeQL from Default to Advanced setup in Settings -> Advanced Security (Code security) before the next PR to main; otherwise the advanced analysis upload is rejected while default setup is enabled. CodeQL is not a required check in protect-main.
 Not verifiable locally: the first run happens on the next PR to main; the coder states this in the ticket.
-Status: todo
+Status: in-review
+Coder note: codeql.yml + codeql-config.yml added, docs updated. First real run = next PR to main (not verifiable locally); the HUMAN step above must be done first.
+Pins: actions/checkout 3d3c42e5 (v7.0.1, same as ci.yml); github/codeql-action init+analyze 33d7b85d (release tag v4.39.3; peeled commit of the annotated tag, via git ls-remote).
+Docs checked: docs.github.com/en/code-security/code-scanning/creating-an-advanced-setup-for-code-scanning/customizing-your-advanced-setup-for-code-scanning (languages, config-file, paths-ignore); codeql-action README and init/action.yml at the pinned SHA (security-events: write required; contents: read documented for private repos; inputs languages, build-mode, config-file).
+Unverified: build-mode none for python, javascript-typescript, actions (docs page lists none only for C/C++, C#, Java, Rust; its matrix examples show it for javascript-typescript and python; actions not confirmed); actions: read omitted (not found in the docs fetched); contents: read kept for checkout; the workflow-configuration-options docs URL returned 404; actionlint not available.

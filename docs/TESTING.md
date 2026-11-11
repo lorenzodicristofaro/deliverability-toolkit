@@ -39,6 +39,13 @@ and blocks the pull request. `docs/TESTING.md` is not ignored because
 `test_exemptions_are_documented` reads it. Secret scanning is in `secret-scan.yml`, which has no path
 filter and runs on docs-only changes too.
 
+`.github/workflows/codeql.yml` runs CodeQL (advanced setup) for `python`, `javascript-typescript` and
+`actions` on pushes to `main`, pull requests to `main` and weekly (Mondays 04:23 UTC). It is not a
+required check. `.github/codeql/codeql-config.yml` sets `paths-ignore: tests` because `tests/` holds
+intentional ReDoS fixtures and HTML/URL assertions that CodeQL reports as high alerts, and the default
+setup cannot exclude paths. The maintainer must switch CodeQL from Default to Advanced setup in the
+repository settings, otherwise the upload is rejected.
+
 ## Seed sync at app startup
 
 `app.main` runs the real seed sync at every app start. The modules in `SEEDLESS_MODULES`
