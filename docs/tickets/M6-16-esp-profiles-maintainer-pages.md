@@ -21,4 +21,4 @@ Acceptance criteria:
 - `target_pattern` `*` matches exactly one whole DNS label; no partial-label patterns.
 - The coder lists in the Note which MAINTAINER follow-ups in TODO.md (M6-08 / M6-10) are now resolved; the PM updates TODO.md.
 New i18n keys: esp.brevo.* and any changed esp.sendgrid.* / esp.mailgun.* keys (en + it)
-Status: todo
+Status: done (merge f7641d1)

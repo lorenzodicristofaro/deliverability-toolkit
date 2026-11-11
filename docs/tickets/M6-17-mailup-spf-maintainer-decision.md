@@ -1,7 +1,7 @@
 # M6-17 MailUp SPF: apply the maintainer decision (include only when an SPF record exists)
 Milestone: M6
 Branch: feature/m6-17-mailup-spf-decision
-Files in scope: profiles/esp/mailup.yaml, app/esp/ (only if needed), app/checks/ esp check (only if needed), locales/en.json and locales/it.json (`esp.mailup.*` and any new key), tests/esp/, tests/checks/, docs/ESP_PROFILES.md, docs/CHECKS.md, ARCHITECTURE.md only if the engine/schema change affects it (the coder reports it; the PM never edits it)
+Files in scope: profiles/esp/mailup.yaml, app/esp/ (only if needed), app/checks/ esp check (only if needed), locales/en.json and locales/it.json (`esp.mailup.*` and any new key; also `esp.mailgun.tracking` en + it and `esp.sendgrid.tracking` it), tests/esp/, tests/checks/, docs/ESP_PROFILES.md, docs/CHECKS.md, ARCHITECTURE.md only if the engine/schema change affects it (the coder reports it; the PM never edits it)
 Out of scope: other profiles' behaviour (unless they opt in), the `mailchef` seed question, Italian wording review of other strings, Contactlab/Agile Telecom/Aruba
 Depends on: M6-16
 Parallel-safe: no (locale files)
@@ -21,5 +21,8 @@ Acceptance criteria:
 - Table-driven tests (no network): SPF record present with the include, present without the include, no record, DNS failure on the SPF lookup gives `error`, never `ok` (no swallowed DNS failure).
 - Other profiles' behaviour is unchanged unless they opt in; existing M6-11 acceptance tests and `tests/esp/test_shipped_profiles.py` still pass.
 - No vendor facts invented: any value not already verified stays as in the current profile; flag anything unverifiable.
-New i18n keys: rewritten `esp.mailup.spf_only_if_published` (en + it) and any new `esp.mailup.*` key (en + it)
+- Locale fixes carried from M6-16 QA (same locale files):
+  - (a) `esp.mailgun.tracking` en + it: mention that Mailgun's domain verification docs list the tracking CNAME as required for tracking.
+  - (b) locales/it.json `esp.sendgrid.tracking` (line ~235): "da cui serve i link" becomes "da cui distribuisce i link".
+New i18n keys: rewritten `esp.mailup.spf_only_if_published` (en + it) and any new `esp.mailup.*` key (en + it); changed `esp.mailgun.tracking` (en + it) and `esp.sendgrid.tracking` (it)
 Status: todo
