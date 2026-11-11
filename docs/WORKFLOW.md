@@ -86,6 +86,12 @@ change, including the PostgreSQL params when local PostgreSQL is up, and the ful
 shared test fixtures, migrations or code used across the app. QA runs the full suite once, on the final round's
 commit. The GM runs it on the merge result. CI on `dev` remains the gate after every merge.
 
+Non-code tickets (maintainer decision 2026-11-11): when the diff touches only comments, documentation or data files
+(seeds, profiles, locale strings, notices), or only adds tests without changing app code, QA runs ruff, mypy and the
+relevant tests instead of the full suite; the GM skips a local full suite on the merge. CI on `dev` (SQLite and
+PostgreSQL) is the full-suite gate. Such tickets default to `sonnet` for coder and QA unless the data needs judgement
+across conflicting vendor sources.
+
 ## 4. Loop
 
 1. GM reads CLAUDE.md, WORKFLOW.md, TODO.md and `docs/HANDOFF.md` (if present).
