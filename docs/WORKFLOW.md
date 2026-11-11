@@ -119,6 +119,7 @@ commit. The GM runs it on the merge result. CI on `dev` remains the gate after e
   reasons at the top of that file); on `main` pushes `ci.yml` calls it without a path filter, so `main` runs
   every job. `qa` pushes run nothing. A path-filtered or skipped workflow reports no check at all, so a
   required check can stay Pending on a pull request that skips it (how the ruleset treats this is unverified).
+  `codeql.yml` (M6-15) runs CodeQL on `main` pushes, pull requests to `main` and weekly; not a required check.
 - Coder, PM and QA never push. `main`, tags, releases, force pushes and branch deletions stay with the human.
 - Enforced in two layers. Client side, `.claude/settings.json`: exact allow rules for `git push origin dev|qa`,
   deny rules for `main`, tags, force, `--all`, `--mirror`, delete refspecs, and for `gh pr merge`, `gh release`,

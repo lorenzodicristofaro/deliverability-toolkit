@@ -1,0 +1,39 @@
+# CodeQL advanced setup (M6-15). Replaces the default setup, which cannot exclude paths (tests/).
+# Not a required check in protect-main. See docs/TESTING.md.
+name: CodeQL
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "23 4 * * 1" # Mondays 04:23 UTC
+
+permissions: {}
+
+jobs:
+  analyze:
+    name: analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    permissions:
+      # Required by every advanced-setup code scanning workflow (codeql-action README).
+      security-events: write
+      # Needed by actions/checkout once permissions are set explicitly.
+      contents: read
+      # actions: read is omitted on purpose: it is only for private repositories and this one is public.
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [python, javascript-typescript, actions]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # codeql-action: specific release tag v4.39.3 (not the moving v4)
+      - uses: github/codeql-action/init@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
+          config-file: ./.github/codeql/codeql-config.yml
+      - uses: github/codeql-action/analyze@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+        with:
+          category: "/language:${{ matrix.language }}"
