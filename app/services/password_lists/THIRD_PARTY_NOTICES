@@ -30,3 +30,23 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ----- END SecLists LICENSE -----
+
+Upstream dataset.
+
+The SecLists file above is itself derived from the "ten million passwords" data set published
+by Mark Burnett (xato.net).
+
+Original dataset: Mark Burnett (xato.net)
+Publication: "Today I Am Releasing Ten Million Passwords", 02.09.15, archived copy
+https://web.archive.org/web/20150211131735/https://xato.net/passwords/ten-million-passwords/
+(verified_on 2026-11-11).
+Public-domain statement, quoted from that post:
+  "So I built a data set of ten million usernames and passwords that I am releasing to the
+  public domain."
+  "This data is extremely valuable for academic and research purposes and for furthering
+  authentication security and this is why I have released it to the public domain."
+
+The footer of that site reads: "This work by Mark Burnett is licensed under a Creative Commons
+Attribution-ShareAlike 3.0 Unported License . Any use of this content must include attribution
+to Mark Burnett (xato.net)." It is reproduced here for completeness; it appears to cover the
+site's articles, and attribution is given regardless.

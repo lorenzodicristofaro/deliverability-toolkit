@@ -554,6 +554,7 @@ def test_third_party_notice_bundles_seclists_licence() -> None:
     assert "MIT License\n\nCopyright (c) 2018 Daniel Miessler\n" in notice
     assert 'THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND' in notice
     assert "c205c36a445bff37f8e58a9ec829105cd4975c58" in notice
+    assert "Mark Burnett" in notice
 
 
 def test_common_password_rejected_in_italian(running: Running) -> None:
