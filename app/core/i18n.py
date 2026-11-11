@@ -58,6 +58,16 @@ def _missing(key: str, lang: str) -> str:
     return key
 
 
+def has_key(key: str, lang: str = DEFAULT_LANGUAGE) -> bool:
+    """True when ``t(key, lang)`` finds a template (``lang`` or the English fallback).
+
+    For data-driven keys (e.g. an ESP ``notes_key``), so a missing one never leaks the raw key.
+    """
+    if lang in SUPPORTED_LANGUAGES and key in load_catalogue(lang):
+        return True
+    return key in load_catalogue(DEFAULT_LANGUAGE)
+
+
 def t(key: str, lang: str = DEFAULT_LANGUAGE, **params: object) -> str:
     """Translate ``key`` into ``lang``, falling back to English, then to the key itself."""
     template = load_catalogue(lang).get(key) if lang in SUPPORTED_LANGUAGES else None

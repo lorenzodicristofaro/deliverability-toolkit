@@ -40,17 +40,22 @@ from starlette.routing import Mount, Route
 
 import app.api
 import app.web
+from app.api.v1.domain_esps import esp_profiles
 from app.core.i18n import t
 from app.core.security import SESSION_COOKIE_NAME
 from app.core.tenancy import TenantContext
+from app.esp.profile import read_esp_profiles
 from app.main import create_app
 from app.repositories import repo_for
 from app.repositories.base import MAX_LIMIT
 from app.repositories.content_rules import ContentRuleRecord
 from app.repositories.custom_checks import CustomCheckRecord
 from app.repositories.dkim_selectors import DkimSelectorRecord
+from app.repositories.domain_esps import DomainEspRecord
 from app.web import deps
 from tests.tenancy.conftest import (
+    A_DOMAINS,
+    B_DOMAINS,
     B_TENANT_NAME,
     ROLES,
     World,
@@ -240,6 +245,14 @@ def _custom_dry_run(w: World, _role: str) -> dict[str, Any]:
     }
 
 
+_ESPS_404 = "api.domain_esps.error.not_found"
+B_ESP = "b-private-esp"  # tenant B's assignment; `{esp_id}` in ESP paths
+
+
+def _esp_hosts(_w: World, _role: str) -> dict[str, Any]:
+    return {"return_path_host": None, "tracking_host": None}
+
+
 def _rule_sample(_w: World, _role: str) -> dict[str, Any]:
     return {"kind": "keyword", "pattern": "probe", "sample": "probe text"}
 
@@ -248,6 +261,10 @@ def _rule_form(_w: World, _role: str) -> dict[str, Any]:
     return {
         "name": "probe"
     }  # incomplete on purpose: a permitted role gets a 422, nothing is stored
+
+
+def _esp_form(_w: World, _role: str) -> dict[str, Any]:
+    return {"esp_id": "example-esp"}
 
 
 def _toggle(_w: World, _role: str) -> dict[str, Any]:
@@ -411,7 +428,24 @@ MATRIX: dict[tuple[str, str], Entry] = {
     # The free route needs `?name=`; without it permitted roles get 422 (decided before streaming).
     ("GET", "/domains/{domain_id}/authentication"): Entry(Kind.DOMAIN),
     ("GET", "/domains/{domain_id}/authentication/dkim/stream"): Entry(Kind.DOMAIN),
+    # ESPs tab (app.web.domain_esps, M6-07): read = domain.read (client viewers on assigned
+    # domains, read-only); writes need domain.update. Per role: tests/web/test_domain_esps_ui.py.
+    ("GET", "/domains/{domain_id}/esps"): Entry(Kind.DOMAIN),
+    ("POST", "/domains/{domain_id}/esps"): Entry(Kind.DOMAIN, body=_esp_form),
+    ("POST", "/domains/{domain_id}/esps/{esp_id}/remove"): Entry(Kind.DOMAIN),
     ("GET", "/tools/dkim/stream"): Entry(Kind.DNS, own={**_by_role(422, 422), "viewer": 403}),
+    # ESP API (app.api.v1.domain_esps). The catalogue is tenant-level, public profile data with
+    # no tenant content: every member reads it, client viewers included (M6-06c). The domain
+    # routes answer 404 for every role on a foreign or unassigned domain; the per-role table on
+    # tenant A's own domains is `test_esp_role_table` below and tests/api/test_domain_esps_api.py.
+    ("GET", "/api/v1/esp-profiles"): Entry(Kind.DNS, own=_by_role(200, 200), not_found=_ESPS_404),
+    ("GET", "/api/v1/domains/{domain_id}/esps"): Entry(Kind.DOMAIN, not_found=_ESPS_404),
+    ("PUT", "/api/v1/domains/{domain_id}/esps/{esp_id}"): Entry(
+        Kind.DOMAIN, body=_esp_hosts, not_found=_ESPS_404
+    ),
+    ("DELETE", "/api/v1/domains/{domain_id}/esps/{esp_id}"): Entry(
+        Kind.DOMAIN, not_found=_ESPS_404
+    ),
 }
 
 # Public routes by (method, path): a new method on an exempt path is NOT exempt. Keep this
@@ -689,6 +723,22 @@ def b_custom_check(w: World) -> CustomCheckRecord:
     return created
 
 
+def b_esp(w: World) -> DomainEspRecord:
+    """Tenant B's ESP assignment on its secret domain, created on first use. Its host holds the
+    secret domain name, so `leaks` catches it in any response or log line. The world baseline
+    does not cover ESP assignments."""
+    w.db.expire_all()
+    repository = repo_for(TenantContext(w.tenants["b"], w.users["b_owner"]), w.db).domain_esps
+    secret = w.domains["secret"]
+    for existing in repository.list_for_domain(secret):
+        if existing.esp_id == B_ESP:
+            return existing
+    created = repository.add(secret, B_ESP, return_path_host=f"bounce.{B_DOMAINS['secret']}")
+    assert created is not None
+    w.db.commit()
+    return created
+
+
 def _path(w: World, case: Case) -> str:
     if "{custom_check_id}" in case.leaf.path:
         return case.leaf.path.replace("{custom_check_id}", str(b_custom_check(w).id))
@@ -696,6 +746,10 @@ def _path(w: World, case: Case) -> str:
         return case.leaf.path.replace("{rule_id}", str(b_rule(w).id))
     if "{selector_id}" in case.leaf.path:
         return case.leaf.path.replace("{selector_id}", str(b_selector(w).id))
+    if "{esp_id}" in case.leaf.path:
+        case_path = case.leaf.path.replace("{esp_id}", b_esp(w).esp_id)
+    else:
+        case_path = case.leaf.path
     target_domain = {
         "b_domain": "secret",
         "b_session": "secret",
@@ -703,7 +757,7 @@ def _path(w: World, case: Case) -> str:
         "unassigned": "unassigned",
         "-": "secret",
     }.get(case.target, "secret")
-    return case.leaf.path.replace("{domain_id}", str(w.domains[target_domain]))
+    return case_path.replace("{domain_id}", str(w.domains[target_domain]))
 
 
 def _listed_ids(case: Case, response: Any) -> set[int]:
@@ -747,6 +801,7 @@ def _check_case(world: World, logs: pytest.LogCaptureFixture, case: Case) -> Non
         if case.leaf.path.startswith(("/api/v1/dkim-selectors", "/dkim-selectors"))
         else None
     )
+    esp_before = b_esp(world) if "/esps" in case.leaf.path else None
     tenant = "b" if case.target.startswith("b_session") else "a"
     fresh = entry.kind in (Kind.SESSION, Kind.SWITCH)  # these consume/rotate the session
     body = entry.body(world, case.role) if entry.body is not None else None
@@ -776,6 +831,8 @@ def _check_case(world: World, logs: pytest.LogCaptureFixture, case: Case) -> Non
         assert b_custom_check(world) == custom_before, "tenant B's custom check changed"
     if selector_before is not None:
         assert b_selector(world) == selector_before, "tenant B's selector changed"
+    if esp_before is not None:
+        assert b_esp(world) == esp_before, "tenant B's ESP assignment changed"
     after_a = world.state("a")
     if case.target == "smuggle" and response.status_code == 303:
         # The UI create ignores the smuggled tenant_id: the domain lands in tenant A only.
@@ -855,3 +912,81 @@ def test_mutated_world_is_detected(seeded_world: World) -> None:
         a_domains.delete(extra.id)
         seeded_world.db.commit()
     assert_pristine(seeded_world)
+
+
+# --- ESP role table on tenant A's own domains (M6-06c) -----------------------------------------
+
+ESP_FIXTURES = ROOT / "tests" / "fixtures" / "esp" / "valid"
+A_ESP = "example-esp"  # a profile of the fixture directory
+_WRITERS = ("owner", "admin", "instance_admin")
+# (route label, method, path tail on /api/v1/domains/{id}, JSON body)
+ESP_ROUTES: tuple[tuple[str, str, str, Any], ...] = (
+    ("list", "GET", "/esps", None),
+    ("put", "PUT", f"/esps/{A_ESP}", {"return_path_host": None, "tracking_host": None}),
+    ("delete", "DELETE", f"/esps/{A_ESP}", None),
+    ("check_esp", "POST", "/checks/esp", None),
+    ("check_all", "POST", "/checks/all", None),
+    ("check_ids", "POST", "/checks", {"ids": ["spf", "esp"]}),
+)
+
+
+def _esp_expected(route: str, role: str, domain: str) -> int:
+    if role == "viewer" and domain == "unassigned":
+        return 404
+    if route == "put":
+        return 200 if role in _WRITERS else 403  # the pair exists: PUT updates it
+    if route == "delete":
+        return 204 if role in _WRITERS else 403
+    return 200
+
+
+ESP_CASES = [
+    pytest.param(route, method, tail, body, role, domain, id=f"{route}[{role}/{domain}]")
+    for route, method, tail, body in ESP_ROUTES
+    for role in ROLES
+    for domain in ("assigned", "unassigned")
+    if domain == "assigned" or role == "viewer"
+]
+
+
+@pytest.mark.parametrize(("route", "method", "tail", "body", "role", "domain"), ESP_CASES)
+def test_esp_role_table(
+    world: World,
+    logs: pytest.LogCaptureFixture,
+    route: str,
+    method: str,
+    tail: str,
+    body: Any,
+    role: str,
+    domain: str,
+) -> None:
+    """Client viewer on its assigned domain: ESP reads and the `esp` check 200, writes 403; on an
+    unassigned domain 404; owner, admin, analyst and instance admin unchanged. The domain holds an
+    assignment, so a 403 or 404 body would show any ESP data it leaked."""
+    overrides = world.client.app.dependency_overrides  # type: ignore[attr-defined]
+    overrides[esp_profiles] = lambda: lambda: read_esp_profiles(ESP_FIXTURES)
+    repository = repo_for(TenantContext(world.tenants["a"], None), world.db).domain_esps
+    domain_id = world.domains[domain]
+    host = f"bounce.{A_DOMAINS[domain]}"
+    assert repository.add(domain_id, A_ESP, return_path_host=host) is not None
+    world.db.commit()
+    try:
+        response = world.send(role, method, f"/api/v1/domains/{domain_id}{tail}", json=body)
+        expected = _esp_expected(route, role, domain)
+        assert response.status_code == expected, response.text[:300]
+        assert leaks(world, response, logs) == []
+        if expected in (403, 404):
+            assert A_ESP not in response.text and host not in response.text
+        elif route == "list":
+            assert [i["esp_id"] for i in response.json()["items"]] == [A_ESP]
+        elif route.startswith("check_"):
+            payload = response.json()
+            results = payload if isinstance(payload, list) else [payload]
+            esp = next(r for r in results if r["check_id"] == "esp")
+            assert [s["id"] for s in esp["data"]["esps"]] == [A_ESP]
+    finally:
+        overrides.pop(esp_profiles, None)
+        world.db.rollback()
+        world.db.expire_all()
+        repository.remove(domain_id, A_ESP)
+        world.db.commit()

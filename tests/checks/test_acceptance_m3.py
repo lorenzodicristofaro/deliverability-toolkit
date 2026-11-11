@@ -31,6 +31,7 @@ import app.checks.dmarc_external as dmarc_ext_mod
 import app.checks.spf as spf_mod
 import app.services.checks as service_mod
 from app.api.v1 import checks as api_checks
+from app.api.v1.domain_esps import esp_profiles
 from app.checks.dkim_selectors import list_selectors
 from app.checks.models import CODE_RE, CheckContext, CheckResult
 from app.cli import check as cli_check
@@ -195,6 +196,7 @@ def rig(migrated_db_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[Rig]:
     application = create_app(settings)
     holder: list[Rig] = []
     application.dependency_overrides[api_checks._resolver] = lambda: holder[0].resolver()
+    application.dependency_overrides[esp_profiles] = no_esp_profiles
     monkeypatch.setattr(api_checks, "CheckContext", partial(CheckContext, clock=clock))
     monkeypatch.setattr(cli_check, "CheckContext", partial(CheckContext, clock=clock))
     try:
@@ -208,6 +210,29 @@ def rig(migrated_db_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[Rig]:
         if app_engine is not None:
             app_engine.dispose()
         engine.dispose()
+
+
+def no_esp_profiles() -> Callable[[], tuple[()]]:
+    """Profile source with no ESP profile: the domain `esp` check (M6-13) stays deterministic
+    whatever profile files the repository ships."""
+    return lambda: ()
+
+
+ESP_ENTRY = '{"check_id":"esp",'
+
+
+def without_esp(text: str) -> str:
+    """A domain `all` body minus its `esp` entry, the other bytes untouched. Since M6-13 the
+    domain `all` always has `esp` (domain-only: the CLI and the free route do not know it), so
+    the M3 byte-equality holds for the rest. The entry must be the single ESP_NONE_ASSIGNED
+    result (no profile is loaded in these rigs)."""
+    start = text.index(ESP_ENTRY)
+    entry, end = json.JSONDecoder().raw_decode(text, start)
+    assert [f["code"] for f in entry["findings"]] == ["ESP_NONE_ASSIGNED"], entry
+    if text[end] == ",":
+        return text[:start] + text[end + 1 :]
+    assert text[start - 1] == ","
+    return text[: start - 1] + text[end:]
 
 
 def _many(results: Sequence[CheckResult]) -> str:
@@ -228,6 +253,8 @@ def via_api(rig: Rig, who: str, ids: Sequence[str], *, mode: str) -> str:
         r = call(w, who, "POST", f"{base}/{ids[0]}")
     elif mode == "all":
         r = call(w, who, "POST", f"{base}/all")
+        assert r.status_code == 200, r.text[:200]
+        return without_esp(str(r.text))
     else:
         r = call(w, who, "POST", base, json={"ids": list(ids)})
     assert r.status_code == 200, r.text[:200]
@@ -267,6 +294,8 @@ def all_surfaces(
 # --- identical results ---------------------------------------------------------------------------
 
 REGISTERED = ("dkim", "dmarc", "spf")
+# The domain `all` of the API: the built-ins plus `esp` (M6-13), sorted.
+DOMAIN_ALL = tuple(sorted([*REGISTERED, "esp"]))
 
 
 def test_registered_ids() -> None:

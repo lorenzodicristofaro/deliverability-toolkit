@@ -1,0 +1,14 @@
+# A pitfall with a free-text condition: rejected (no expression evaluation of data).
+id: example-esp
+name: Example ESP
+homepage: https://esp.example.com
+spf: { includes: [] }
+dkim: { selectors: [] }
+pitfalls:
+  - code: ESP_EXAMPLE_ESP_LINK
+    notes_key: esp.example_esp.link
+    severity: low
+    when: "__import__('os').system('true')"
+verified_on: 2026-01-15
+sources: ["https://docs.esp.example.com/dns-setup"]
+status: verified

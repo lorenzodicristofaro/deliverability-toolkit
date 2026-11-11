@@ -132,14 +132,14 @@ Removed (no concrete justification, or equal to the default):
 3. Trust anchor: re-verify after each base/package update (`uv run pytest -m integration`
    checks key tag 38696 in the built image). When ICANN revokes KSK-2017 (planned 2027) check the
    two sources above again.
-4. `ci.yml` builds the image for both architectures on every PR.
+4. `ci-infra.yml` builds the image for both architectures on PRs and `dev` pushes that change a Docker-related path, and on every `main` push.
 
 ## Tests
 - Unit (default `uv run pytest -q`, offline): `tests/test_config.py` (RESOLVER_ADDRS parser),
   `tests/test_dnssec_tag.py` (key-tag algorithm and root.key parser).
 - Integration (marker `integration`, excluded by default via `addopts` in `pyproject.toml`):
   `uv run pytest -m integration -q -rs`; needs Docker and outbound DNS. CI job:
-  **`integration-unbound`** in `.github/workflows/ci.yml`. Brings up a throwaway compose project
+  **`integration-unbound`** in `.github/workflows/ci-infra.yml`. Brings up a throwaway compose project
   (unique name; `down -v --rmi local` afterwards) and checks: KSK-2024 in the image; AD on a
   signed name; SERVFAIL on `dnssec-failed.org`, NOERROR with CD set (proves it is validation);
   NXDOMAIN (`<random>.invalid`, answered by the signed root); REFUSED from outside the allowed

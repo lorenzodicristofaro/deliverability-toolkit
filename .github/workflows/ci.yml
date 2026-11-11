@@ -1,5 +1,11 @@
 name: CI
 
+# `qa` is not a trigger: it only receives `dev` commits whose CI is already green (docs/WORKFLOW.md).
+# The three Docker jobs (docker-build, integration-unbound, unbound-arm64-smoke) live in
+# ci-infra.yml: there they run on `dev` pushes and pull requests only when a file they depend on
+# changes. Here the `infra` job calls that workflow on `main` pushes only, so `main` always runs
+# every job (a skipped job costs no minutes). Called jobs are reported as "infra / <job>".
+#
 # Pushes and pull requests that change only these paths skip this whole workflow; a skipped
 # workflow reports nothing, neither success nor failure. Secret scanning is in secret-scan.yml,
 # which has no path filter. docs/TESTING.md is deliberately not listed, nor `docs/**`:
@@ -20,7 +26,7 @@ on:
       - "docs/UNBOUND.md"
       - "docs/WORKFLOW.md"
   push:
-    branches: [dev, qa, main]
+    branches: [dev, main]
     paths-ignore:
       - "*.md"
       - "docs/tickets/**"
@@ -102,69 +108,8 @@ jobs:
       - run: nproc  # runner CPU count, for judging whether pytest-xdist would be worth it
       - run: uv run pytest -q --tb=short --durations=25 --db-backend=postgresql
 
-  docker-build:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
-        with:
-          platforms: arm64
-      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
-      # Build check only: no registry login, no push, no load (multi-platform results stay in cache).
-      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
-        with:
-          context: .
-          platforms: linux/amd64,linux/arm64
-          push: false
-      # Unbound image (docker/unbound): multi-arch build check, no push. Maintenance: docs/UNBOUND.md.
-      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
-        with:
-          context: docker/unbound
-          platforms: linux/amd64,linux/arm64
-          push: false
-      # Smoke test on the native platform. Default profiles only (app + SQLite, no postgres/unbound).
-      # `--wait` blocks until the compose healthcheck of the app reports healthy.
-      # Throwaway per-run secrets (required since M1); masked in logs, never stored.
-      - name: Generate throwaway app secrets
-        run: |
-          for name in SECRET_KEY ENCRYPTION_KEY; do
-            value=$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')
-            echo "::add-mask::$value"
-            echo "$name=$value" >> "$GITHUB_ENV"
-          done
-      - name: Compose up and wait for healthy
-        run: docker compose up -d --build --wait --wait-timeout 120
-      - name: Check /healthz
-        run: curl --fail --silent --show-error --max-time 10 http://127.0.0.1:8000/healthz
-      - name: Show logs on failure
-        if: failure()
-        run: docker compose logs --no-color
-      - name: Compose down
-        if: always()
-        run: docker compose down -v
-
-  # Unbound profile against the real image: DNSSEC (AD, SERVFAIL on bad signature), NXDOMAIN,
-  # REFUSED from outside the subnet, DNSBL test entry, KSK-2024 anchor, root.key persistence,
-  # hardening. Run locally: `uv run pytest -m integration`. Excluded from the test jobs by marker.
-  # The DNSBL test skips (not fails) on a provider-side block. See docs/UNBOUND.md.
-  integration-unbound:
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
-      - run: uv sync --frozen
-      - run: uv run pytest -m integration -q --tb=short -rs
-
-  # arm64 smoke test under QEMU (build, start, resolve a signed name, require AD). QEMU is slow:
-  # the script retries (12 x 10 s); a name that never validates fails the job.
-  unbound-arm64-smoke:
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
-        with:
-          platforms: arm64
-      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
-      - run: scripts/unbound-arm64-smoke.sh
+  # Full CI on `main`: the Docker jobs without any path filter (reusable workflow, its `on:` paths
+  # do not apply to workflow_call).
+  infra:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    uses: ./.github/workflows/ci-infra.yml

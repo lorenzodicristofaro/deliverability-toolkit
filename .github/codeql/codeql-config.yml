@@ -1,0 +1,4 @@
+# CodeQL analysis configuration (M6-15), referenced by the `config-file` input in codeql.yml.
+# tests/ holds intentional ReDoS fixtures and HTML/URL assertions that CodeQL flags as high alerts.
+paths-ignore:
+  - tests
