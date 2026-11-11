@@ -183,10 +183,11 @@ CASES: list[tuple[str, Zone | dict[Any, Any], set[str], str, tuple[str, str] | N
         ("spf", "ok"),
     ),
     (
+        # M6-19: the term is present (part ok) but the failure is reported (spf.lookups).
         "spf_esp_record_fails_but_term_present",
         {("spf.esp.example.com", "TXT"): ResultState.servfail},
-        set(),
-        "ok",
+        {"ESP_DNS_ERROR"},
+        "error",
         ("spf", "ok"),
     ),
     (
@@ -452,6 +453,129 @@ async def test_spf_permerror_params(name: str, changes: dict[Any, Any], reason: 
     assert f.params["reason"] == reason
     assert f.params["name"] == (f"_spf.{D}" if reason == "multiple_records" else D)
     assert _sec(r)["spf"]["includes"] == [{"host": "spf.esp.example.com", "state": "permerror"}]
+
+
+# --- spf.only_if_record (M6-17) -----------------------------------------------------------------
+
+_ONLY = {"includes": ["spf.esp.example.com"], "only_if_record": True}
+_NOT_REQUIRED = [{"host": "spf.esp.example.com", "state": "not_required"}]
+_SPF_CASES: list[tuple[str, dict[Any, Any], bool, set[str], str, str]] = [
+    # (id, zone changes, only_if_record, ESP SPF codes, status, spf part state)
+    ("with_include_default", {}, False, set(), "ok", "ok"),
+    ("with_include_opt_in", {}, True, set(), "ok", "ok"),
+    (
+        "without_include_default",
+        {(D, "TXT"): ["v=spf1 ip4:192.0.2.1 -all"]},
+        False,
+        {"ESP_SPF_INCLUDE_MISSING"},
+        "fail",
+        "missing",
+    ),
+    (
+        "without_include_opt_in",
+        {(D, "TXT"): ["v=spf1 ip4:192.0.2.1 -all"]},
+        True,
+        {"ESP_SPF_INCLUDE_MISSING"},
+        "fail",
+        "missing",
+    ),
+    ("nxdomain_default", {(D, "TXT"): None}, False, {"ESP_SPF_INCLUDE_MISSING"}, "fail", "missing"),
+    ("nxdomain_opt_in", {(D, "TXT"): None}, True, set(), "ok", "no_record"),
+    (
+        "nodata_opt_in",
+        {(D, "TXT"): None, (D, "MX"): ["10 mx.example.net."]},
+        True,
+        set(),
+        "ok",
+        "no_record",
+    ),
+    (
+        "non_spf_txt_opt_in",
+        {(D, "TXT"): ["google-site-verification=abc", "v=spf10 nope"]},
+        True,
+        set(),
+        "ok",
+        "no_record",
+    ),
+    (
+        "non_spf_txt_default",
+        {(D, "TXT"): ["google-site-verification=abc"]},
+        False,
+        {"ESP_SPF_INCLUDE_MISSING"},
+        "fail",
+        "missing",
+    ),
+    (
+        "permerror_opt_in",
+        {(D, "TXT"): ["v=spf1 -all", "v=spf1 ~all"]},
+        True,
+        {"ESP_SPF_PERMERROR"},
+        "error",
+        "permerror",
+    ),
+    (
+        "nested_failure_opt_in",
+        {
+            (D, "TXT"): [f"v=spf1 include:_spf.{D} -all"],
+            (f"_spf.{D}", "TXT"): ResultState.servfail,
+        },
+        True,
+        {"ESP_DNS_ERROR"},
+        "error",
+        "error",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    ("changes", "only", "codes", "status", "state"),
+    [c[1:] for c in _SPF_CASES],
+    ids=[c[0] for c in _SPF_CASES],
+)
+async def test_spf_only_if_record(
+    changes: dict[Any, Any], only: bool, codes: set[str], status: str, state: str
+) -> None:
+    spf = _ONLY if only else {"includes": ["spf.esp.example.com"]}
+    r, _ = await _run(_apply(changes), [_profile(spf=spf)])
+    assert _codes(r) == codes
+    assert r.status == status
+    sec = _sec(r)["spf"]
+    assert sec["state"] == state
+    if state == "no_record":
+        assert sec["includes"] == _NOT_REQUIRED
+    _assert_params_cover_placeholders(r)
+
+
+@pytest.mark.parametrize("only", [False, True], ids=["default", "opt_in"])
+@pytest.mark.parametrize("state", ERROR_STATES, ids=[str(s) for s in ERROR_STATES])
+async def test_spf_root_failure_is_error_never_no_record(state: ResultState, only: bool) -> None:
+    spf = _ONLY if only else {"includes": ["spf.esp.example.com"]}
+    r, _ = await _run(_apply({(D, "TXT"): state}), [_profile(spf=spf)])
+    assert r.status == "error"
+    assert r.status != "ok"
+    (err,) = [f for f in r.findings if f.code == "ESP_DNS_ERROR"]
+    assert (err.params["part"], err.params["name"], err.params["state"]) == (
+        "spf.includes",
+        D,
+        str(state),
+    )
+    assert _sec(r)["spf"]["state"] == "error"
+    assert "ESP_SPF_INCLUDE_MISSING" not in _codes(r)
+
+
+async def test_spf_only_if_record_does_not_change_other_profiles() -> None:
+    """Only the opted-in profile skips the include when the domain has no SPF record."""
+    opted = _profile("opted-esp", spf=_ONLY, dkim={"selectors": []}, return_path=None)
+    plain = _profile(
+        "plain-esp", spf={"includes": ["spf.plain.example.net"]}, dkim={"selectors": []}
+    )
+    zone = _apply({(D, "TXT"): None})
+    r, _ = await _run(zone, [opted, plain])
+    assert r.status == "fail"
+    missing = [f for f in r.findings if f.code == "ESP_SPF_INCLUDE_MISSING"]
+    assert [f.params["esp"] for f in missing] == [plain.name]
+    assert _sec(r, "opted-esp")["spf"]["state"] == "no_record"
+    assert _sec(r, "plain-esp")["spf"]["state"] == "missing"
 
 
 def _chain_zone(length: int, last: str) -> dict[Any, Any]:

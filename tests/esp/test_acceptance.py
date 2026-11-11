@@ -11,7 +11,7 @@ kind applies to at least one shipped profile.
 from __future__ import annotations
 
 import itertools
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
 from typing import Any
 
@@ -390,11 +390,33 @@ def _unverified_keys(profile: EspProfile) -> list[tuple[str, str]]:
     return keys
 
 
-UNVERIFIED = [p for p in PROFILES if p.status == "unverified"]
+def _all_unverified(profile: EspProfile) -> EspProfile:
+    """The shipped profile with every part present marked unverified (M6-16: once no shipped
+    profile is unverified, this keeps the skip path exercised on real profile shapes)."""
+    fields = {
+        name
+        for name, present in (
+            ("spf.includes", profile.spf_includes),
+            ("dkim.selectors", profile.dkim_selectors),
+            ("return_path", profile.return_path),
+            ("tracking_domain", profile.tracking_domain),
+            ("pitfalls", profile.pitfalls),
+        )
+        if present
+    }
+    return replace(profile, status="unverified", unverified_fields=frozenset(fields))
+
+
+UNVERIFIED = [p for p in PROFILES if p.status == "unverified"] + [
+    _all_unverified(p) for p in PROFILES if p.status == "verified"
+]
+UNVERIFIED_IDS = [
+    f"{p.id}-{'shipped' if BY_ID[p.id] is p else 'all_unverified'}" for p in UNVERIFIED
+]
 
 
 @pytest.mark.parametrize("record", ["removed", "dns_failure"])
-@pytest.mark.parametrize("profile", UNVERIFIED, ids=[p.id for p in UNVERIFIED])
+@pytest.mark.parametrize("profile", UNVERIFIED, ids=UNVERIFIED_IDS)
 async def test_unverified_fields_get_no_verdict(profile: EspProfile, record: str) -> None:
     keys = _unverified_keys(profile)
     zone = correct_zone(profile)
@@ -426,10 +448,11 @@ async def test_unverified_fields_get_no_verdict(profile: EspProfile, record: str
     )
 
 
-def test_shipped_profiles_include_an_unverified_one() -> None:
-    """Otherwise the unverified test above runs on nothing; drop this test (and keep the one
-    above) only when no shipped profile is unverified any more."""
-    assert UNVERIFIED
+def test_unverified_path_has_profiles_to_run_on() -> None:
+    """Otherwise the unverified test above runs on nothing. Every shipped profile is covered,
+    as shipped when unverified, else with every part marked unverified."""
+    assert {p.id for p in UNVERIFIED} == set(BY_ID)
+    assert all(p.status == "unverified" and p.unverified_fields for p in UNVERIFIED)
 
 
 # --- combined SPF over the lookup limit ---------------------------------------------------------
@@ -510,3 +533,45 @@ async def test_unassigned_esp_records_are_detected(pid: str) -> None:
     assert [d["id"] for d in r.data["detection"]["detected"]] == [pid]
     assert "ESP_DETECTION_TRUNCATED" not in _failures(r)
     assert r.status == "warn"
+
+
+# --- MailUp SPF: include only when an SPF record exists (M6-17, maintainer decision) ------------
+
+_MAILUP_SPF_CASES: list[tuple[str, list[str] | ResultState | None, list[str], str, str]] = [
+    # (id, domain TXT (None: absent), non-advisory codes, status (info: pitfalls), spf part state)
+    ("record_with_include", [spf_record(["musvc.com"])], [], "info", "ok"),
+    ("record_without_include", [spf_record([])], ["ESP_SPF_INCLUDE_MISSING"], "fail", "missing"),
+    ("no_record", None, [], "info", "no_record"),
+    ("txt_but_no_spf", ["site-verification=abc"], [], "info", "no_record"),
+    ("dns_failure", ResultState.servfail, ["ESP_DNS_ERROR"], "error", "error"),
+    ("dns_timeout", ResultState.timeout, ["ESP_DNS_ERROR"], "error", "error"),
+]
+
+
+@pytest.mark.parametrize(
+    ("txt", "codes", "status", "state"),
+    [c[1:] for c in _MAILUP_SPF_CASES],
+    ids=[c[0] for c in _MAILUP_SPF_CASES],
+)
+async def test_mailup_spf_include_only_when_a_record_exists(
+    txt: list[str] | ResultState | None, codes: list[str], status: str, state: str
+) -> None:
+    mailup = BY_ID["mailup"]
+    assert mailup.spf_only_if_record and mailup.is_verified("spf.includes")
+    zone = dict(correct_zone(mailup))
+    if txt is None:
+        del zone[(DOMAIN, "TXT")]
+    else:
+        zone[(DOMAIN, "TXT")] = txt
+    r, _ = await _run(zone, [mailup])
+    assert _failures(r) == codes
+    assert r.status == status
+    (section,) = r.data["esps"]
+    assert section["spf"]["state"] == state
+    pitfalls = {f.params["pitfall"] for f in r.findings if f.code == "ESP_PITFALL"}
+    assert "ESP_MAILUP_SPF_ONLY_IF_PUBLISHED" in pitfalls
+
+
+def test_only_mailup_opts_in_to_spf_only_if_record() -> None:
+    """Other shipped profiles keep the default (include expected even without an SPF record)."""
+    assert [p.id for p in PROFILES if p.spf_only_if_record] == ["mailup"]

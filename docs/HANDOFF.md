@@ -1,12 +1,13 @@
-# HANDOFF — 2026-11-11 (M6 tickets done; dev → qa pending green CI)
+# HANDOFF — 2026-11-11 (M6 incl. M6-16..21 done on dev; promotion to qa pending green dev CI)
 
 Resume with `/gm`. No coder is running.
 
 ## State
 - M1–M5 accepted; `main` = `qa` (M1–M5) via PR #1.
-- Maintainer decisions 2026-11-11: repository public; Actions minutes unlimited; rulesets `protect-qa` and `protect-main` active; private vulnerability reporting enabled (maintainer confirmed). Done as M6-14 (docs, deny rules for gh pr merge/release/api/repo/secret) and M6-15 (CodeQL advanced setup, tests/ excluded).
-- M6 done on dev: M6-00, 01, 02, 03, 04, 05, 06, 06b, 06c, 07, 08, 09, 10, 11, 12, 13, 13b, 14, 15. Last gate: M6-11 merge fe7a698 (QA full suite 30286 passed on the branch, identical content).
-- M6 tickets all done; dev → qa after green CI (GM). Vendor facts only from official docs; anything not confirmable is `unverified` and goes to the maintainer.
+- Maintainer decisions 2026-11-11: repository public; Actions minutes unlimited; rulesets `protect-qa` and `protect-main` active; private vulnerability reporting enabled. Done as M6-14 (docs, deny rules for gh pr merge/release/api/repo/secret) and M6-15 (CodeQL advanced setup, tests/ excluded).
+- M6 incl. M6-16..21 done on dev (9b0d610, CI pending). `qa` is still at 3a24120 (M6 up to M6-15). Promotion dev → qa waits for green dev CI.
+- M6-16..21: vendor profiles from maintainer pages, MailUp `spf.only_if_record`, DKIM seed, esp check DNS failures, dnspython 2.9.2 (CVE-2026-114605). Details in docs/reports/M6.md.
+- Vendor facts only from official docs; anything not confirmable is `unverified` and goes to the maintainer. ESP profiles serve detection/association; required/optional vendor disputes are not escalated (maintainer 2026-11-11).
 - Maintainer decision 2026-11-10: client viewers read ESP data on assigned domains (assigned + detected ESPs + full `esp` result), no writes; SPEC §3 updated.
 
 ## GM decisions in M6
@@ -15,6 +16,8 @@ Resume with `/gm`. No coder is running.
 - The API returns finding keys + raw params; the CLI and web localize through app/checks/finding_text.py.
 - `esp` runs in every domain `all` (detection needs it); DKIM detection: at most 32 probes, 8 concurrent, stop at the first DNS failure; a cap hit is partial with ESP_DETECTION_TRUNCATED, never ok.
 - A broken profiles directory: ESP routes 503 (localized), `esp` check `error`.
+- MailUp SPF include only when an SPF record exists (opt-in `spf.only_if_record`).
+- Dependency audit: pip-audit run by hand (`uv export ... | uvx pip-audit --no-deps --disable-pip`); no CI job yet.
 
 ## How the work runs now (maintainer decisions 2026-11-09)
 - Sonnet → Opus: once Sonnet code fails (QA, tests or CI), all further coder work on that ticket goes to a NEW coder on Opus (docs/WORKFLOW.md section 3).
@@ -28,15 +31,14 @@ Resume with `/gm`. No coder is running.
 - After a merge, check CI, then close the ticket and tick TODO.md.
 
 ## Open maintainer decisions
-- HUMAN: switch CodeQL from Default to Advanced setup (Settings -> Advanced Security) before the next PR to main. First real run settles whether `build-mode: none` is accepted for `actions`.
-- M6-08 vendor facts unverified (maintainer is collecting the official pages): SendGrid link-branding/tracking CNAME; Mailgun DKIM selector name, tracking host, DKIM TXT vs CNAME with key rotation, tracking CNAME required with tracking off. Schema gap for per-identity/undocumented DKIM selectors is in TODO.md.
-- M6-09: MailUp SPF conflict, `mailchef` seed, Italian wording (TODO.md).
-- M6-10: Brevo page text (403), Italian review of Google/Microsoft strings.
-- SPEC §5 still lists HTTP custom checks; `http_fetch` is deferred to M7 (M5-22). The wording needs the maintainer.
-- Gmail clipping and URL shorteners unverified (t.co, tinyurl.com, ow.ly, buff.ly, lnkd.in, is.gd, j.mp).
-- Carried over: M4 provider samples; Mailchimp/Postmark/HubSpot DKIM sources; the PSL licence; SecLists terms; HTMX under CSP.
+- CodeQL: switch Default → Advanced (Settings -> Advanced Security) before the qa → main PR. First real run settles whether `build-mode: none` is accepted for `actions`.
+- Second Dependabot alert (2 high on main) is unidentified. Maintainer pastes package/GHSA, or grants read-only access: token permission "Dependabot alerts: read" plus narrowing the `Bash(gh api *)` deny rule.
+- pip-audit CI job: proposal pending.
+- Italian review: esp.google_workspace.*, esp.microsoft_365.*, esp.mailup.*, esp.emailchef.*, esp.brevo.*, esp.mailgun.*, esp.sendgrid.tracking.
+- SecLists/xato.net terms (repo already public — priority).
+- Carried over: M4 provider samples; Mailchimp/Postmark/HubSpot DKIM sources; PSL licence; HTMX under CSP; Gmail clipping and URL shorteners (t.co, tinyurl.com, ow.ly, buff.ly, lnkd.in, is.gd, j.mp) unverified.
 
 ## Next 3 steps
-1. dev → qa once CI on dev is green; maintainer: qa → main PR (switch CodeQL to Advanced first).
-2. Maintainer items (vendor pages for SendGrid/Mailgun/Brevo, Italian review, SPF include-host question).
-3. Plan M7 from TODO.md.
+1. Promote dev → qa when dev CI is green.
+2. Maintainer: qa → main PR (CodeQL first).
+3. Plan M7 from TODO.md; review SPEC §5 HTTP custom checks wording at M7 start (`http_fetch` deferred, M5-22).

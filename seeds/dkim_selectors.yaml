@@ -169,3 +169,28 @@ selectors:
     status: verified
     sources:
       - https://help.activecampaign.com/hc/en-us/articles/206903370-SPF-DKIM-and-DMARC-Authentication
+  # mailchef, brevo1 and brevo2 verified_on 2026-11-11 (the file has only a file-level verified_on, no per-entry field)
+  - name: mailchef
+    provider: emailchef
+    record_type: txt
+    notes: "Emailchef DKIM TXT; fixed selector. Source: 'The DKIM record must be added to the subdomain mailchef._domainkey. Like the SPF, the DKIM record can also be inserted as a TXT record.'"
+    status: verified
+    sources:
+      - https://emailchef.com/knowledge-base/how-to-set-up-the-domain-authentication-mode/
+      - https://emailchef.com/it/documentazione/come-autenticare-il-tuo-dominio/
+  - name: brevo1
+    provider: brevo
+    record_type: cname
+    notes: "Brevo DKIM CNAME, first of two. Source: 'Brevo code DKIM record, which can be one record of TXT type or two records of CNAME type' and the hostname table row 'DKIM 1 record brevo1._domainkey'"
+    status: verified
+    sources:
+      - https://help.brevo.com/hc/en-us/articles/16045394674066-Troubleshooting-Domain-authentication
+      - https://help.brevo.com/hc/it/articles/12163873383186-Autenticazione-del-dominio-con-Brevo-codice-Brevo-DKIM-DMARC
+  - name: brevo2
+    provider: brevo
+    record_type: cname
+    notes: "Brevo DKIM CNAME, second of two. Source: 'Brevo code DKIM record, which can be one record of TXT type or two records of CNAME type' and the hostname table row 'DKIM 2 record brevo2._domainkey'"
+    status: verified
+    sources:
+      - https://help.brevo.com/hc/en-us/articles/16045394674066-Troubleshooting-Domain-authentication
+      - https://help.brevo.com/hc/it/articles/12163873383186-Autenticazione-del-dominio-con-Brevo-codice-Brevo-DKIM-DMARC
