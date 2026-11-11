@@ -16,7 +16,7 @@ Acceptance criteria:
 - `target_pattern` `*` matches exactly one whole DNS label. A partial-label prefix such as `selector1-<domain>` can only be written as a whole `*`; do not write partial-label patterns.
 - Coder note, Amazon SES: Easy DKIM uses per-domain random selector names, so `dkim.selectors` cannot list fixed names. If the official docs confirm this, the SES profile uses an empty `dkim.selectors` plus a pitfall/note, and the coder reports it to the GM for a later schema extension.
 New i18n keys: esp.sendgrid.*, esp.amazon_ses.*, esp.mailgun.* notes and pitfall keys as the profiles reference them (en + it)
-Status: in-review
+Status: done
 
 ## Note (coder, 2026-11-11)
 All pages fetched 2026-11-11. Quotes are from the fetch output (summarised by the fetch tool for SendGrid and Mailgun: QA must re-read).
