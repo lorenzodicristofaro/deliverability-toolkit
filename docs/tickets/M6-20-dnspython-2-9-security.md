@@ -24,4 +24,4 @@ Acceptance criteria:
 - Note in the ticket/report: changelog lines for 2.9.0 relevant to APIs we use.
 
 New i18n keys: none
-Status: todo
+Status: done (merge 390cf69)

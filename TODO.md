@@ -169,7 +169,9 @@ Carried over from M0-07 QA:
   - [x] M6-12 contributor guide docs/ESP_PROFILES.md
   - [ ] M6-18 DKIM seed: add mailchef (Emailchef) and brevo1/brevo2 (Brevo) (sonnet, depends on M6-17)
   - [ ] M6-19 esp check: report DNS failures on an ESP's SPF include host (opus, depends on M6-17)
-  - [ ] M6-20 deps: upgrade dnspython to 2.9.0, CVE-2026-114605 (opus, no dependencies)
+  - [x] M6-20 deps: upgrade dnspython to 2.9.0, CVE-2026-114605 (opus, no dependencies)
+  - [ ] M6-21 deps: dnspython 2.9.2 plus compression-pointer regression test (opus, depends on M6-20)
+  - [ ] Optional, pending maintainer decision (GM proposed 2026-11-11): add `pip-audit` as a CI job on dev
 
 ## M7 — Monitoring
 - [ ] Guarded outbound client (SSRF protection) + tests
