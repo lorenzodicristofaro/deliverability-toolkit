@@ -1,0 +1,19 @@
+id: amazon-ses
+name: Amazon SES
+homepage: https://aws.amazon.com/ses
+spf:
+  includes: []
+dkim:
+  selectors: []
+return_path: {type: mx, optional: true, notes_key: esp.amazon_ses.return_path}
+pitfalls:
+  - {code: ESP_AMAZON_SES_PER_IDENTITY_DKIM_SELECTORS, notes_key: esp.amazon_ses.per_identity_dkim_selectors, severity: info}
+  - {code: ESP_AMAZON_SES_REGION_SPECIFIC_RECORDS, notes_key: esp.amazon_ses.region_specific_records, severity: info}
+verified_on: 2026-11-11
+sources:
+  - https://docs.aws.amazon.com/ses/latest/dg/creating-identities.html
+  - https://docs.aws.amazon.com/ses/latest/dg/send-email-authentication-dkim-easy.html
+  - https://docs.aws.amazon.com/ses/latest/dg/mail-from.html
+status: unverified
+unverified_fields:
+  - pitfalls.ESP_AMAZON_SES_PER_IDENTITY_DKIM_SELECTORS

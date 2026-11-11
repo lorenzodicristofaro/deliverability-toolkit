@@ -1,0 +1,21 @@
+id: sendgrid
+name: Twilio SendGrid
+homepage: https://sendgrid.com
+spf:
+  includes: [sendgrid.net]
+dkim:
+  selectors:
+    - {name: s1, type: cname, target_pattern: "s1.domainkey.*.*.sendgrid.net"}
+    - {name: s2, type: cname, target_pattern: "s2.domainkey.*.*.sendgrid.net"}
+return_path: {type: cname, optional: false, notes_key: esp.sendgrid.return_path}
+tracking_domain: {type: cname, optional: true, notes_key: esp.sendgrid.tracking}
+pitfalls:
+  - {code: ESP_SENDGRID_AUTOMATED_SECURITY_OFF, notes_key: esp.sendgrid.automated_security_off, severity: info}
+  - {code: ESP_SENDGRID_CUSTOM_SELECTOR, notes_key: esp.sendgrid.custom_selector, severity: info}
+verified_on: 2026-11-11
+sources:
+  - https://www.twilio.com/docs/sendgrid/ui/account-and-settings/how-to-set-up-domain-authentication
+status: unverified
+unverified_fields:
+  - spf.includes
+  - tracking_domain
