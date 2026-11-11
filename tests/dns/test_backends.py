@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import socket
+import struct
 from collections.abc import AsyncGenerator, Callable
 from contextlib import aclosing
 from pathlib import Path
@@ -225,6 +226,41 @@ def _trailing_junk(q: dns.message.Message, _t: ResolverAddr, _tcp: bool) -> byte
     return wire(response(q, answer=A_ANSWER)) + b"\xde\xad"
 
 
+def _pointer_chain_wire(q: dns.message.Message, hops: int) -> bytes:
+    """A response whose 2nd answer owner name follows `hops` compression pointers (CVE-2026-114605,
+    GHSA-45c3-73f7-pv4m). Answer 1 is a NULL record whose rdata holds the chain: a base name
+    "a" + pointer to the qname, then pointers each to the previous one (pointers go backwards)."""
+    assert hops >= 2
+    question = q.question[0]
+    qsection = question.name.to_wire() + struct.pack("!HH", question.rdtype, question.rdclass)
+    rdata_start = 12 + len(qsection) + 2 + 10  # owner pointer + type/class/ttl/rdlength
+    chain = bytearray(b"\x01a\xc0\x0c")  # base: "a" + pointer to the qname (1 hop)
+    prev = rdata_start
+    for _ in range(hops - 2):  # owner pointer + base pointer + these = hops
+        here = rdata_start + len(chain)
+        chain += struct.pack("!H", 0xC000 | prev)
+        prev = here
+    header = struct.pack("!HHHHHH", q.id, 0x8180, 1, 2, 0, 0)  # QR RD RA, 2 answers
+    null_rr = b"\xc0\x0c" + struct.pack("!HHIH", 10, 1, 300, len(chain)) + bytes(chain)
+    a_rr = (
+        struct.pack("!H", 0xC000 | prev) + struct.pack("!HHIH", 1, 1, 300, 4) + b"\xc0\x00\x02\x01"
+    )
+    return header + qsection + null_rr + a_rr
+
+
+def _pointer_chain_too_long(q: dns.message.Message, _t: ResolverAddr, _tcp: bool) -> bytes:
+    return _pointer_chain_wire(q, 20)
+
+
+def test_pointer_chain_fixture_is_meaningful() -> None:
+    """The table row fails for the pointer chain, not for a construction bug: 16 hops parse."""
+    q = dns.message.make_query("example.com", "A")
+    ok = dns.message.from_wire(_pointer_chain_wire(q, 16))
+    assert ok.answer[1].name == dns.name.from_text("a.example.com.")
+    with pytest.raises(dns.name.PointerChainTooLong):
+        dns.message.from_wire(_pointer_chain_wire(q, 17))
+
+
 def _too_many(q: dns.message.Message, _t: ResolverAddr, _tcp: bool) -> bytes:
     ips = [f"192.0.2.{i % 250}" if i < 250 else "192.0.2.1" for i in range(1, 200)]
     ips = list(dict.fromkeys(ips))[: MAX_RECORDS_PER_SECTION + 1]
@@ -283,6 +319,7 @@ DATAGRAM_ERRORS: list[tuple[str, Handler, str]] = [
     ("short_header", lambda _q, _t, _tcp: b"\x12\x34\x81", "unparseable"),
     ("cut_mid_record", _cut_mid_record, "unparseable"),
     ("trailing_junk", _trailing_junk, "unparseable"),
+    ("pointer_chain_too_long", _pointer_chain_too_long, "unparseable"),
     ("id_mismatch", _id_mismatch, "mismatched_response"),
     ("wrong_question", _wrong_question, "mismatched_response"),
     ("not_a_response", _not_a_response, "mismatched_response"),
