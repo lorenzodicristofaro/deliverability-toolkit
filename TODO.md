@@ -164,6 +164,7 @@ Carried over from M0-07 QA:
   - [x] M6-09 profiles: MailUp/TeamSystem + up to two Italian ESPs (official docs only)
   - [x] M6-10 profiles: Google Workspace, Microsoft 365, Brevo (official docs only) (Brevo skipped)
   - [x] M6-11 acceptance: sample domains produce expected findings, docs/CHECKS.md
+  - [ ] M6-16 ESP profiles from maintainer-supplied pages: SendGrid link branding, Mailgun, Brevo
   - [x] M6-12 contributor guide docs/ESP_PROFILES.md
 
 ## M7 — Monitoring
