@@ -173,6 +173,7 @@ Carried over from M0-07 QA:
   - [ ] M6-19 follow-up (QA nit, round 2): app/checks/esp_profile.py:335-343 — for an `a` term where the A query succeeded but AAAA hit the query cap, the ESP_DNS_ERROR finding says rdtype "A" instead of "AAAA" (cosmetic; status is still error). Optional: a direct MAX_NODES test (same branch as the depth cap).
   - [x] M6-20 deps: upgrade dnspython to 2.9.0, CVE-2026-114605 (opus, no dependencies); dev CI green at 390cf69
   - [x] M6-21 deps: dnspython 2.9.2 plus compression-pointer regression test (opus, depends on M6-20); merged 9b0d610, QA APPROVE
+  - [ ] M6-22 docs: record the xato.net dataset terms (public domain, Mark Burnett) in the password list header and THIRD_PARTY_NOTICES, add attribution (sonnet; resolves the "MAINTAINER TO CONFIRM ... xato.net" item below)
   - [ ] M6-21 nit (QA, optional): tests/dns/test_backends.py:229-247 — add a pointer-chain variant whose chain resolves to the qname itself, to prove a vulnerable parser cannot yield a spoofed ok.
   - [ ] Optional, pending maintainer decision (GM proposed 2026-11-11): add `pip-audit` as a CI job on dev
 
