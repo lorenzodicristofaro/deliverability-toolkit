@@ -161,8 +161,9 @@ What it checks, for each ESP assigned to the domain (one section per profile in
 - **SPF includes** (`spf.includes`): each include host must appear as an `include:` or
   `redirect=` target anywhere in the domain's resolved SPF tree (nested includes count). The
   part is `ok` when the term is present, but a DNS failure (servfail, timeout, ...) on the ESP's
-  own record or on anything it includes is never swallowed (M6-19): it adds `ESP_DNS_ERROR` with
-  part `spf.lookups` and the result is `error`, with one ESP as with several. NXDOMAIN or NODATA
+  own record or on anything it includes, or a cap stopping resolution there, is never swallowed
+  (M6-19): it adds `ESP_DNS_ERROR` with part `spf.lookups` and the result is `error`, with one
+  ESP as with several. NXDOMAIN or NODATA
   on the include host is an answer, not a failure: the part stays `ok` and the missing target is
   reported by the SPF check (`SPF_INCLUDE_NOT_FOUND`). A profile with
   `spf.only_if_record: true` (M6-17, opt-in; MailUp) expects its includes only when the domain
@@ -181,8 +182,9 @@ What it checks, for each ESP assigned to the domain (one section per profile in
   found in the SPF tree, the tree's lookup count is attributed to them
   (`ESP_SPF_COMBINED_OVER_LIMIT` above 10, `ESP_SPF_COMBINED_NEAR_LIMIT` from 9). With two or
   more such ESPs, any DNS failure or truncation in the tree adds one `ESP_DNS_ERROR` with part
-  `spf.lookups` naming all of them (`esp` "A, B"). With one, only a failure at or below its own
-  include hosts does (`esp` that ESP); a failure elsewhere in the tree is the SPF check's.
+  `spf.lookups` naming all of them (`esp` "A, B"). With one, only a failure or a truncation
+  (a record or query a cap stopped, state `truncated`) at or below its own include hosts does
+  (`esp` that ESP); a failure elsewhere in the tree is the SPF check's.
 - **Detection**: the loaded profiles that are not assigned are probed for their verified SPF
   include hosts (on the same SPF tree) and their verified `cname` selectors with a
   `target_pattern` (one CNAME query each, first target only, at most 32 names, 8 in flight).

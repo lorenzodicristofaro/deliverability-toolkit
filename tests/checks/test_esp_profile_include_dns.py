@@ -18,6 +18,7 @@ import pytest
 
 from app.checks.esp_profile import EspProfileCheck
 from app.checks.models import CheckResult, Target
+from app.checks.spf_tree import MAX_DEPTH, MAX_QUERIES
 from app.dns.types import ResultState
 from app.esp.profile import EspProfile, parse_esp_profile
 from tests.checks.test_esp_profile import FakeDns, Zone, _assert_params_cover_placeholders, _ctx
@@ -61,6 +62,50 @@ def _zone(root: str, extra: Zone | None = None) -> Zone:
 
 ONE = f"v=spf1 include:{A_HOST} -all"
 TWO = f"v=spf1 include:{A_HOST} include:{B_HOST} -all"
+
+
+def _chain(start: str, prefix: str, n: int, last: str | None = None) -> Zone:
+    """`start` includes n0.<prefix> -> n1.<prefix> -> ... -> n<n-1>.<prefix> (-> `last`)."""
+    names = [f"n{i}.{prefix}" for i in range(n)]
+    zone: Zone = {(start, "TXT"): [f"v=spf1 include:{names[0]} -all"]}
+    for i, name in enumerate(names):
+        nxt = names[i + 1] if i + 1 < n else last
+        zone[(name, "TXT")] = [f"v=spf1 include:{nxt} -all" if nxt else "v=spf1 -all"]
+    return zone
+
+
+# Truncation below the ESP host: a chain deeper than MAX_DEPTH under it; the first node not
+# fetched is n<MAX_DEPTH - 1> (the ESP host is at depth 1).
+DEEP_BELOW = _zone(ONE, _chain(A_HOST, A_HOST, MAX_DEPTH + 3))
+DEEP_BELOW_NAME = f"n{MAX_DEPTH - 1}.{A_HOST}"
+# The ESP host itself past the depth cap: root -> n0.x -> ... -> A_HOST, never fetched.
+_X = f"x.{D}"
+ESP_HOST_TOO_DEEP = {
+    **{k: v for k, v in _chain(_X, _X, MAX_DEPTH, A_HOST).items() if k != (_X, "TXT")},
+    (D, "TXT"): [f"v=spf1 include:n0.{_X} -all"],
+    (A_HOST, "TXT"): ["v=spf1 -all"],
+}
+# Query cap below the ESP host: `a:` terms need two queries each (A, AAAA), so the cap stops
+# somewhere in this record; the first skipped term is reported.
+_A_TERMS = MAX_QUERIES // 2 + 5
+QUERY_CAP = _zone(
+    ONE,
+    {
+        (A_HOST, "TXT"): [
+            "v=spf1 " + " ".join(f"a:h{i}.{A_HOST}" for i in range(_A_TERMS)) + " -all"
+        ]
+    },
+)
+# Queries: root TXT, ESP host TXT, then A + AAAA per term until the cap.
+QUERY_CAP_NAME = f"h{(MAX_QUERIES - 2) // 2}.{A_HOST}"
+# A loop below the ESP host is not a truncation (loop nodes are not fetched either).
+LOOP_BELOW = _zone(
+    ONE,
+    {
+        (A_HOST, "TXT"): [f"v=spf1 include:_l.{A_HOST} -all"],
+        (f"_l.{A_HOST}", "TXT"): [f"v=spf1 include:{A_HOST} -all"],
+    },
+)
 
 
 async def _run(zone: Zone, pids: list[str], only_if_record: bool = False) -> CheckResult:
@@ -129,6 +174,55 @@ CASES: list[tuple[str, list[str], bool, Zone, dict[str, str] | None, str]] = [
         {"esp": "Alpha", "name": A_HOST, "rdtype": "TXT", "state": "servfail"},
         "error",
     ),
+    (
+        "one_esp_truncated_below_include_host",
+        ["alpha"],
+        False,
+        DEEP_BELOW,
+        {"esp": "Alpha", "name": DEEP_BELOW_NAME, "rdtype": "TXT", "state": "truncated"},
+        "error",
+    ),
+    (
+        "one_esp_include_host_past_depth_cap",
+        ["alpha"],
+        False,
+        ESP_HOST_TOO_DEEP,
+        {"esp": "Alpha", "name": A_HOST, "rdtype": "TXT", "state": "truncated"},
+        "error",
+    ),
+    (
+        "one_esp_query_cap_below_include_host",
+        ["alpha"],
+        False,
+        QUERY_CAP,
+        {"esp": "Alpha", "name": QUERY_CAP_NAME, "rdtype": "A", "state": "truncated"},
+        "error",
+    ),
+    (
+        "one_esp_truncated_below_include_host_only_if_record",
+        ["alpha"],
+        True,
+        DEEP_BELOW,
+        {"esp": "Alpha", "name": DEEP_BELOW_NAME, "rdtype": "TXT", "state": "truncated"},
+        "error",
+    ),
+    (
+        "one_esp_include_host_past_depth_cap_only_if_record",
+        ["alpha"],
+        True,
+        ESP_HOST_TOO_DEEP,
+        {"esp": "Alpha", "name": A_HOST, "rdtype": "TXT", "state": "truncated"},
+        "error",
+    ),
+    (
+        "one_esp_query_cap_below_include_host_only_if_record",
+        ["alpha"],
+        True,
+        QUERY_CAP,
+        {"esp": "Alpha", "name": QUERY_CAP_NAME, "rdtype": "A", "state": "truncated"},
+        "error",
+    ),
+    ("one_esp_loop_below_include_host_is_not_truncation", ["alpha"], False, LOOP_BELOW, None, "ok"),
     ("two_esps_include_ok", ["alpha", "beta"], False, _zone(TWO), None, "ok"),
     (
         "two_esps_servfail_on_one",
