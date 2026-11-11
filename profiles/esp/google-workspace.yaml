@@ -1,0 +1,17 @@
+id: google-workspace
+name: Google Workspace
+homepage: https://workspace.google.com
+spf:
+  includes: [_spf.google.com]
+dkim:
+  selectors:
+    - {name: google, type: txt}
+pitfalls:
+  - {code: ESP_GOOGLE_WORKSPACE_CUSTOM_DKIM_PREFIX, notes_key: esp.google_workspace.custom_dkim_prefix, severity: info}
+  - {code: ESP_GOOGLE_WORKSPACE_START_AUTHENTICATION, notes_key: esp.google_workspace.start_authentication, severity: info}
+verified_on: 2026-11-11
+sources:
+  - https://knowledge.workspace.google.com/admin/security/set-up-spf
+  - https://knowledge.workspace.google.com/admin/security/set-up-dkim
+  - https://knowledge.workspace.google.com/admin/security/set-up-dkim?hl=it
+status: verified
