@@ -165,6 +165,7 @@ Carried over from M0-07 QA:
   - [x] M6-10 profiles: Google Workspace, Microsoft 365, Brevo (official docs only) (Brevo skipped)
   - [x] M6-11 acceptance: sample domains produce expected findings, docs/CHECKS.md
   - [ ] M6-16 ESP profiles from maintainer-supplied pages: SendGrid link branding, Mailgun, Brevo
+  - [ ] M6-17 MailUp SPF: apply maintainer decision, include only when an SPF record exists (opus, depends on M6-16)
   - [x] M6-12 contributor guide docs/ESP_PROFILES.md
 
 ## M7 — Monitoring
@@ -193,7 +194,7 @@ Carried over from M0-07 QA:
 - [ ] Security review checklist, dependency/license audit, v0.1.0 release
 
 ## Follow-ups (post-M1)
-- [ ] MAINTAINER (M6-09): MailUp help pages conflict on domains without an SPF record (810156046/809926670 'non è necessario'; 37519762 asks for v=spf1 include:musvc.com ~all, needed for DMARC) — the pitfall reports both; decide. Add `mailchef` (Emailchef, TXT) to seeds/dkim_selectors.yaml? Review the Italian wording of the esp.mailup.* and esp.emailchef.* strings. Contactlab/Experian, Agile Telecom, Aruba not evaluated (two-profile cap).
+- [ ] MAINTAINER (M6-09): MailUp SPF conflict DECIDED 2026-11-11 (include musvc.com only when the domain already has an SPF record; never create an SPF record containing only MailUp's include; DMARC unaffected because SPF for DMARC is evaluated on the return-path domain) — implemented by M6-17. Still open: add `mailchef` (Emailchef, TXT) to seeds/dkim_selectors.yaml? Review the Italian wording of the esp.mailup.* and esp.emailchef.* strings. Contactlab/Experian, Agile Telecom, Aruba not evaluated (two-profile cap).
 - [ ] ESP schema gap (M6-08): DKIM selectors that are per-identity (Amazon SES, names shown in the console) or not documented (Mailgun) cannot be expressed; both profiles ship `selectors: []` plus a pitfall. Plan a schema extension (e.g. per-assignment selector names) in a later ticket. A future SES target pattern must not assume dkim.<region>.amazonses.com (hosted zone varies by Region and identity).
   Microsoft 365 (M6-10): selector1/selector2 CNAME targets have two documented formats with different label counts (`...-v1.dkim.mail.microsoft`, May 2025, and `...onmicrosoft.com`), so the profile has no target_pattern; the check only confirms the CNAMEs exist and detection skips them.
 - [ ] MAINTAINER (M6-10): Brevo profile blocked — help.brevo.com returns 403 (Cloudflare); maintainer to supply the official DNS setup page text. Review the Italian of esp.google_workspace.* and esp.microsoft_365.* (Microsoft labels kept in English: the it-it page is inconsistent).
