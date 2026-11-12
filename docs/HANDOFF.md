@@ -4,8 +4,8 @@ Resume with `/gm`. No coder is running.
 
 ## State
 - M1–M6 done. `main` = `qa` at 9d793cb (M1–M6 up to M6-22).
-- `dev` is ahead with M6-23 (MailUp DKIM alternatives, 99e408b), M6-24 (pip-audit CI, 2336d26), M6-25 (PSL licence, Gmail clip, 348959d). dev CI green on 348959d; dev CI green on 99e408b.
-- Needs promotion dev -> qa by the GM, then a qa -> main PR by the maintainer.
+- M6-23..25 merged on dev: M6-23 (MailUp DKIM alternatives, 99e408b), M6-24 (pip-audit CI, 2336d26), M6-25 (PSL licence, Gmail clip, 348959d). dev CI green on 348959d; dev CI green on 99e408b.
+- Promoted dev -> qa at a4cd8a7 (2026-11-12). Waiting for the maintainer qa -> main PR. docs/reviews/BRIEF.md is the maintainer's local brief, untracked and gitignored (f0fd329).
 - Maintainer decisions 2026-11-11: repository public, unlimited Actions minutes, rulesets `protect-qa` / `protect-main`, private vulnerability reporting.
 - Maintainer decision 2026-11-12: Google Postmaster Tools and Microsoft SNDS moved from M9 to new M11 (after M10); v0.1.0 ships without them.
 - Vendor facts only from official docs; anything unconfirmable is `unverified` and goes to the maintainer. ESP profiles serve detection/association; required/optional vendor disputes are not escalated.
@@ -41,6 +41,6 @@ Resume with `/gm`. No coder is running.
 - URL shorteners seed: deferred, stays unverified.
 
 ## Next 3 steps
-1. GM: promote dev -> qa once dev CI is green (check the M6-23 merge). Maintainer: qa -> main PR (activates the weekly pip-audit).
+1. Maintainer: qa -> main PR (qa at a4cd8a7; activates the weekly pip-audit). GM: after the merge, check main CI and that Dependabot alerts #1/#2 closed.
 2. Start M7: pm splits M7 into tickets; first the guarded outbound client (SSRF, opus) including the NAT64 follow-up (app/dns/egress.py). Review SPEC §5 `http_fetch` wording at M7 start.
 3. Small ticket for the three wall-clock flaky tests (test_received.py, test_dmarc.py, test_message.py), fixed together with a relative bound or operation counter.
