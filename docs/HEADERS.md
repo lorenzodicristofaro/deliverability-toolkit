@@ -80,7 +80,13 @@ size check happens while streaming, so an oversized body is never buffered.
 - Alignment: the verdict is relaxed, with strict reported alongside it. With a public suffix only
   an exact match counts. The topmost `Authentication-Results` per method is used. A pass with an
   unknown sibling still computes pass (for example `spf=pass` with an aligned `smtp.mailfrom`
-  plus `dkim=pass` without `header.d`).
+  plus `dkim=pass` without `header.d`). A stated `dkim=none` means the message was not signed
+  (RFC 8601 section 2.7.1): its pair is `not_evaluated` with reason `no_signature`, whether or not
+  `header.d` is present or usable, and it never blocks the verdict. The computed DMARC result then
+  rests on SPF alone: an aligned spf pass gives `pass`, otherwise `fail` (`MSG_ALIGNMENT_FAIL`).
+  Other dkim results without a usable `header.d` stay `unknown`. The spf pair uses the first spf
+  result that carries `smtp.mailfrom` (one for `smtp.helo` listed before it is skipped); only when
+  none does, it falls back to Return-Path with no stated result.
 
 ## Findings
 
