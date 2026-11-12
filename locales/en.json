@@ -417,7 +417,7 @@
   "finding.DMARC_PCT_PARTIAL.detail": "pct={pct} means the {p} policy is requested for only that percentage of messages (RFC 7489 section 6.3).",
   "finding.DMARC_PCT_PARTIAL.remediation": "Once reports look clean, raise pct to 100 or remove the tag (the default is 100).",
   "finding.DMARC_PCT_PARTIAL.title": "Policy applies to a percentage of messages",
-  "finding.DMARC_POLICY_NONE.detail": "The policy is p=none: it requests monitoring only and no action on messages that fail DMARC.",
+  "finding.DMARC_POLICY_NONE.detail": "The applied policy is none (p=none, or sp=none for a subdomain that inherits the record): it requests monitoring only and no action on messages that fail DMARC.",
   "finding.DMARC_POLICY_NONE.remediation": "After reviewing aggregate reports, consider moving to p=quarantine and then p=reject.",
   "finding.DMARC_POLICY_NONE.title": "DMARC policy is none",
   "finding.DMARC_POLICY_QUARANTINE.detail": "The policy is p=quarantine: it requests that messages failing DMARC be treated as suspicious.",

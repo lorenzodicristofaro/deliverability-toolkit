@@ -124,6 +124,12 @@ module's `CODES`; `tests/checks/test_acceptance_m3.py` requires en and it text f
 | `DMARC_EXTERNAL_NOT_CHECKABLE` | low | 7.1 (our interpretation: a URI that names several hosts) |
 | `DMARC_EXTERNAL_TOO_MANY_DESTINATIONS` | low | none (we check at most 8 destinations) |
 
+Inherited record (found at the organizational domain for a subdomain target): the applied policy is
+`sp` when present and valid, else `p` (RFC 7489 section 6.3). `effective_policy`, `DMARC_POLICY_NONE`,
+`DMARC_POLICY_QUARANTINE` and `DMARC_PCT_PARTIAL` are derived from it, and `DMARC_SUBDOMAIN_POLICY_WEAKER`
+is not emitted (it describes the parent). `data["p"]` and `data["sp"]` stay as published. An invalid `sp`
+follows the section 6.6.3 step 6 path as before.
+
 ### DKIM (RFC 6376, RFC 8301)
 
 | Code | Severity | RFC |

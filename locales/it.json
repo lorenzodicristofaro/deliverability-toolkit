@@ -417,7 +417,7 @@
   "finding.DMARC_PCT_PARTIAL.detail": "pct={pct} significa che la policy {p} è richiesta solo per quella percentuale di messaggi (RFC 7489 sezione 6.3).",
   "finding.DMARC_PCT_PARTIAL.remediation": "Quando i report risultano puliti, porta pct a 100 o rimuovi il tag (il valore predefinito è 100).",
   "finding.DMARC_PCT_PARTIAL.title": "La policy si applica a una percentuale di messaggi",
-  "finding.DMARC_POLICY_NONE.detail": "La policy è p=none: richiede solo monitoraggio e nessuna azione sui messaggi che non superano DMARC.",
+  "finding.DMARC_POLICY_NONE.detail": "La policy applicata è none (p=none, oppure sp=none per un sottodominio che eredita il record): richiede solo monitoraggio e nessuna azione sui messaggi che non superano DMARC.",
   "finding.DMARC_POLICY_NONE.remediation": "Dopo aver esaminato i report aggregati, valuta di passare a p=quarantine e poi a p=reject.",
   "finding.DMARC_POLICY_NONE.title": "La policy DMARC è none",
   "finding.DMARC_POLICY_QUARANTINE.detail": "La policy è p=quarantine: richiede che i messaggi che non superano DMARC siano trattati come sospetti.",
