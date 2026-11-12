@@ -3,9 +3,9 @@
 Data source: the `publicsuffixlist` package (MPL-2.0), which ships the Mozilla Public Suffix List
 (MPL-2.0) inside its wheel. Nothing is fetched at import or run time.
   package: https://pypi.org/project/publicsuffixlist/   version 1.1.2.20261106 (see uv.lock)
-  list:    https://publicsuffix.org/list/                 licence: MPL-2.0 (stated on the package
-           page; publicsuffix.org/list/ itself shows only a Mozilla copyright notice)
-  verified_on: 2026-11-06
+  list:    https://publicsuffix.org/list/                 licence: MPL-2.0, verified 2026-11-12 from
+           https://github.com/publicsuffix/list/blob/main/LICENSE (maintainer accepts)
+  verified_on: 2026-11-12
 Manual update step: `uv lock --upgrade-package publicsuffixlist`, then run the tests and refresh
 verified_on here and in seeds/public_suffix_source.yaml.
 
