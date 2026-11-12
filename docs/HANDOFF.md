@@ -3,7 +3,7 @@
 Resume with `/gm`. No coder is running.
 
 ## State
-- M1–M6 done. `main` = `qa` at 9d793cb (M1–M6 up to M6-22).
+- M1–M6 done. `main` at 9d793cb (M1–M6 up to M6-22); `qa` at a4cd8a7 (all of M6).
 - M6-23..25 merged on dev: M6-23 (MailUp DKIM alternatives, 99e408b), M6-24 (pip-audit CI, 2336d26), M6-25 (PSL licence, Gmail clip, 348959d). dev CI green on 348959d; dev CI green on 99e408b.
 - Promoted dev -> qa at a4cd8a7 (2026-11-12). Waiting for the maintainer qa -> main PR. docs/reviews/BRIEF.md is the maintainer's local brief, untracked and gitignored (f0fd329).
 - Maintainer decisions 2026-11-11: repository public, unlimited Actions minutes, rulesets `protect-qa` / `protect-main`, private vulnerability reporting.
