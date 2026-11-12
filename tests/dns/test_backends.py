@@ -110,7 +110,7 @@ def response(
 ) -> dns.message.Message:
     resp = dns.message.make_response(query)
     resp.set_rcode(rcode)
-    resp.flags |= flags
+    resp.flags |= dns.flags.RA | flags  # these model recursive resolvers: RA always set (R1-19)
     for section, items in ((resp.answer, answer), (resp.authority, authority)):
         for name, ttl, rdtype, rdatas in items:
             section.append(dns.rrset.from_text_list(name, ttl, "IN", rdtype, rdatas))
@@ -1419,3 +1419,57 @@ async def test_query_server_carries_unfinished_chain_resolve_unchanged() -> None
     # resolve() (recursive servers) keeps its result shape: nodata, no records, no detail.
     result = await custom(FakeTransport(handler)).resolve(Q_WWW)
     assert (result.state, result.records, result.detail_code) == (S.nodata, (), None)
+
+
+# --- R1-19: an empty reply without RA is an error in resolve(), not a definitive absence --------
+# RFC 1035 section 4.1.1: RA says whether the server offers recursion. resolve() talks to
+# recursive resolvers only; an empty NOERROR / NXDOMAIN without RA is no proof of absence.
+
+RA = dns.flags.RA
+RA_CASES = [
+    ("clear_empty_noerror", dns.rcode.NOERROR, [], 0, S.error, "no_recursion"),
+    ("clear_nxdomain", dns.rcode.NXDOMAIN, [], 0, S.error, "no_recursion"),
+    ("set_empty_noerror", dns.rcode.NOERROR, [], RA, S.nodata, None),
+    ("set_nxdomain", dns.rcode.NXDOMAIN, [], RA, S.nxdomain, None),
+    ("set_answer", dns.rcode.NOERROR, A_ANSWER, RA, S.ok, None),
+    ("clear_answer_stays_valid", dns.rcode.NOERROR, A_ANSWER, 0, S.ok, None),
+    # Other failures keep their own state whatever RA says.
+    ("clear_servfail", dns.rcode.SERVFAIL, [], 0, S.servfail, None),
+    ("clear_refused", dns.rcode.REFUSED, [], 0, S.refused, None),
+]
+
+
+def _ra_handler(rcode: int, answer: list[Any], ra: int) -> Handler:
+    def handler(q: dns.message.Message, _t: ResolverAddr, _tcp: bool) -> bytes:
+        resp = dns.message.make_response(q)  # RA clear
+        resp.set_rcode(rcode)
+        resp.flags |= ra
+        for name, ttl, rdtype, rdatas in answer:
+            resp.answer.append(dns.rrset.from_text_list(name, ttl, "IN", rdtype, rdatas))
+        return wire(resp)
+
+    return handler
+
+
+@pytest.mark.parametrize(
+    ("rcode", "answer", "ra", "state", "detail"),
+    [c[1:] for c in RA_CASES],
+    ids=[c[0] for c in RA_CASES],
+)
+async def test_resolve_ra_flag(
+    rcode: int, answer: list[Any], ra: int, state: ResultState, detail: str | None
+) -> None:
+    t = FakeTransport(_ra_handler(rcode, answer, ra))
+    result = await custom(t).resolve(Q_A)
+    assert (result.state, result.detail_code) == (state, detail)
+    assert len(t.calls) == 1  # error-class replies are not retried, like other rcode failures
+    if state is S.error:
+        assert result.records == ()
+
+
+async def test_query_server_ignores_ra() -> None:
+    """The trace path asks authoritative servers without RD: RA clear stays nodata/nxdomain."""
+    for rcode, state in ((dns.rcode.NOERROR, S.nodata), (dns.rcode.NXDOMAIN, S.nxdomain)):
+        t = FakeTransport(_ra_handler(rcode, [], 0))
+        reply = await custom(t).query_server(PUBLIC, Q_A)
+        assert reply.result.state is state

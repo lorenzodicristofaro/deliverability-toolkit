@@ -61,6 +61,13 @@ are listed as "not evaluated", belong to no answer group and are not counted. Th
 stores a failure. If the whole request deadline expires the API still answers 200 with
 `state: "timeout"`, `evaluated: false`, `detail_code: "request_deadline"`.
 
+Recursion not available (R1-19): `resolve()` queries recursive resolvers. A reply that is NOERROR
+without answer records, or NXDOMAIN, and does not have the RA (recursion available) flag set
+(RFC 1035 section 4.1.1) is not a definitive absence: it maps to `error` with detail code
+`no_recursion`, never `nodata`/`nxdomain`, and is not retried (like other error replies). A reply
+that carries answer data stays valid whatever RA says. `query_server` (trace, authoritative
+servers, no RD) is unaffected: it does not look at RA.
+
 The acceptance tests (`tests/dns/test_acceptance_m2.py`) assert this at each layer.
 
 ### CNAME at the traced name (R1-07)
