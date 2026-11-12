@@ -507,3 +507,29 @@ def test_dkim_none_and_spf_helo_end_to_end(
     else:
         assert a.status not in ("error", "fail")
     assert ("MSG_ALIGNMENT_FAIL" in {f.code for f in a.findings}) is align_fail
+
+
+# Largest list that fits the 64 KiB unfolded-header cap; folded to respect the line cap.
+_BIG = ",\r\n ".join(f"u{i}@example.net" for i in range(2500))
+_COUNT_ROWS: list[tuple[str, str, int]] = [
+    ("To", "=?utf-8?Q?Doe=2C_John?= <j@example.org>", 1),
+    ("Cc", '"Doe, John" <j@example.org>', 1),
+    ("To", "=?utf-8?Q?a=3Cb=40c?= <x@example.org>", 1),
+    ("To", "=?utf-8?q?Doe=2C_John?= <a@example.com>, b@example.com", 2),
+    ("To", "a@example.net, b@example.net", 2),
+    ("To", "=?utf-8?Q?Doe=2C_John <j@example.org>", 1),
+    ("To", "", 0),
+    ("To", "(just a comment)", 0),
+    ("To", "undisclosed-recipients:;", 0),
+    ("To", "team: a@example.net, b@example.net;", 2),
+    ("To", "a@example.net,\r\n =?utf-8?Q?Doe=2C_John?=\r\n <j@example.org>", 2),
+    ("To", _BIG, 2500),
+]
+
+
+@pytest.mark.parametrize(("name", "value", "expected"), _COUNT_ROWS)
+def test_to_cc_count_uses_raw_header_value(name: str, value: str, expected: int) -> None:
+    raw = msg().decode().replace(f"{name}:", f"X-Orig-{name}:", 1)
+    raw = f"{name}: {value}\r\n" + raw
+    s = analyze_message(raw.encode()).summary
+    assert (s.to_count if name == "To" else s.cc_count) == expected
