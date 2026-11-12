@@ -53,6 +53,7 @@
   "api.rules.error.seeded_delete": "A rule from the shipped rule set cannot be deleted. Disable it instead.",
   "api.rules.error.test_failed": "The test could not be completed. No result is available.",
   "api.rules.error.timed_out": "The pattern took too long on this sample, so no result is available.",
+  "auth.login.busy": "The server is busy. Please try again in a moment.",
   "auth.login.email": "Email",
   "auth.login.failed": "Invalid email or password.",
   "auth.login.password": "Password",

@@ -1,8 +1,12 @@
 """Login, logout and the active-tenant switch (M1-15, GM decisions Q3 and Q4a).
 
 - GET/POST /login: email + password. One generic failure message whatever the reason (unknown
-  user, wrong password, inactive user, no password set). Throttled per (IP, account) by
-  `app.services.login_throttle` (in-process: single web process only, see that module).
+  user, wrong password, inactive user, no password set). Throttled per (IP, account) and per IP
+  by `app.services.login_throttle` (in-process: single web process only, see that module), and
+  at most `MAX_CONCURRENT_VERIFICATIONS` password verifications run at once in the process
+  (`VERIFICATION_SLOTS`). A throttled request gets the localized 429 "too many attempts" page
+  at once; a request that finds every slot taken waits up to `VERIFICATION_WAIT` seconds on the
+  event loop and then gets a 429 with its own localized "busy" message.
   Success rotates the session: the session the browser presented (if live) is revoked and a new
   one is issued, so the session-bound CSRF token changes too. Redirect target: `safe_next`.
 - POST /logout: revokes the current session and clears the cookie.
@@ -21,6 +25,7 @@ import logging
 import math
 from datetime import UTC, datetime
 
+import anyio
 from argon2 import PasswordHasher
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
@@ -43,7 +48,7 @@ from app.services.auth import (
     resolve_session,
     revoke_session,
 )
-from app.services.login_throttle import LoginThrottle
+from app.services.login_throttle import MAX_CONCURRENT_VERIFICATIONS, LoginThrottle
 from app.web.deps import LOGIN_PATH, CurrentSession, DbDep, SettingsDep
 from app.web.templating import form_value, read_form, render, request_language, safe_next
 
@@ -53,6 +58,13 @@ TENANT_SWITCH_DENIED_KEY = "auth.tenant_switch.denied"
 # Tests replace this with a fast hasher; production uses the argon2 defaults.
 PASSWORD_HASHER: PasswordHasher = DEFAULT_HASHER
 _THROTTLE_STATE_ATTR = "login_throttle"
+# Process-wide bound on concurrent argon2 verifications (R1-03); tests replace it. It lives on
+# the event loop: a request waits for a slot without holding a worker thread.
+VERIFICATION_SLOTS = anyio.Semaphore(
+    MAX_CONCURRENT_VERIFICATIONS, max_value=MAX_CONCURRENT_VERIFICATIONS
+)
+# Longest wait for a free slot (seconds) before answering 429 "busy"; tests replace it.
+VERIFICATION_WAIT = 2.5
 
 router = APIRouter()
 
@@ -110,6 +122,27 @@ def _login_page(
     )
 
 
+def _throttled_page(
+    request: Request, wait: float, next_path: str, email: str, *, error: str = "throttled"
+) -> HTMLResponse:
+    page = _login_page(request, status_code=429, next_path=next_path, email=email, error=error)
+    page.headers["Retry-After"] = str(max(1, math.ceil(wait)))
+    return page
+
+
+async def _take_slot(slots: anyio.Semaphore, timeout: float) -> bool:
+    """Acquire a verification slot, waiting at most `timeout` seconds; False if none freed."""
+    try:
+        slots.acquire_nowait()
+        return True
+    except anyio.WouldBlock:
+        pass
+    with anyio.move_on_after(timeout):
+        await slots.acquire()
+        return True
+    return False
+
+
 @router.get(LOGIN_PATH, include_in_schema=False)
 def login_form(request: Request) -> HTMLResponse:
     return _login_page(request, next_path=safe_next(request.query_params.get("next")))
@@ -150,20 +183,28 @@ async def login(request: Request, db: DbDep, settings: SettingsDep) -> Response:
     ip = _client_ip(request)
     throttle = login_throttle(request)
 
-    # Atomic check-and-reserve: the attempt is counted as a failure before the password is
-    # verified, so parallel requests cannot all slip through; success clears the key.
-    wait = throttle.acquire(ip, email)
+    # 1. Throttled requests are refused before they could queue for a verification slot.
+    # 2. A slot, waiting at most VERIFICATION_WAIT; a refusal here is not counted.
+    # 3. The atomic check-and-reserve (IP limit, then key): the attempt is counted before the
+    #    password is verified, so parallel requests cannot all slip through; success clears it.
+    wait = throttle.retry_after(ip, email)
     if wait > 0:
         logger.warning("login throttled", extra={"event": "auth.login_throttled"})
-        page = _login_page(
-            request, status_code=429, next_path=next_path, email=shown_email, error="throttled"
+        return _throttled_page(request, wait, next_path, shown_email)
+    slots = VERIFICATION_SLOTS
+    if not await _take_slot(slots, VERIFICATION_WAIT):
+        logger.warning("login refused: verifications busy", extra={"event": "auth.login_busy"})
+        return _throttled_page(request, 1.0, next_path, shown_email, error="busy")
+    try:
+        wait = throttle.acquire(ip, email)
+        if wait > 0:
+            logger.warning("login throttled", extra={"event": "auth.login_throttled"})
+            return _throttled_page(request, wait, next_path, shown_email)
+        issued = await run_in_threadpool(
+            _login, db, settings, email, password, request.cookies.get(SESSION_COOKIE_NAME)
         )
-        page.headers["Retry-After"] = str(max(1, math.ceil(wait)))
-        return page
-
-    issued = await run_in_threadpool(
-        _login, db, settings, email, password, request.cookies.get(SESSION_COOKIE_NAME)
-    )
+    finally:
+        slots.release()
     if issued is None:  # the failure was already counted by acquire()
         logger.info("login failed", extra={"event": "auth.login_failed"})
         return _login_page(
