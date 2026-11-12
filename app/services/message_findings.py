@@ -73,7 +73,8 @@ From is reported as ``MSG_MULTIPLE_FROM`` only (one finding per problem).
 Error-class conditions (``unevaluated``): ``date`` (invalid, or without a zone), ``received``
 (any unparsed hop), ``authres`` (an Authentication-Results field that could not be parsed),
 ``alignment`` (alignment not computable although Authentication-Results exist),
-``list_unsubscribe`` (a List-Unsubscribe field capped or unreadable, so One-Click is unknown),
+``list_unsubscribe`` (a List-Unsubscribe field capped or unreadable, so One-Click is unknown;
+explained by ``MSG_PARSER_LIMIT`` with the ``list_unsubscribe`` limit),
 and ``parser`` (input rejected
 or capped).
 """
@@ -497,12 +498,11 @@ def _other_part(block: HeaderBlock, alignment: AlignmentReport, acc: _Acc) -> No
         acc.add("MSG_LIST_UNSUBSCRIBE_MISSING", "info")
     else:
         # RFC 8058 section 3.1 / 5 verdict from the shared parser (same as the content analyzer).
+        # A capped or unreadable field only leaves One-Click unknown when the https answer is
+        # unknown (the parser stops at the first good https URI, as the content analyzer relies
+        # on) and the field is not duplicated (RFC 8058 needs exactly one, so never One-Click).
         facts = analyze_list_unsubscribe(block)
-        if (
-            facts.https_uri_present is None
-            or facts.field_count > len(facts.fields)
-            or any(not f.evaluated or f.capped for f in facts.fields)
-        ):
+        if facts.https_uri_present is None and not facts.duplicated:
             acc.skip("list_unsubscribe")
         elif not facts.one_click_eligible:
             acc.add("MSG_LIST_UNSUBSCRIBE_NO_ONECLICK", "info")
@@ -552,6 +552,8 @@ def build_message_findings(
     _alignment_part(alignment, bool(headers), acc)
     _arc_part(arc, acc)
     _other_part(block, alignment, acc)
+    if "list_unsubscribe" in acc.unevaluated:
+        limits.append("list_unsubscribe")
     if mime is not None:
         _mime_part(mime, acc)
 

@@ -821,6 +821,14 @@ HOSTILE: list[tuple[tuple[str, ...], tuple[str, ...]]] = [
         ("Received",),
         tuple(f"Received: from a{i}.example by b.example; {BASE['Date'][5:]}" for i in range(120)),
     ),
+    # Over the List-Unsubscribe parser's value cap (folded under the header-line cap).
+    (
+        ("List-Unsubscribe", "List-Unsubscribe-Post"),
+        (
+            f"List-Unsubscribe: <https://example.com/{'a' * 5000}\r\n {'b' * 5000}>",
+            "List-Unsubscribe-Post: List-Unsubscribe=One-Click",
+        ),
+    ),
 ]
 
 
@@ -912,6 +920,55 @@ def test_oneclick_overlong_field_is_not_evaluated() -> None:
     assert "list_unsubscribe" in r.unevaluated
     assert r.status == "error"
     assert "MSG_LIST_UNSUBSCRIBE_NO_ONECLICK" not in codes(r)
+    f = _find(r, "MSG_PARSER_LIMIT")
+    assert f.severity == "medium"
+    assert "list_unsubscribe" in f.params["limits"]
+
+
+# A field that is capped or unreadable leaves One-Click unknown only when nothing else decides it.
+_OVERLONG = f"{_LU}: <https://example.com/{'a' * 5000}\r\n {'b' * 5000}>"
+# More bracketed URIs than the parser's MAX_URIS (32): the field is capped, the https URI is first.
+_CAPPED = f"{_LU}: <https://example.com/u>," + ",".join(
+    f"\r\n <mailto:u{i}@example.com>" for i in range(40)
+)
+
+# (label, extra header lines, expect the message finding)
+DECIDED_ROWS = [
+    ("duplicated-one-overlong-https", (_OVERLONG, _HTTPS, f"{_POST}: {_OK_POST}"), True),
+    ("capped-https-bad-post", (_CAPPED, f"{_POST}: x {_OK_POST}"), True),
+    ("capped-https-post-missing", (_CAPPED,), True),
+    ("capped-https-valid-post", (_CAPPED, f"{_POST}: {_OK_POST}"), False),
+]
+
+
+@pytest.mark.parametrize(
+    ("label", "lines", "expect"), DECIDED_ROWS, ids=[r[0] for r in DECIDED_ROWS]
+)
+def test_oneclick_decided_despite_capped_field(
+    label: str, lines: tuple[str, ...], expect: bool
+) -> None:
+    r = analyze_message(_oneclick_raw(lines))
+    assert ("MSG_LIST_UNSUBSCRIBE_NO_ONECLICK" in codes(r)) is expect
+    assert r.unevaluated == () and r.status != "error"
+    assert "MSG_PARSER_LIMIT" not in codes(r)
+
+
+@pytest.mark.parametrize(
+    ("label", "lines", "expect"), DECIDED_ROWS, ids=[r[0] for r in DECIDED_ROWS]
+)
+def test_oneclick_decided_matches_content_analyzer(
+    label: str, lines: tuple[str, ...], expect: bool
+) -> None:
+    test_oneclick_matches_content_analyzer(label, lines, expect)
+
+
+def test_oneclick_duplicated_with_unreadable_field_is_never_oneclick() -> None:
+    # RFC 8058 needs exactly one List-Unsubscribe field, so the over-long one cannot change the
+    # answer. The content analyzer stays silent on One-Click here (https unknown): see the report.
+    lines = (_OVERLONG, f"{_LU}: <mailto:u@example.com>", f"{_POST}: {_OK_POST}")
+    r = analyze_message(_oneclick_raw(lines))
+    assert "MSG_LIST_UNSUBSCRIBE_NO_ONECLICK" in codes(r)
+    assert r.unevaluated == () and r.status != "error"
 
 
 def test_oneclick_no_unsubscribe_header_unchanged() -> None:
