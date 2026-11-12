@@ -187,10 +187,10 @@ Goal: fix the findings of the maintainer-requested code review of dev 06869fb (r
 Accept: each ticketed finding is reproduced by a failing test and fixed, or recorded as not reproduced; CI green on dev.
 Tickets (docs/tickets/):
 - [x] R1-01 PARSE-01 quadratic style regexes (ReDoS) + `_REPLY` rewrite (opus)
-- [ ] R1-02 AUTH-01 release the DB connection after authentication (opus)
-- [ ] R1-03 AUTH-02 login throttle: per-IP limit, argon2 concurrency bound, eviction reset; includes the "Per-IP cap on throttle keys" item (opus)
-- [ ] R1-04 AUTH-03 compose.yaml forwards BASE_URL and the other documented settings (sonnet)
-- [ ] R1-05 DNS-01 DMARC inherited policy uses sp (sonnet)
+- [x] R1-02 AUTH-01 release the DB connection after authentication (opus)
+- [x] R1-03 AUTH-02 login throttle: per-IP limit, argon2 concurrency bound, eviction reset; includes the "Per-IP cap on throttle keys" item (opus)
+- [x] R1-04 AUTH-03 compose.yaml forwards BASE_URL and the other documented settings (sonnet)
+- [x] R1-05 DNS-01 DMARC inherited policy uses sp (sonnet)
 - [ ] R1-06 DNS-02 SPF tree own domain-spec target normaliser (opus)
 - [ ] R1-07 DNS-03 trace reports an unfinished CNAME chain (opus); following the CNAME is a follow-up
 - [ ] R1-08 DNS-04 DKIM non-key TXT is not a found selector, one aggregated finding (sonnet)
@@ -218,6 +218,9 @@ Tickets (docs/tickets/):
 - [ ] R1-29 INFRA-07 app container hardening (sonnet; related to the safe_regex orphan item below; depends R1-04)
 Follow-ups:
 - R1-01 follow-up: an over-cap inline style also marks the links section not evaluated (content_analysis.py treats any body not-evaluated reason as incomplete); narrow it to body + rules. Timing tests in tests/parsers/test_content_html.py add ~25 s; consider a `slow` marker.
+- R1-03 follow-up: login throttle limits (IP_MAX_ATTEMPTS, MAX_CONCURRENT_VERIFICATIONS, VERIFICATION_WAIT) are module constants; behind a reverse proxy the per-IP budget is shared by all users until the trusted-proxy item lands; consider settings.
+- R1-04 follow-up: optional startup warning for a non-localhost http:// BASE_URL; parity test could also assert every forwarded Settings field is documented.
+- R1-05 follow-up: inherited-sp scenario in tests/checks/test_acceptance_m3.py; assert the PCT_PARTIAL p argument in the sp-pct row.
 Not ticketed — maintainer:
 - AUTH-04 (trusted proxy, remote lockout): folded into the existing item "Trusted-proxy setting for the client IP" in Follow-ups; no ticket.
 - INFRA-01 (push-policy deny rules, no server-side ruleset for tags and dev) and INFRA-02 (workflow file can raise its own token rights): touch `.claude/settings.json`, push and permission policy; maintainer decision.
@@ -357,7 +360,7 @@ Maintainer decision 2026-11-12: moved from M9; no test domains or access yet, an
 - [ ] CSRF exemption for future bearer-token API routes
 - [ ] Throttle the `last_seen_at` write in resolve_session
 - [ ] DB-backed login throttle for multi-process deployments
-- [ ] Per-IP cap on throttle keys, plus a warning log when the table is full (a single IP can fill the table with locked keys and block new logins)
+- [x] Per-IP cap on throttle keys, plus a warning log when the table is full (a single IP can fill the table with locked keys and block new logins) (done in R1-03)
 - [ ] Trusted-proxy setting for the client IP (needed before any reverse-proxy deployment). Consequence added by the 2026-11-12 review: behind a proxy every client shares one throttle IP, so anyone who knows an email address can lock that account remotely (ten wrong passwords per 15 minutes) and can lock the setup wizard (five wrong setup tokens delay, ten lock it); the documented HTTPS path already implies a proxy; uvicorn `forwarded-allow-ips` default (127.0.0.1 only) is unverified, check the uvicorn documentation before designing (review AUTH-04)
 - [ ] `services.auth.rotate_session` helper (`_switch` reads the sessions row directly)
 - [ ] Dispose of the DB engine at shutdown via the lifespan

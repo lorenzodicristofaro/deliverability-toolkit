@@ -17,7 +17,8 @@ Acceptance criteria:
 - Per-route `db.rollback()` calls that become redundant: keep as documentation or remove, state which in the summary.
 - Tests table-driven, no network, no wall-clock assertions. ruff, mypy, relevant tests and the tenancy matrix green. Full suite only if deps.py changes behaviour for all routes (it does: run it).
 New i18n keys: none
-Status: todo
+Status: done
+Outcome: reproduced (11 routes held a pooled connection during the awaited call; 15 of 20 parked lookups exhausted the pool); fixed in merge 3806dde (optional_session closes the Session after auth; Authentication tab rolls back after the domain lookup); QA APPROVE; dev CI green.
 
 ## Review details (copied from the code review of 2026-11-12, dev 06869fb)
 - Location:

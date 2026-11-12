@@ -16,7 +16,8 @@ Acceptance criteria:
 - Existing 429 body stays localized (en + it); no input echoed.
 - Tests table-driven, no network, no wall-clock assertions. ruff, mypy, relevant tests green. Tick TODO.md:317 is the PM's job after merge.
 New i18n keys: none expected (reuse the 429 page text). If added: en + it.
-Status: todo
+Status: done
+Outcome: reproduced (all three parts); fixed in merge 4e09de2 (per-IP limit 100/15 min, max 4 concurrent verifications with a 2.5 s bounded wait and auth.login.busy 429, evicted failures charged to the IP); QA APPROVE (2 rounds incl. delta); dev CI green.
 
 ## Review details (copied from the code review of 2026-11-12, dev 06869fb)
 - Location: `app/web/auth.py:141-167` (throttle key, then `_login` in the threadpool), `app/services/login_throttle.py:74-80` (key = IP + account), `app/services/login_throttle.py:185-198` (`_make_room` evicts the oldest free key), `app/core/security.py:34,90-97` (library defaults: 64 MiB, 4 lanes; `dummy_verify` for unknown accounts).

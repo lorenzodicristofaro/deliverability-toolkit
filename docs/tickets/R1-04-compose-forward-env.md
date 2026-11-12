@@ -15,7 +15,8 @@ Acceptance criteria:
 - Optional: startup warning when `BASE_URL` is `http://` and the host is not localhost (log only, no user-facing string).
 - Tests table-driven, no network, no wall clock. ruff, mypy, tests/test_compose_config.py green.
 New i18n keys: none
-Status: todo
+Status: done
+Outcome: reproduced (7 documented settings not forwarded); fixed in merge 110efe5; QA APPROVE; dev CI green incl. CI infra.
 
 ## Review details (copied from the code review of 2026-11-12, dev 06869fb)
 - Location: `compose.yaml:14-21` (the `environment:` block lists only `DATABASE_URL`, `SECRET_KEY`, `ENCRYPTION_KEY`, `RESOLVER_MODE`, `RESOLVER_ADDRS`; no `env_file`), `.env.example:25-26`, `app/core/security.py:170` (`secure=` from `BASE_URL`), `app/core/csrf.py:137-145` (same for `dt_csrf`), `app/core/security_headers.py:48-51` (HSTS from `BASE_URL`).
