@@ -9,6 +9,7 @@ below and the behaviour of each tool. Sessions come straight from `create_sessio
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import logging
 from collections.abc import Iterator
 from typing import Any
@@ -23,8 +24,9 @@ from app.core import i18n
 from app.core.config import Settings
 from app.core.db import create_db_engine, create_session_factory
 from app.core.i18n import t
+from app.dns.backends import ServerReply
 from app.dns.cache import CachingResolver
-from app.dns.types import DnsQuestion, DnsResult, ResultState
+from app.dns.types import DnsQuestion, DnsRecord, DnsResult, ResultState
 from app.main import create_app
 from app.models import Membership
 from tests.api.test_domains import KEY, World, _seed, call
@@ -455,6 +457,42 @@ def test_trace_nxdomain_is_evaluated(world: World) -> None:
     body = post(world, "trace", {"name": "missing.example.com", "type": "A"}).json()
     assert body["state"] == "nxdomain"
     assert body["evaluated"] is True
+
+
+def use_cname_leaf(world: World, target: str) -> None:
+    """The example.com server (192.0.2.3) answers with an AA CNAME into another zone (R1-07)."""
+    backend, fs = fake_backend(None)
+
+    async def ask(addr: str, q: DnsQuestion) -> Any:
+        if addr != "192.0.2.3":
+            return await fs.query_server(addr, q)
+        link = DnsRecord(q.name, "CNAME", 300, target)
+        result = DnsResult(q, ResultState.nodata, rcode=0, server=addr)
+        return ServerReply(result, authoritative=True, cname_chain=(link,), cname_target=target)
+
+    swapped = dataclasses.replace(backend, query_server=ask)
+    world.client.app.dependency_overrides[dns_backend] = lambda: swapped  # type: ignore[attr-defined]
+
+
+def test_trace_cname_outcome_is_serialized(world: World) -> None:
+    use_cname_leaf(world, "host.example.net")
+    r = post(world, "trace", {"name": "www.example.com", "type": "A"})
+    assert r.status_code == 200
+    body = r.json()
+    assert (body["outcome"], body["state"], body["evaluated"]) == ("cname", "ok", True)
+    assert body["answer"] == []
+    assert body["cname_chain"] == [
+        {"name": "www.example.com", "rdtype": "CNAME", "ttl": 300, "rdata": "host.example.net"}
+    ]
+    assert body["cname_target"] == "host.example.net"
+    last = body["hops"][-1]
+    assert (last["kind"], last["state"], last["detail_code"]) == ("answer", "ok", "cname")
+    assert last["records"] == body["cname_chain"]
+
+
+def test_trace_other_outcomes_have_empty_cname_fields(world: World) -> None:
+    body = post(world, "trace", {"name": "example.com", "type": "A"}).json()
+    assert (body["outcome"], body["cname_chain"], body["cname_target"]) == ("ok", [], None)
 
 
 # --- propagation ------------------------------------------------------------------------------

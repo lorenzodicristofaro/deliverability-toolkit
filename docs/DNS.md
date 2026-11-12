@@ -55,13 +55,36 @@ Rule: a failure is never reported as absence, anywhere. Results carry `evaluated
 are drawn as "could not be evaluated" with a reason code (UI, `data-kind="failure"`). Aggregates
 follow the same rule: a lookup summary lists failed types apart from absent ones; FCrDNS is
 `could_not_verify` (never `mismatch`) if any step failed; a trace outcome other than
-`ok`/`nxdomain`/`nodata` has state `error`; nxdomain/nodata in a trace count only from an
+`ok`/`cname`/`nxdomain`/`nodata` has state `error`; nxdomain/nodata in a trace count only from an
 authoritative (AA) reply, otherwise the outcome is `lame_delegation`; propagation rows that failed
 are listed as "not evaluated", belong to no answer group and are not counted. The cache never
 stores a failure. If the whole request deadline expires the API still answers 200 with
 `state: "timeout"`, `evaluated: false`, `detail_code: "request_deadline"`.
 
 The acceptance tests (`tests/dns/test_acceptance_m2.py`) assert this at each layer.
+
+### CNAME at the traced name (R1-07)
+
+An authoritative server often answers `www.example.com A` with only
+`www.example.com CNAME host.example.net` when the target lives in another zone it does not
+serve. The backend keeps such an unfinished chain: `interpret_response` returns state `nodata`
+with the CNAME records and the last target, and `query_server` passes them on in
+`ServerReply.cname_chain` / `cname_target`. `resolve()` against a recursive resolver is unchanged
+(the resolver returns the full chain; a chain ending nowhere there is still plain `nodata`).
+
+The trace then ends with outcome `cname` (state `ok`, `evaluated: true`): the name exists and is
+an alias, which is neither an error nor "no record of that type". The answer hop has state `ok`,
+detail `cname` (or `non_authoritative` without the AA flag, like a positive answer) and the CNAME
+records; `answer` stays empty. **The trace does not follow the target** (no restart from the
+root): trace the target name to see its records. Unchanged: an in-zone chain that ends in a
+record of the asked type is `ok` with that record; NXDOMAIN with a CNAME in the answer stays
+`nxdomain`; an empty authoritative NOERROR stays `nodata`; a CNAME loop or a chain longer than
+16 links in one response is `malformed`.
+
+API (`/api/v1/dns/trace`, additive): `cname_chain` is a list of records
+(`{name, rdtype: "CNAME", ttl, rdata}`, in chain order) and `cname_target` the last target
+(string); for every other outcome they are `[]` and `null`. UI: the outcome label
+`tools.dns.trace.outcome.cname` (en + it) followed by the chain table, escaped like all DNS data.
 
 ## Limits and defaults
 

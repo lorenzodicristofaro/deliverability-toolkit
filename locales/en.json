@@ -816,6 +816,7 @@
   "tools.dns.trace.kind.skipped": "Skipped: server already queried for this zone",
   "tools.dns.trace.outcome": "Result of the trace",
   "tools.dns.trace.outcome.all_failed": "Could not be evaluated: every server of a zone failed to answer.",
+  "tools.dns.trace.outcome.cname": "The name is an alias (CNAME): the server returned the chain shown below but no record of this type for its last target. The trace does not follow the target; trace that name to see its records.",
   "tools.dns.trace.outcome.deadline": "Could not be evaluated: the trace ran out of time.",
   "tools.dns.trace.outcome.depth_exceeded": "Could not be evaluated: too many referrals (depth limit reached).",
   "tools.dns.trace.outcome.lame": "Could not be evaluated: lame delegation, the delegated servers do not answer authoritatively.",

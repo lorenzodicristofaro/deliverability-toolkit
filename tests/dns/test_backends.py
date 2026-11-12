@@ -34,8 +34,10 @@ from app.dns.backends import (
     ResponseTooLarge,
     ServerReply,
     WireReply,
+    _Bad,
     asyncio_transport,
     classify_exception,
+    interpret_response,
 )
 from app.dns.egress import BlockReason, TargetPolicy
 from app.dns.factory import build_resolver, build_resolver_for_target, system_nameservers
@@ -1228,3 +1230,192 @@ async def test_resolver_over_real_transport_code(
     r = DnsPythonResolver([NS1], trusted=True, identity="x", max_attempts=1)
     assert (await r.resolve(Q_A)).state is state
     assert all(t.closed for t in created)
+
+
+# --- R1-07: unfinished CNAME chain (authoritative answer for another zone's target) -----------
+
+Q_WWW = DnsQuestion("www.example.com", "A")
+CROSS_ZONE_CNAME = [("www.example.com.", 300, "CNAME", ["host.example.net."])]
+
+
+def _msg(
+    question: DnsQuestion = Q_WWW,
+    *,
+    rcode: int = dns.rcode.NOERROR,
+    answer: list[tuple[str, int, str, list[str]]] = (),  # type: ignore[assignment]
+    flags: int = dns.flags.AA,
+) -> dns.message.Message:
+    query = dns.message.make_query(question.name, question.rdtype)
+    # Round-trip through the wire: parsed like a real reply (and the message index is built).
+    return dns.message.from_wire(wire(response(query, rcode=rcode, answer=answer, flags=flags)))
+
+
+def _www_chain(links: int, *, final: bool = False) -> list[tuple[str, int, str, list[str]]]:
+    names = ["www.example.com."] + [f"c{i}.example.com." for i in range(1, links)]
+    names.append("host.example.net.")
+    answer = [(names[i], 300, "CNAME", [names[i + 1]]) for i in range(links)]
+    if final:
+        answer.append((names[-1], 300, "A", ["192.0.2.1"]))
+    return answer
+
+
+# (id, message, state, records (name, rdata), chain (owner, ttl, target), final target)
+INTERPRET_CNAME_CASES: list[
+    tuple[
+        str,
+        dns.message.Message,
+        ResultState,
+        list[tuple[str, str]],
+        list[tuple[str, int, str]],
+        str | None,
+    ]
+] = [
+    (
+        "cross_zone_cname_only",
+        _msg(answer=CROSS_ZONE_CNAME),
+        S.nodata,
+        [],
+        [("www.example.com", 300, "host.example.net")],
+        "host.example.net",
+    ),
+    (
+        "cross_zone_cname_non_aa",
+        _msg(answer=CROSS_ZONE_CNAME, flags=0),
+        S.nodata,
+        [],
+        [("www.example.com", 300, "host.example.net")],
+        "host.example.net",
+    ),
+    (
+        "in_zone_chain_then_out_of_zone",
+        _msg(
+            answer=[
+                ("www.example.com.", 600, "CNAME", ["a.example.com."]),
+                ("a.example.com.", 60, "CNAME", ["host.example.net."]),
+            ]
+        ),
+        S.nodata,
+        [],
+        [("www.example.com", 600, "a.example.com"), ("a.example.com", 60, "host.example.net")],
+        "host.example.net",
+    ),
+    (
+        "in_zone_chain_with_final_record",
+        _msg(
+            answer=[
+                ("www.example.com.", 600, "CNAME", ["a.example.com."]),
+                ("a.example.com.", 300, "A", ["192.0.2.7"]),
+            ]
+        ),
+        S.ok,
+        [("a.example.com", "192.0.2.7")],
+        [],
+        None,
+    ),
+    (
+        "nxdomain_with_cname_unchanged",
+        _msg(rcode=dns.rcode.NXDOMAIN, answer=CROSS_ZONE_CNAME),
+        S.nxdomain,
+        [],
+        [],
+        None,
+    ),
+    ("empty_noerror_is_plain_nodata", _msg(), S.nodata, [], [], None),
+    (
+        "unrelated_cname_ignored",
+        _msg(answer=[("other.example.com.", 300, "CNAME", ["host.example.net."])]),
+        S.nodata,
+        [],
+        [],
+        None,
+    ),
+    (
+        "cname_question_returns_the_cname",
+        _msg(DnsQuestion("www.example.com", "CNAME"), answer=CROSS_ZONE_CNAME),
+        S.ok,
+        [("www.example.com", "host.example.net")],
+        [],
+        None,
+    ),
+    (
+        "chain_at_limit_without_final",
+        _msg(answer=_www_chain(MAX_CNAME_CHAIN)),
+        S.nodata,
+        [],
+        [
+            (n.rstrip(".").lower(), 300, t[0].rstrip("."))
+            for n, _, _, t in _www_chain(MAX_CNAME_CHAIN)
+        ],
+        "host.example.net",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    ("msg", "state", "records", "chain", "target"),
+    [c[1:] for c in INTERPRET_CNAME_CASES],
+    ids=[c[0] for c in INTERPRET_CNAME_CASES],
+)
+def test_interpret_response_exposes_unfinished_cname_chain(
+    msg: dns.message.Message,
+    state: ResultState,
+    records: list[tuple[str, str]],
+    chain: list[tuple[str, int, str]],
+    target: str | None,
+) -> None:
+    rdtype = dns.rdatatype.to_text(msg.question[0].rdtype)
+    question = DnsQuestion(msg.question[0].name.to_text(omit_final_dot=True), rdtype)
+    out = interpret_response(msg, question)
+    assert out.state is state
+    assert [(r.name, r.rdata_text) for r in out.records] == records
+    assert [(r.name, r.ttl, r.rdata_text) for r in out.cname_chain] == chain
+    assert all(r.rdtype == "CNAME" for r in out.cname_chain)
+    assert out.cname_target == target
+    assert out.referral is None
+
+
+INTERPRET_CNAME_ERRORS: list[tuple[str, dns.message.Message, str]] = [
+    (
+        "loop_in_one_response",
+        _msg(
+            answer=[
+                ("www.example.com.", 300, "CNAME", ["a.example.com."]),
+                ("a.example.com.", 300, "CNAME", ["www.example.com."]),
+            ]
+        ),
+        "bad_cname_chain",
+    ),
+    (
+        "self_loop",
+        _msg(answer=[("www.example.com.", 300, "CNAME", ["www.example.com."])]),
+        "bad_cname_chain",
+    ),
+    ("chain_over_limit", _msg(answer=_www_chain(MAX_CNAME_CHAIN + 1)), "cname_chain_too_long"),
+]
+
+
+@pytest.mark.parametrize(
+    ("msg", "detail"),
+    [c[1:] for c in INTERPRET_CNAME_ERRORS],
+    ids=[c[0] for c in INTERPRET_CNAME_ERRORS],
+)
+def test_interpret_response_bad_cname_chain_is_malformed(
+    msg: dns.message.Message, detail: str
+) -> None:
+    with pytest.raises(_Bad) as exc:
+        interpret_response(msg, Q_WWW)
+    assert (exc.value.state, exc.value.detail) == (S.malformed, detail)
+
+
+async def test_query_server_carries_unfinished_chain_resolve_unchanged() -> None:
+    handler = answer_with(answer=CROSS_ZONE_CNAME, flags=dns.flags.AA)
+    reply = await custom(FakeTransport(handler)).query_server(PUBLIC, Q_WWW)
+    assert reply.referral is None and reply.authoritative is True
+    assert reply.result.state is S.nodata and reply.result.records == ()
+    assert [(r.name, r.rdata_text) for r in reply.cname_chain] == [
+        ("www.example.com", "host.example.net")
+    ]
+    assert reply.cname_target == "host.example.net"
+    # resolve() (recursive servers) keeps its result shape: nodata, no records, no detail.
+    result = await custom(FakeTransport(handler)).resolve(Q_WWW)
+    assert (result.state, result.records, result.detail_code) == (S.nodata, (), None)
