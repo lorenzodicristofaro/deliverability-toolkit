@@ -13,6 +13,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any, Literal
 
+import anyio
 import pytest
 from argon2 import PasswordHasher
 from fastapi import FastAPI
@@ -380,6 +381,17 @@ KEY = "k" * 40
 PASSWORD = "correct horse battery staple"
 FAST = PasswordHasher(time_cost=1, memory_cost=8, parallelism=1)
 CLIENT_IP = "testclient"  # the peer address Starlette's TestClient reports
+BUSY_EN = "The server is busy"
+
+
+def _slots(
+    monkeypatch: pytest.MonkeyPatch, free: int, bound: int, *, wait: float
+) -> anyio.Semaphore:
+    """Install a fresh verification semaphore and wait bound (no real waiting when wait=0)."""
+    slots = anyio.Semaphore(free, max_value=bound)
+    monkeypatch.setattr(web_auth, "VERIFICATION_SLOTS", slots)
+    monkeypatch.setattr(web_auth, "VERIFICATION_WAIT", wait)
+    return slots
 
 
 class SpyHasher(PasswordHasher):
@@ -483,11 +495,10 @@ def test_concurrent_verifications_are_bounded(
     spy = SpyHasher()
     with _running(migrated_db_url, monkeypatch) as a:
         monkeypatch.setattr(web_auth, "PASSWORD_HASHER", spy)
-        monkeypatch.setattr(
-            web_auth, "VERIFICATION_SLOTS", threading.BoundedSemaphore(bound), raising=False
-        )
+        _slots(monkeypatch, bound, bound, wait=0.0)  # no waiting: over the bound is "busy"
         token = _csrf(a.client.get("/login").text)
         statuses: list[int] = []
+        texts: list[str] = []
 
         def post(i: int) -> None:
             # Known (real verify) and unknown accounts (dummy_verify) alike.
@@ -499,6 +510,8 @@ def test_concurrent_verifications_are_bounded(
             )
             with spy.cond:
                 statuses.append(response.status_code)
+                if response.status_code == 429:
+                    texts.append(response.text)
                 spy.cond.notify_all()
 
         threads = [threading.Thread(target=post, args=(i,)) for i in range(requests)]
@@ -517,11 +530,96 @@ def test_concurrent_verifications_are_bounded(
         assert spy.peak <= bound
         assert statuses.count(429) == requests - bound
         assert statuses.count(401) == bound
-        slots = web_auth.VERIFICATION_SLOTS  # every slot was given back
-        assert all(slots.acquire(blocking=False) for _ in range(bound))
-        assert not slots.acquire(blocking=False)
+        # The busy page has its own message, not "too many failed attempts".
+        assert all(BUSY_EN in text and "Too many failed" not in text for text in texts)
+        assert web_auth.VERIFICATION_SLOTS.value == bound  # every slot was given back
         # Requests refused for lack of a slot were not counted against the IP.
         assert a.app.state.login_throttle._ips[ip_key(CLIENT_IP)].attempts == bound
+
+
+def test_request_waits_for_a_slot_instead_of_failing(
+    migrated_db_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spy = SpyHasher()
+    with _running(migrated_db_url, monkeypatch) as a:
+        monkeypatch.setattr(web_auth, "PASSWORD_HASHER", spy)
+        # The wait bound never elapses here: the second request must be served after the first.
+        slots = _slots(monkeypatch, 1, 1, wait=30.0)
+        token = _csrf(a.client.get("/login").text)
+        statuses: list[int] = []
+
+        def post(i: int) -> None:
+            response = a.client.post(
+                "/login",
+                data={"email": f"ghost{i}@example.com", "password": "x", "csrf_token": token},
+                follow_redirects=False,
+            )
+            with spy.cond:
+                statuses.append(response.status_code)
+
+        threads = [threading.Thread(target=post, args=(i,)) for i in range(2)]
+        for thread in threads:
+            thread.start()
+        with spy.cond:
+            # Poll (no timing asserted) until one request is verifying and the other queues.
+            for _ in range(600):
+                if spy.entered == 1 and slots.statistics().tasks_waiting == 1:
+                    break
+                spy.cond.wait(timeout=0.05)
+            assert spy.entered == 1 and slots.statistics().tasks_waiting == 1
+            spy.released = True
+            spy.cond.notify_all()
+        for thread in threads:
+            thread.join()
+        assert statuses == [401, 401]
+        assert spy.peak == 1
+        assert slots.value == 1
+
+
+@pytest.mark.parametrize("over", ["key", "ip"])
+def test_throttled_request_is_refused_without_queueing(
+    migrated_db_url: str, monkeypatch: pytest.MonkeyPatch, over: str
+) -> None:
+    with _running(migrated_db_url, monkeypatch) as a:
+        # No free slot and a long wait: a throttled request that queued would answer "busy".
+        _slots(monkeypatch, 0, 1, wait=30.0)
+        throttle = a.app.state.login_throttle
+        for i in range(10 if over == "key" else IP_MAX_ATTEMPTS):
+            throttle.record_failure(CLIENT_IP, "ghost@example.com" if over == "key" else str(i))
+        response = a.client.post(
+            "/login",
+            data={
+                "email": "ghost@example.com",
+                "password": "x",
+                "csrf_token": _csrf(a.client.get("/login").text),
+            },
+            follow_redirects=False,
+        )
+        assert response.status_code == 429
+        assert "Too many failed attempts" in response.text and BUSY_EN not in response.text
+
+
+@pytest.mark.parametrize(("lang", "text"), [("en", BUSY_EN), ("it", "Il server è occupato")])
+def test_busy_page_is_localized(
+    migrated_db_url: str, monkeypatch: pytest.MonkeyPatch, lang: str, text: str
+) -> None:
+    with _running(migrated_db_url, monkeypatch) as a:
+        _slots(monkeypatch, 0, 1, wait=0.0)
+        headers = {"Accept-Language": lang}
+        response = a.client.post(
+            "/login",
+            data={
+                "email": "alice@example.com",
+                "password": "pw-x",
+                "csrf_token": _csrf(a.client.get("/login", headers=headers).text),
+            },
+            headers=headers,
+            follow_redirects=False,
+        )
+        assert response.status_code == 429
+        assert response.headers["retry-after"] == "1"
+        assert text in response.text and "pw-x" not in response.text
+        assert len(a.app.state.login_throttle) == 0  # not counted
 
 
 def test_setup_token_path_shares_the_ip_limit(

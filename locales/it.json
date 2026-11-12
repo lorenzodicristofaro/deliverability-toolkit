@@ -53,6 +53,7 @@
   "api.rules.error.seeded_delete": "Una regola del set predefinito non può essere eliminata. Disattivala.",
   "api.rules.error.test_failed": "Non è stato possibile completare il test. Nessun risultato disponibile.",
   "api.rules.error.timed_out": "Il pattern ha richiesto troppo tempo su questo esempio, quindi nessun risultato è disponibile.",
+  "auth.login.busy": "Il server è occupato. Riprova tra qualche istante.",
   "auth.login.email": "Email",
   "auth.login.failed": "Email o password non validi.",
   "auth.login.password": "Password",

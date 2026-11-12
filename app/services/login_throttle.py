@@ -42,6 +42,9 @@ Evictions are counted against the evicted key's IP (R1-03): the IP remembers the
 evicted key (failure count and time of its last failure), and every new key of that IP starts
 from that state instead of from zero. A flood of new keys therefore cannot reset an attacker's
 own counter on a target account (or any key of the same IP) below what it had.
+Side effect: once a key from an IP has been evicted (table full), every new key from that IP,
+including the setup-token key, starts from the worst evicted state, so users behind the same NAT
+or proxy address inherit that backoff until it expires (`window`/`lockout` after its failure).
 The IP table is bounded too (`max_ips`, oldest touched evicted first). That eviction fails
 open: an attacker who controls more than `max_ips` addresses can make an IP forget its counts,
 but such an attacker is not limited by a per-IP rule anyway, and the per-key throttle and the
@@ -165,7 +168,9 @@ class LoginThrottle:
 
     def acquire(self, ip: object, account: object) -> float:
         """Reserve one attempt: 0.0 if allowed (already counted against the key and the IP),
-        else the seconds to wait (nothing is counted). The IP limit is checked first."""
+        else the seconds to wait (nothing is counted). The IP limit is checked first. A new key
+        of an IP that has had a key evicted (table full) starts from the worst evicted state, the
+        setup-token key included, so users sharing that address inherit its backoff."""
         key, ipk = throttle_key(ip, account), ip_key(ip)
         with self._lock:
             now = self._clock()
@@ -349,6 +354,8 @@ class LoginThrottle:
         if entry is None:
             if not self._make_room(now):
                 return False
+            # A new key starts from the worst evicted state of its IP (see the module docstring:
+            # every new key of that IP, setup-token key included, shares it until it expires).
             inherited = self._inherited(self._ips.get(ipk), now)
             entry = _Entry(
                 failures=inherited.failures if inherited else 0, last_failure=now, ip=ipk

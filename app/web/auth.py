@@ -4,7 +4,9 @@
   user, wrong password, inactive user, no password set). Throttled per (IP, account) and per IP
   by `app.services.login_throttle` (in-process: single web process only, see that module), and
   at most `MAX_CONCURRENT_VERIFICATIONS` password verifications run at once in the process
-  (`VERIFICATION_SLOTS`); over either limit the same localized 429 page is returned.
+  (`VERIFICATION_SLOTS`). A throttled request gets the localized 429 "too many attempts" page
+  at once; a request that finds every slot taken waits up to `VERIFICATION_WAIT` seconds on the
+  event loop and then gets a 429 with its own localized "busy" message.
   Success rotates the session: the session the browser presented (if live) is revoked and a new
   one is issued, so the session-bound CSRF token changes too. Redirect target: `safe_next`.
 - POST /logout: revokes the current session and clears the cookie.
@@ -21,9 +23,9 @@ from __future__ import annotations
 
 import logging
 import math
-import threading
 from datetime import UTC, datetime
 
+import anyio
 from argon2 import PasswordHasher
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
@@ -56,8 +58,13 @@ TENANT_SWITCH_DENIED_KEY = "auth.tenant_switch.denied"
 # Tests replace this with a fast hasher; production uses the argon2 defaults.
 PASSWORD_HASHER: PasswordHasher = DEFAULT_HASHER
 _THROTTLE_STATE_ATTR = "login_throttle"
-# Process-wide bound on concurrent argon2 verifications (R1-03); tests replace it.
-VERIFICATION_SLOTS = threading.BoundedSemaphore(MAX_CONCURRENT_VERIFICATIONS)
+# Process-wide bound on concurrent argon2 verifications (R1-03); tests replace it. It lives on
+# the event loop: a request waits for a slot without holding a worker thread.
+VERIFICATION_SLOTS = anyio.Semaphore(
+    MAX_CONCURRENT_VERIFICATIONS, max_value=MAX_CONCURRENT_VERIFICATIONS
+)
+# Longest wait for a free slot (seconds) before answering 429 "busy"; tests replace it.
+VERIFICATION_WAIT = 2.5
 
 router = APIRouter()
 
@@ -115,12 +122,25 @@ def _login_page(
     )
 
 
-def _throttled_page(request: Request, wait: float, next_path: str, email: str) -> HTMLResponse:
-    page = _login_page(
-        request, status_code=429, next_path=next_path, email=email, error="throttled"
-    )
+def _throttled_page(
+    request: Request, wait: float, next_path: str, email: str, *, error: str = "throttled"
+) -> HTMLResponse:
+    page = _login_page(request, status_code=429, next_path=next_path, email=email, error=error)
     page.headers["Retry-After"] = str(max(1, math.ceil(wait)))
     return page
+
+
+async def _take_slot(slots: anyio.Semaphore, timeout: float) -> bool:
+    """Acquire a verification slot, waiting at most `timeout` seconds; False if none freed."""
+    try:
+        slots.acquire_nowait()
+        return True
+    except anyio.WouldBlock:
+        pass
+    with anyio.move_on_after(timeout):
+        await slots.acquire()
+        return True
+    return False
 
 
 @router.get(LOGIN_PATH, include_in_schema=False)
@@ -163,14 +183,18 @@ async def login(request: Request, db: DbDep, settings: SettingsDep) -> Response:
     ip = _client_ip(request)
     throttle = login_throttle(request)
 
-    # A verification slot first (never queue: a busy process answers 429), so an attempt refused
-    # for lack of a slot is not counted. Then the atomic check-and-reserve (IP limit, then key):
-    # the attempt is counted before the password is verified, so parallel requests cannot all
-    # slip through; success clears the key.
+    # 1. Throttled requests are refused before they could queue for a verification slot.
+    # 2. A slot, waiting at most VERIFICATION_WAIT; a refusal here is not counted.
+    # 3. The atomic check-and-reserve (IP limit, then key): the attempt is counted before the
+    #    password is verified, so parallel requests cannot all slip through; success clears it.
+    wait = throttle.retry_after(ip, email)
+    if wait > 0:
+        logger.warning("login throttled", extra={"event": "auth.login_throttled"})
+        return _throttled_page(request, wait, next_path, shown_email)
     slots = VERIFICATION_SLOTS
-    if not slots.acquire(blocking=False):
+    if not await _take_slot(slots, VERIFICATION_WAIT):
         logger.warning("login refused: verifications busy", extra={"event": "auth.login_busy"})
-        return _throttled_page(request, 1.0, next_path, shown_email)
+        return _throttled_page(request, 1.0, next_path, shown_email, error="busy")
     try:
         wait = throttle.acquire(ip, email)
         if wait > 0:
