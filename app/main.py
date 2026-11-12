@@ -17,6 +17,7 @@ from app.core.csrf import CSRFMiddleware
 from app.core.i18n import validate_catalogues
 from app.core.logging import RequestLoggingMiddleware, configure_logging
 from app.core.security_headers import SecurityHeadersMiddleware
+from app.services.auth import SessionPolicy, purge_sessions
 from app.services.seed_sync import SeedSyncError, run_seed_sync
 from app.web.auth import router as auth_router
 from app.web.authentication import router as authentication_router
@@ -38,6 +39,7 @@ from app.web.templating import STATIC_DIR, render
 from app.web.templating import router as language_router
 
 logger = logging.getLogger("app.seed_sync")
+purge_logger = logging.getLogger("app.session_purge")
 
 _MIN_MASKED_LEN = 8  # same threshold as app.core.logging: shorter values are not masked
 
@@ -76,6 +78,25 @@ def sync_seeds_at_startup(app: FastAPI) -> None:
     )
 
 
+def purge_sessions_at_startup(app: FastAPI) -> None:
+    """Startup hook: delete dead session rows (R1-14). Any failure is logged by exception type
+    (its text can carry query details) and startup goes on."""
+    try:
+        policy = SessionPolicy.from_settings(app.state.settings)
+        with _session_factory(Request({"type": "http", "app": app})).begin() as db:
+            removed = purge_sessions(db, policy=policy)
+    except Exception as exc:
+        purge_logger.error(
+            "session purge failed (%s)",
+            type(exc).__name__,
+            extra={"event": "session_purge.failed"},
+        )
+        return
+    purge_logger.info(
+        "session purge done (%d removed)", removed, extra={"event": "session_purge.done"}
+    )
+
+
 def create_app(settings: Settings | None = None) -> FastAPI:
     """Build the app. With explicit settings (tests) they are used as given; otherwise they are
     loaded from the environment at startup (lifespan), so a missing or invalid configuration
@@ -91,6 +112,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # First-run setup: logs the one-time setup token (WARNING) while no user exists.
         await run_in_threadpool(prepare_setup, app)
         await run_in_threadpool(sync_seeds_at_startup, app)
+        await run_in_threadpool(purge_sessions_at_startup, app)
         yield
 
     # Interactive docs and the OpenAPI schema are disabled: they would be served unauthenticated.
