@@ -13,7 +13,7 @@ Acceptance criteria:
 - Test (copy the parametrized test at tests/cli/test_content_cli.py:446-454 for `check`): a fake zone with `example.com TXT "v=spf1 include:\x1b[2J\x1b[31mFORGED.example.com bogus\x1b]0;title\x07 -all"` and a DMARC `rua` with `\x1b[31m`; rendered text contains no ESC (0x1b), BEL, C1 CSI (U+009B), U+202E, or raw newline injected from evidence or from a parameter; the escaped form is visible.
 - JSON output unchanged (control characters remain JSON-escaped as before). No network. ruff, mypy, relevant tests green.
 New i18n keys: none
-Status: todo
+Status: done
 
 ## Review details (copied from the code review of 2026-11-12, dev 06869fb)
 - Location: `app/cli/check.py:78-87` (`params` and `"; ".join(f.evidence)` go to `typer.echo` as they are), `app/dns/types.py:76-80` (TXT strings are decoded as latin-1, so every byte including ESC and BEL survives).
@@ -23,3 +23,5 @@ Status: todo
 - Tests to add: the parametrized test at tests/cli/test_content_cli.py:446-454 copied for `check` (ESC, C1 CSI `\x9b`, U+202E, newline in evidence and in a parameter).
 - Confidence: high.
 - Related TODO: "CLI content (M5-17 QA)" and "CLI analyze (M4-13 QA)" ask for shared CLI helpers; neither mentions escaping in `check`.
+
+Outcome: reproduced (13 tests); fixed in merge 8ace390 (shared app/cli/_text.py visible helper applied to params and evidence); QA APPROVE (Opus); dev CI green.

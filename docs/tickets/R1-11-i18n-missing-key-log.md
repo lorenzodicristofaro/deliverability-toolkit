@@ -14,7 +14,7 @@ Acceptance criteria:
 - Every other `extra=` field in `app/` checked against the redaction list after the change; report any other innocent field redacted by the substring rule (fix only if trivial).
 - ruff, mypy, relevant tests green.
 New i18n keys: none
-Status: todo
+Status: done
 
 ## Review details (copied from the code review of 2026-11-12, dev 06869fb)
 - Location: `app/core/i18n.py:57` (`extra={"i18n_key": key, ...}`), `app/core/logging.py:23-32` (`"key"` in `_SENSITIVE_KEYS`), `app/core/logging.py:41-43` (substring match).
@@ -23,3 +23,5 @@ Status: todo
 - Suggested fix: rename the extra field (for example `message_id`), or match sensitive names more precisely (whole word or suffix `_key` only for known secret names). Check the other `extra=` fields in the app against the same list. Files: `app/core/i18n.py` or `app/core/logging.py`, `tests/test_logging.py`.
 - Tests to add: the formatted missing-key warning contains the key; secret-named fields (`secret_key`, `api_key`, `token`) are still redacted.
 - Confidence: high.
+
+Outcome: reproduced; fixed in merge b43dfa0 (log field i18n_msgid, redaction rule unchanged); QA APPROVE (Sonnet); dev CI green.

@@ -13,7 +13,7 @@ Acceptance criteria:
 - Table rows: `To: =?utf-8?Q?Doe=2C_John?= <j@example.org>` -> `to_count == 1` (today 2); `Cc: "Doe, John" <j@example.org>` -> 1; an encoded display name containing `<` and `@` (`=?utf-8?Q?a=3Cb=40c?= <x@example.org>`) -> 1; two real mailboxes -> 2; empty header, header with only comments/groups, 10,000-address list under the existing cap (malformed input, no exception).
 - No network. ruff, mypy, relevant tests green.
 New i18n keys: none
-Status: todo
+Status: done
 
 ## Review details (copied from the code review of 2026-11-12, dev 06869fb)
 - Location: `app/services/message_analysis.py:541-543` (`_count_addresses` passes `decoded_value` to `getaddresses`).
@@ -22,3 +22,5 @@ Status: todo
 - Suggested fix: use `raw_value` in `_count_addresses`.
 - Tests to add: one row with an encoded display name containing `=2C`, one with an encoded `<` and `@` in the display name.
 - Confidence: high.
+
+Outcome: reproduced (4 of 12 rows); fixed in merge 07e0a0f (count from raw_value); QA APPROVE (Opus); dev CI pending at handoff.

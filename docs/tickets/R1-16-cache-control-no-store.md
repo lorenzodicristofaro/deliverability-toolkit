@@ -13,7 +13,7 @@ Acceptance criteria:
 - Tests: authenticated HTML pages (landing, a domain page, the Authentication tab, DNS tool results) and authenticated JSON API responses carry `no-store`; `/static/*` and `/healthz` do not; an unauthenticated request without cookie is unchanged.
 - Existing no-store tests stay green. ruff, mypy, relevant tests green.
 New i18n keys: none
-Status: todo
+Status: in-review (parked)
 
 ## Review details (copied from the code review of 2026-11-12, dev 06869fb)
 - Location: `app/web/landing.py:45-53`, `app/web/domains.py:184,247,307`, `app/web/authentication.py:65-72`, `app/web/dns_tools.py:94-108,226`, every JSON response of `app/api/v1/domains.py`, `checks.py`, `dns_tools.py`, `domain_esps.py`, `rules.py`, `dkim_selectors.py`, `custom_checks.py`; compare `_NO_STORE` in `app/web/rules.py:65`, `message.py:50`, `content.py:48`, `custom_checks.py:71`, `dkim_selectors.py:58`, `domain_esps.py:59`.
