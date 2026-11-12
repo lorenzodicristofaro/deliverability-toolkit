@@ -46,8 +46,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Literal
 
-from app.checks.dnsutil import fetch_txt
-from app.core.domain_names import InvalidDomainName, to_dns_name
+from app.checks.dnsutil import classify
+from app.core.domain_names import MAX_DOMAIN_LENGTH, MAX_LABEL_LENGTH, to_dns_name
 from app.dns.types import DnsQuestion, Resolver, ResultState
 from app.parsers.spf import SpfRecord, SpfTerm, is_spf_record, parse_spf
 
@@ -213,9 +213,12 @@ class _Run:
             return hit
         if not self._budget():
             return None
-        fetched = await fetch_txt(self.resolver, name)
-        state = fetched.state if fetched.evaluated else _failure(fetched.state)
-        out = _Txt(state, fetched.records if fetched.evaluated else ())
+        # `name` is already normalised (root: to_dns_name; targets: _spf_target), so the
+        # question is built directly: fetch_txt would re-apply the stricter host-name rule.
+        result = await self.resolver.resolve(DnsQuestion(name, "TXT"))
+        state, evaluated, texts, _ = classify(result, "TXT")
+        state = state if evaluated else _failure(state)
+        out = _Txt(state, tuple(texts) if evaluated else ())
         self.memo_txt[name] = out
         self._fail(name, "TXT", state)
         return out
@@ -325,15 +328,39 @@ async def _lookups(
     return tuple(out)
 
 
+def _spf_label_ok(label: str) -> bool:
+    return 0 < len(label) <= MAX_LABEL_LENGTH and all(
+        "\x21" <= c <= "\x7e" and c != "\\" for c in label
+    )
+
+
+def _spf_target(raw: str) -> str | None:
+    """Normalised query name of a macro-free SPF ``domain-spec``, or None if it cannot be queried.
+
+    The parser has already checked the grammar (visible ASCII, a valid toplabel); this adds
+    what DNS needs: lowercase, one trailing dot removed, at most 253 octets, labels of 1-63
+    octets, and no backslash (``dns.name.from_text`` would treat it as an escape)."""
+    if not raw.isascii():  # before lower(): e.g. U+212A KELVIN SIGN lowercases to ASCII "k"
+        return None
+    name = raw.lower()
+    if name.endswith("."):
+        name = name[:-1]
+    if not name or len(name) > MAX_DOMAIN_LENGTH:
+        return None
+    labels = name.split(".")
+    if len(labels) < 2 or not all(_spf_label_ok(label) for label in labels):
+        return None
+    return name
+
+
 async def _term(
     run: _Run, name: str, term: SpfTerm, depth: int, path: tuple[str, ...]
 ) -> TermLookup:
     if term.name == "ptr" or term.has_macro:
         return TermLookup(term=term, target=None, resolved=False)
     raw = term.value if term.value is not None else name
-    try:
-        target = to_dns_name(raw)
-    except InvalidDomainName:
+    target = _spf_target(raw)
+    if target is None:
         return TermLookup(term=term, target=None, resolved=False, invalid_target=True)
 
     if term.name in ("include", "redirect"):
