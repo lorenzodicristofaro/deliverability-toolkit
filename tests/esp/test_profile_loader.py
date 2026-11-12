@@ -127,6 +127,61 @@ def test_spf_only_if_record(spf: dict[str, Any], expected: bool) -> None:
     assert _parse(_doc(spf=spf)).spf_only_if_record is expected
 
 
+def _alt(alternatives: Any, selectors: Any = None) -> dict[str, Any]:
+    """`dkim` with alternatives (M6-23); primary defaults to GOOD's selectors."""
+    if selectors is None:
+        selectors = copy.deepcopy(GOOD["dkim"]["selectors"])
+    return {"selectors": selectors, "alternatives": alternatives}
+
+
+def test_dkim_alternatives_parse() -> None:
+    p = _parse(
+        _doc(
+            dkim=_alt(
+                [
+                    [{"name": "k0", "type": "txt"}],
+                    [
+                        {"name": "a1", "type": "cname", "target_pattern": "a1.*.example.net"},
+                        {"name": "a2", "type": "txt"},
+                    ],
+                ]
+            )
+        )
+    )
+    assert [[s.name for s in alt] for alt in p.dkim_alternatives] == [["k0"], ["a1", "a2"]]
+    assert p.dkim_alternatives[1][0].target_pattern == TargetPattern(("a1", "*", "example", "net"))
+    assert [s.name for s in p.dkim_selectors] == ["s1", "k1"]  # primary unchanged
+    assert isinstance(p.dkim_alternatives, tuple) and isinstance(p.dkim_alternatives[0], tuple)
+
+
+def test_dkim_alternatives_default_empty() -> None:
+    assert _parse(GOOD).dkim_alternatives == ()
+
+
+def test_dkim_alternatives_caps_accepted_at_limit() -> None:
+    sets = [
+        [{"name": f"a{i}x{j}", "type": "txt"} for j in range(esp.MAX_ALTERNATIVE_SELECTORS)]
+        for i in range(esp.MAX_DKIM_ALTERNATIVES)
+    ]
+    p = _parse(_doc(dkim=_alt(sets)))
+    assert len(p.dkim_alternatives) == esp.MAX_DKIM_ALTERNATIVES
+
+
+@pytest.mark.parametrize(
+    ("fields", "query", "expected"),
+    [
+        (["dkim.alternatives"], "dkim.alternatives.k0", False),
+        (["dkim.alternatives.k0"], "dkim.alternatives.k0", False),
+        (["dkim.alternatives.k0"], "dkim.selectors.s1", True),
+        (["dkim.selectors"], "dkim.alternatives.k0", True),
+    ],
+)
+def test_dkim_alternatives_unverified_paths(fields: list[str], query: str, expected: bool) -> None:
+    d = _doc(dkim=_alt([[{"name": "k0", "type": "txt"}]]), status="unverified")
+    d["unverified_fields"] = fields
+    assert _parse(d).is_verified(query) is expected
+
+
 def test_result_is_immutable() -> None:
     p = _parse(GOOD)
     with pytest.raises(dataclasses.FrozenInstanceError):
@@ -274,6 +329,112 @@ BAD_CASES: list[tuple[str, Any, str]] = [
     ("rp notes key single", _doc(return_path={"type": "mx", "notes_key": "esp"}), "i18n key"),
     ("td unknown key", _doc(tracking_domain={"type": "cname", "host": "x"}), "unknown keys"),
     ("td not mapping", _doc(tracking_domain="cname"), "must be a mapping"),
+    # dkim.alternatives (M6-23)
+    ("alternatives not list", _doc(dkim=_alt({"k0": "txt"})), "must be a list"),
+    ("alternatives str", _doc(dkim=_alt("ml00")), "must be a list"),
+    ("alternatives null", _doc(dkim=_alt(None)), "must be a list"),
+    ("alternatives empty", _doc(dkim=_alt([])), "must not be empty"),
+    ("alternative set empty", _doc(dkim=_alt([[]])), "must not be empty"),
+    (
+        "alternative set not list",
+        _doc(dkim=_alt([{"name": "k0", "type": "txt"}])),
+        "must be a list",
+    ),
+    ("alternative entry not mapping", _doc(dkim=_alt([["k0"]])), "must be a mapping"),
+    (
+        "alternative unknown key",
+        _doc(dkim=_alt([[{"name": "k0", "type": "txt", "when": "x"}]])),
+        "unknown keys",
+    ),
+    ("alternative missing type", _doc(dkim=_alt([[{"name": "k0"}]])), "missing keys"),
+    ("alternative bad type", _doc(dkim=_alt([[{"name": "k0", "type": "mx"}]])), "must be one of"),
+    (
+        "alternative type upper",
+        _doc(dkim=_alt([[{"name": "k0", "type": "TXT"}]])),
+        "must be one of",
+    ),
+    (
+        "alternative txt pattern",
+        _doc(dkim=_alt([[{"name": "k0", "type": "txt", "target_pattern": "a.example.com"}]])),
+        "only a cname selector",
+    ),
+    (
+        "alternative bad pattern",
+        _doc(dkim=_alt([[{"name": "k0", "type": "cname", "target_pattern": "k0.example.*"}]])),
+        "last two labels",
+    ),
+    (
+        "alternatives too many sets",
+        _doc(dkim=_alt([[{"name": f"k{i}", "type": "txt"}] for i in range(6)])),
+        "at most 5",
+    ),
+    (
+        "alternative set too big",
+        _doc(dkim=_alt([[{"name": f"k{i}", "type": "txt"} for i in range(6)]])),
+        "at most 5",
+    ),
+    (
+        "alternative dup in set",
+        _doc(dkim=_alt([[{"name": "k0", "type": "txt"}, {"name": "k0", "type": "cname"}]])),
+        "duplicate selector",
+    ),
+    (
+        "alternative dup across sets",
+        _doc(dkim=_alt([[{"name": "k0", "type": "txt"}], [{"name": "k0", "type": "txt"}]])),
+        "duplicate selector",
+    ),
+    (
+        "alternative dup of primary",
+        _doc(dkim=_alt([[{"name": "s1", "type": "cname"}]])),
+        "duplicate selector",
+    ),
+    (
+        "alternative name with domainkey",
+        _doc(dkim=_alt([[{"name": "ml00._domainkey", "type": "txt"}]])),
+        "DNS label",
+    ),
+    (
+        "alternative name underscore",
+        _doc(dkim=_alt([[{"name": "_dmarc", "type": "txt"}]])),
+        "DNS label",
+    ),
+    ("alternative name upper", _doc(dkim=_alt([[{"name": "ML00", "type": "txt"}]])), "DNS label"),
+    ("alternative name empty", _doc(dkim=_alt([[{"name": "", "type": "txt"}]])), "non-empty"),
+    ("alternative name int", _doc(dkim=_alt([[{"name": 0, "type": "txt"}]])), "non-empty string"),
+    ("alternative name long", _doc(dkim=_alt([[{"name": "a" * 64, "type": "txt"}]])), "at most 63"),
+    (
+        "alternative name host",
+        _doc(dkim=_alt([[{"name": "ml00.example.com", "type": "txt"}]])),
+        "DNS label",
+    ),
+    (
+        "alternatives without primary",
+        _doc(dkim=_alt([[{"name": "k0", "type": "txt"}]], selectors=[])),
+        "needs a non-empty dkim.selectors",
+    ),
+    (
+        "unverified absent alternatives",
+        _doc(status="unverified", unverified_fields=["dkim.alternatives"]),
+        "names no field",
+    ),
+    (
+        "unverified absent alternative",
+        _doc(
+            dkim=_alt([[{"name": "k0", "type": "txt"}]]),
+            status="unverified",
+            unverified_fields=["dkim.alternatives.zz"],
+        ),
+        "names no field",
+    ),
+    (
+        "unverified alternative as selector",
+        _doc(
+            dkim=_alt([[{"name": "k0", "type": "txt"}]]),
+            status="unverified",
+            unverified_fields=["dkim.selectors.k0"],
+        ),
+        "names no field",
+    ),
     # pitfalls
     ("pitfall when", _doc(pitfalls=_pit(when="True")), "conditions are not supported"),
     ("pitfall bad prefix", _doc(pitfalls=_pit(code="ESP_OTHER_X")), "ESP_EXAMPLE_ESP_"),

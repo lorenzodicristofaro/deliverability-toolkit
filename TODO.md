@@ -140,10 +140,10 @@ Carried over from M0-07 QA:
   - [x] M5-25 acceptance tests + docs/CONTENT.md
 
 ## M6 — ESP profiles
-- [ ] YAML schema + CI validation, loader, per-domain ESP assignment
-- [ ] Profile checks (SPF include, DKIM CNAMEs, return-path, tracking domain)
-- [ ] Initial profiles verified against official docs, incl. MailUp/TeamSystem and other Italian ESPs
-- [ ] Contributor guide for adding a profile
+- [x] YAML schema + CI validation, loader, per-domain ESP assignment
+- [x] Profile checks (SPF include, DKIM CNAMEs, return-path, tracking domain)
+- [x] Initial profiles verified against official docs, incl. MailUp/TeamSystem and other Italian ESPs
+- [x] Contributor guide for adding a profile
 - Accept: each profile has `verified_on` + sources; sample domains produce expected findings.
 - Tickets (docs/tickets/):
   - [x] M6-00 CI: fewer billed Actions minutes (no CI on qa, path-filtered infra jobs)
@@ -175,7 +175,12 @@ Carried over from M0-07 QA:
   - [x] M6-21 deps: dnspython 2.9.2 plus compression-pointer regression test (opus, depends on M6-20); merged 9b0d610, QA APPROVE
   - [x] M6-22 docs: record the xato.net dataset terms (public domain, Mark Burnett) in the password list header and THIRD_PARTY_NOTICES, add attribution (sonnet; resolves the "MAINTAINER TO CONFIRM ... xato.net" item below)
   - [ ] M6-21 nit (QA, optional): tests/dns/test_backends.py:229-247 — add a pointer-chain variant whose chain resolves to the qname itself, to prove a vulnerable parser cannot yield a spoofed ok.
-  - [ ] Optional, pending maintainer decision (GM proposed 2026-11-11): add `pip-audit` as a CI job on dev
+  - [x] pip-audit as a CI job on dev: APPROVED by the maintainer 2026-11-12 -> M6-24
+  - [x] M6-23 MailUp DKIM: ml01+ml02 CNAMEs OR ml00 TXT, alternative selector sets in the ESP schema (opus; maintainer decision 2026-11-12); merged 99e408b, QA APPROVE
+  - [x] M6-24 CI: pip-audit job on dev pushes and PRs (skips docs-only pushes) plus weekly run on main (sonnet); merged 2336d26, QA APPROVE
+  - [x] M6-25 knowledge data: PSL licence MPL-2.0 and Gmail clip size 102,400 marked verified (sonnet); merged 348959d, QA APPROVE
+  - M6 closed 2026-11-12. Report: docs/reports/M6.md
+  - Dependabot (resolved 2026-11-12): the two open alerts (#1 pyproject.toml, #2 uv.lock) are the same advisory GHSA-45c3-73f7-pv4m, fixed by M6-21 (dnspython 2.9.2, on main since PR #2 9d793cb). The "second unidentified alert" item is closed; the alerts should close on the next Dependabot scan.
 
 ## M7 — Monitoring
 - [ ] Guarded outbound client (SSRF protection) + tests
@@ -191,8 +196,6 @@ Carried over from M0-07 QA:
 - Accept: real-world report samples parsed; zip-bomb and XXE tests pass.
 
 ## M9 — Integrations and extra records
-- [ ] Google Postmaster Tools (OAuth, per domain) — verify current API first
-- [ ] Microsoft SNDS — verify current access method first
 - [ ] BIMI (SVG Tiny-PS + VMC/CMC), MTA-STS, TLS-RPT, DANE, DNSSEC view
 - [ ] Provider requirements checklist (Gmail/Yahoo/Microsoft) as dated data
 - [ ] Optional SMTP module (off by default)
@@ -201,19 +204,25 @@ Carried over from M0-07 QA:
 - [ ] Share links, tenant branding, PDF/CSV/JSON export, audit log UI, TOTP, API keys
 - [ ] Docs site, OpenAPI, install guides (Docker, Unraid/Synology/Proxmox notes), screenshots
 - [ ] Security review checklist, dependency/license audit, v0.1.0 release
+- Note: v0.1.0 ships without the M11 integrations (Postmaster Tools, SNDS).
+
+## M11 — External reputation integrations
+Maintainer decision 2026-11-12: moved from M9; no test domains or access yet, and the rest must work first. SPEC unchanged (both already optional, no milestone in SPEC).
+- [ ] Google Postmaster Tools (OAuth, per domain) — verify current API first
+- [ ] Microsoft SNDS — verify current access method first
 
 ## Follow-ups (post-M1)
 - Maintainer principle 2026-11-11 (ESP profiles): the known-record checks exist mainly to find which records a domain already has and associate them with an ESP; the seed/profile list is a convenient starting point for the best-known providers; whether a vendor marks a record required or optional matters little, because if a record is missing the client is told to add it. Vendor required/optional disputes are not escalated.
-- [ ] MAINTAINER (M6-09): MailUp SPF conflict DECIDED 2026-11-11 (include musvc.com only when the domain already has an SPF record; never create an SPF record containing only MailUp's include; DMARC unaffected because SPF for DMARC is evaluated on the return-path domain) — implemented by M6-17. `mailchef` (Emailchef, TXT) DKIM seed question DECIDED 2026-11-11: add it (-> M6-18). Still open: review the Italian wording of the esp.mailup.* and esp.emailchef.* strings. Contactlab/Experian, Agile Telecom, Aruba not evaluated (two-profile cap).
+- [ ] MAINTAINER (M6-09): MailUp SPF conflict DECIDED 2026-11-11 (include musvc.com only when the domain already has an SPF record; never create an SPF record containing only MailUp's include; DMARC unaffected because SPF for DMARC is evaluated on the return-path domain) — implemented by M6-17. `mailchef` (Emailchef, TXT) DKIM seed question DECIDED 2026-11-11: add it (-> M6-18). Italian wording of esp.mailup.* and esp.emailchef.* APPROVED as is by the maintainer 2026-11-12 (closed; the esp.mailup.dkim_txt_alternative text is reworded by M6-23 and its new Italian goes back for review). Contactlab/Experian, Agile Telecom, Aruba not evaluated (two-profile cap).
 - [ ] ESP schema gap (M6-08): DKIM selectors that are per-identity (Amazon SES, names shown in the console) or not documented (Mailgun) cannot be expressed; both profiles ship `selectors: []` plus a pitfall. Plan a schema extension (e.g. per-assignment selector names) in a later ticket. A future SES target pattern must not assume dkim.<region>.amazonses.com (hosted zone varies by Region and identity).
   Microsoft 365 (M6-10): selector1/selector2 CNAME targets have two documented formats with different label counts (`...-v1.dkim.mail.microsoft`, May 2025, and `...onmicrosoft.com`), so the profile has no target_pattern; the check only confirms the CNAMEs exist and detection skips them.
-- [ ] MAINTAINER (M6-10): Brevo-blocked part resolved by M6-16. Still open: review the Italian of esp.google_workspace.* and esp.microsoft_365.* (Microsoft labels kept in English: the it-it page is inconsistent).
+- [x] MAINTAINER (M6-10): Brevo-blocked part resolved by M6-16. Italian of esp.google_workspace.* and esp.microsoft_365.* APPROVED as is by the maintainer 2026-11-12 (Microsoft labels kept in English: the it-it page is inconsistent).
 - [x] MAINTAINER (M6-08 vendor facts, unverified): resolved by M6-16. SendGrid link-branding/tracking CNAME (host, target, optional); Mailgun DKIM selector name, tracking host, whether Automatic Sender Security/key rotation makes DKIM a CNAME, whether the tracking CNAME is required with tracking off. Maintainer is collecting the official pages (2026-11-11).
-- [ ] MAINTAINER (M6-16): the Mailgun tracking CNAME optional/required confirmation is closed by the maintainer principle above (2026-11-11). Only open: review Italian of esp.brevo.*, esp.mailgun.*, esp.sendgrid.tracking.
-- [ ] ESP schema gaps (M6-16, later milestone): per-domain generated DKIM selector names (Mailgun TXT, Mailgun ASS pdk-like CNAMEs); DKIM "TXT or CNAME" alternatives (Brevo, Mailgun, SendGrid m1 vs s1/s2); verification TXT records (Brevo code); target for tracking_domain/return_path; Brevo new-flow branded CNAMEs (help article 35337929909778, "only available to some accounts").
+- [x] MAINTAINER (M6-16): the Mailgun tracking CNAME optional/required confirmation is closed by the maintainer principle above (2026-11-11). Italian of esp.brevo.*, esp.mailgun.*, esp.sendgrid.tracking APPROVED as is by the maintainer 2026-11-12.
+- [ ] ESP schema gaps (M6-16, later milestone): per-domain generated DKIM selector names (Mailgun TXT, Mailgun ASS pdk-like CNAMEs); DKIM "TXT or CNAME" alternatives (the mechanism exists since M6-23, `dkim.alternatives`; applying it to Brevo, Mailgun and SendGrid m1 vs s1/s2 is open and needs official sources); verification TXT records (Brevo code); target for tracking_domain/return_path; Brevo new-flow branded CNAMEs (help article 35337929909778, "only available to some accounts").
 - [x] DKIM seed (M6-16): brevo1/brevo2 confirmed on help.brevo.com; adding them needs `"help.brevo.com": "brevo"` in `_VENDOR_HOSTS` in tests/checks/test_dkim_selectors.py. Moved to M6-18.
 - [ ] SendGrid domain-authentication page documentation error recorded (M6-16 QA): it says "To route click and open tracking statistics ... Twilio SendGrid requires this CNAME record" under the bullet describing the s1/s2 DKIM CNAMEs, and mentions a selector "s" while the table uses s1/s2; profile values follow the table. "optional" for link branding rests on "If you choose No, you can add Link Branding later".
-- [ ] M6-17 QA nits: (a) docs/templates/esp-profile.example.yaml: add a commented `only_if_record` line pointing to the docs/ESP_PROFILES.md table (new opt-in field `spf.only_if_record`, used only by MailUp). (b) locales/it.json:227 `esp.mailup.spf_only_if_published`: avoid repeating "il DMARC" (e.g. "...perché verifica l'SPF sul dominio del return-path..."); fold into the maintainer Italian review. (c) Optional test: opt-in profile with an "ok" DNS answer carrying no TXT records (classified as error), same path as the existing failure-state test.
+- [ ] M6-17 QA nits: (a) docs/templates/esp-profile.example.yaml: add a commented `only_if_record` line pointing to the docs/ESP_PROFILES.md table (new opt-in field `spf.only_if_record`, used only by MailUp). (b) locales/it.json:227 `esp.mailup.spf_only_if_published`: avoid repeating "il DMARC" (e.g. "...perché verifica l'SPF sul dominio del return-path..."); nit (b) CLOSED 2026-11-12: the maintainer approved the Italian as is. (c) Optional test: opt-in profile with an "ok" DNS answer carrying no TXT records (classified as error), same path as the existing failure-state test.
 - [ ] Test nit (M6-16 QA): tests/esp/test_acceptance.py:393-419 could add a variant per profile with only one part unverified.
 - [ ] nit (M6-08 QA): SendGrid Note quote reads '...and supports SPF'; the page says '...supports SPF and DKIM'.
 - [ ] ESPs tab (M6-07 QA): should-fix test gap: tests/web/test_domain_esps_ui.py:295-311 has no regression test for hostile DNS evidence (an SPF include or CNAME target carrying `"><script>` from a fake-DNS zone, asserted escaped in `esps-detected` and the per-ESP group); QA checked it by hand and it is escaped. Nits: removing an already-removed assignment shows the full 404 page (app/web/domain_esps.py:291), a redirect with a notice is friendlier; the M6-07 ticket says app/web/__init__.py but routers register in app/main.py. Per-user rate limiting of DNS-running GETs is a project-wide gap (app/api/v1/checks.py:33).
@@ -271,7 +280,7 @@ Carried over from M0-07 QA:
 - [ ] dkim_selectors comment nit (M5-06 QA): model:86 and migration 0006:123 blame the plain tenant_id index; the partial tenant index is the cause. Fix wording.
 - [ ] custom_checks nits (M5-07 QA): DB does not check remediation_text has exactly en+it keys (repo does; document in docstring); ints over 4300 digits raise a bare ValueError from json.dumps instead of a typed `too_large` reason; if `definition` ever becomes jsonb the length CHECK no longer matches json.dumps.
 - [ ] Seed loaders (M5-09 QA): make the private helpers public (app.dns.knowledge _check_keys/_url_list…, app.core.org_domain _psl) and move seed tests to tests/knowledge.
-- [ ] MAINTAINER TO CONFIRM (M5-09): URL shorteners unverified against official pages: t.co (help.x.com returned 403), tinyurl.com, ow.ly, buff.ly, lnkd.in, is.gd, j.mp (seeds/url_shorteners.yaml). Nit: all_aligned is None (not False) when a link is known unaligned and another is unevaluated; M5-14 should use unaligned_count.
+- [ ] DEFERRED, not a blocker (maintainer decision 2026-11-12: keep as is, stays unverified; revisit if someone publishes a census) (M5-09): URL shorteners unverified against official pages: t.co (help.x.com returned 403), tinyurl.com, ow.ly, buff.ly, lnkd.in, is.gd, j.mp (seeds/url_shorteners.yaml). Nit: all_aligned is None (not False) when a link is known unaligned and another is unevaluated; M5-14 should use unaligned_count.
 - [ ] Content findings (M5-14 QA): internal parser failure surfaces as CONTENT_INPUT_CAPPED, whose remediation tells the user to fix the input (pairs with the MSG_SECTION_FAILED follow-up); raw reason codes appear in localized text; `{prefix}` shows the normalised "re".
 - [ ] Content parsers (M5-14 QA): add a public visible-text API from M5-08, replacing `_VisibleText` subclassing private `_Collector`; `_lookup_charset` is private.
 - [ ] tests/services/test_content_analysis.py (M5-14 QA): the socket guard does not detect an attempt whose exception is caught and ignored; a guard recording attempts, asserted empty, would close it.
@@ -324,12 +333,13 @@ Carried over from M0-07 QA:
 - [ ] DKIM seed: per-entry `verified_on` (file-level date only; M3-20b entries verified 2026-11-07 noted in a comment)
 - [ ] DKIM seed: Mailchimp campaigns, Postmark, HubSpot selectors not found in official docs; add if the maintainer supplies an official source
 - [ ] Optional: add an explicit `evaluated` field to CheckResult if the runner-only convention proves insufficient (M3-01 QA)
-- [ ] MAINTAINER TO CONFIRM: Public Suffix List data licence (MPL-2.0 per the PyPI publicsuffixlist page only); check github.com/publicsuffix/list LICENSE; recorded as unverified in seeds/public_suffix_source.yaml (M3-09)
+- [x] MAINTAINER TO CONFIRM: Public Suffix List data licence: GM read github.com/publicsuffix/list LICENSE on 2026-11-12 ("Mozilla Public License Version 2.0"), maintainer accepts; seed record updated by M6-25 (M3-09)
+- [x] Gmail clipping threshold 102,400 bytes: confirmed by the maintainer 2026-11-12 from their own experience (source: maintainer confirmation, no URL); recorded by M6-25
 - [ ] SPF parser nits (M3-04 QA): at the 4096-char cut, drop the partial last term so it does not add a second misleading issue; add a comment on Unicode-whitespace term splitting
 - [ ] DMARC parser: reject a `!size` whose value after the unit (number*unit) exceeds 64 bits (M3-05 QA).
 - [ ] Move the no-network socket guard from tests/dns/conftest.py to tests/conftest.py so tests/checks need no cross-package import (M3-07 QA).
 - [ ] spf_tree.py:319 per-term `valid` filter is dead code; remove or assert (M3-07 QA nit).
 - [ ] DKIM parser: optionally reject base64 with non-zero padding bits (M3-06 QA nit).
-- [ ] HTMX under CSP `script-src 'self'` is unverified, maintainer to confirm against https://htmx.org/docs/ (set includeIndicatorStyles=false and allowEval=false when vendored)
+- [x] HTMX under CSP `script-src 'self'`: closed 2026-11-12 (GM): the app does not use HTMX (no vendored HTMX; web JS is static files under script-src 'self'). If HTMX is ever introduced, verify https://htmx.org/docs/ first (includeIndicatorStyles=false and allowEval=false when vendored).
 - [ ] Authentication tab: catch InvalidTarget from run_checks and render the error page instead of a 500 (M3-17 QA nit)
 - [ ] _result.html uses class dns-state-absent for warn/fail/info; use a neutral per-status class (M3-17 QA nit)

@@ -1,0 +1,30 @@
+name: pip-audit
+
+# Known-vulnerability audit of the locked dependencies (M6-24). Called by the `pip-audit` job in
+# ci.yml, so on dev/main pushes and pull requests it is skipped for docs-only changes exactly like
+# the test jobs (maintainer decision 2026-11-12). New advisories appear without code changes, so
+# this file also runs weekly on its own, without running the other CI jobs.
+# Scheduled workflows run only from the default branch (main): the cron below takes effect after
+# the next qa -> main promotion that contains this file.
+# On a red run see docs/WORKFLOW.md "Red pip-audit".
+on:
+  workflow_call:
+  schedule:
+    - cron: "17 5 * * 1"  # Mondays 05:17 UTC
+  workflow_dispatch:
+
+# Read-only token, no secrets.
+permissions:
+  contents: read
+
+jobs:
+  pip-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+      # `--frozen` audits exactly uv.lock. pip-audit 2.10.1 exists on PyPI (checked 2026-11-12).
+      # Exits non-zero on any known vulnerability. Time-boxed ignores: docs/WORKFLOW.md.
+      - run: uv export --frozen --format requirements-txt --no-hashes --all-groups > "$RUNNER_TEMP/audit-requirements.txt"
+      - run: uvx pip-audit==2.10.1 -r "$RUNNER_TEMP/audit-requirements.txt" --no-deps --disable-pip

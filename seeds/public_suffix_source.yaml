@@ -3,10 +3,11 @@
 name: publicsuffixlist
 package_url: https://pypi.org/project/publicsuffixlist/
 version: "1.1.2.20261106"
-licence: MPL-2.0   # per the PyPI page only; compatible with AGPL-3.0 if confirmed
-licence_status: unverified (maintainer to confirm against github.com/publicsuffix/list LICENSE)
+licence: MPL-2.0
+licence_status: verified (LICENSE text read 2026-11-12: "Mozilla Public License Version 2.0"; maintainer accepts)
+licence_source: https://github.com/publicsuffix/list/blob/main/LICENSE
 list_url: https://publicsuffix.org/list/
 sections_used: ICANN and private (full list)
-verified_on: 2026-11-06
+verified_on: 2026-11-12
 status: verified
 update_step: uv lock --upgrade-package publicsuffixlist && uv run pytest tests/core/test_org_domain.py

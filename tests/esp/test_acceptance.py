@@ -254,18 +254,37 @@ def _apply(zone: Zone, changes: dict[tuple[str, str], list[str] | None]) -> Zone
     return out
 
 
+DKIM_SELECTOR_CODES = frozenset(
+    {"ESP_DKIM_RECORD_MISSING", "ESP_DKIM_WRONG_TYPE", "ESP_DKIM_TARGET_MISMATCH"}
+)
+
+
+def _expected_code(profile: EspProfile, code: str) -> str:
+    """M6-23: with `dkim.alternatives` (none present in the correct zone), a broken primary
+    selector gives the one combined finding instead of the per-selector one."""
+    if profile.dkim_alternatives and code in DKIM_SELECTOR_CODES:
+        return "ESP_DKIM_NO_OPTION_SATISFIED"
+    return code
+
+
 @pytest.mark.parametrize(("pid", "mutation"), _mutation_params())
 async def test_mutation_gives_exactly_its_finding(pid: str, mutation: Mutation) -> None:
     profile = BY_ID[pid]
     r, _ = await _run(_apply(correct_zone(profile), mutation.changes), [profile])
-    assert _failures(r) == [mutation.code]
+    code = _expected_code(profile, mutation.code)
+    assert _failures(r) == [code]
     assert r.status not in ("ok", "error")
-    (f,) = [f for f in r.findings if f.code == mutation.code]
+    (f,) = [f for f in r.findings if f.code == code]
     assert f.params["esp"] == profile.name
     (section,) = r.data["esps"]
     key, selector = mutation.part
     if key == "dkim":
-        assert f.params["selector"] == selector
+        if code == "ESP_DKIM_NO_OPTION_SATISFIED":
+            assert selector in f.params["selectors"]
+            assert f"{selector}._domainkey.{DOMAIN}" in f.evidence
+            assert section["dkim_satisfied_by"] is None
+        else:
+            assert f.params["selector"] == selector
         state = next(d for d in section["dkim"] if d["selector"] == selector)["state"]
         expected = {
             "ESP_DKIM_RECORD_MISSING": "missing",
@@ -326,7 +345,8 @@ async def test_patterned_selector_target_variants(
     else:
         assert state in ("mismatch", "error")
         assert r.status != "ok"
-        assert _failures(r) in (["ESP_DKIM_TARGET_MISMATCH"], ["ESP_DNS_ERROR"])
+        mismatch = _expected_code(profile, "ESP_DKIM_TARGET_MISMATCH")
+        assert _failures(r) in ([mismatch], ["ESP_DNS_ERROR"])
 
 
 # --- DNS failure on every needed name ---------------------------------------------------------
@@ -381,6 +401,10 @@ def _unverified_keys(profile: EspProfile) -> list[tuple[str, str]]:
     for sel in profile.dkim_selectors:
         if not profile.is_verified(f"dkim.selectors.{sel.name}"):
             keys.append((selector_name(sel), sel.type.upper()))
+    for alt in profile.dkim_alternatives:
+        for sel in alt:
+            if not profile.is_verified(f"dkim.alternatives.{sel.name}"):
+                keys.append((selector_name(sel), sel.type.upper()))
     for part, expect, host in (
         ("return_path", profile.return_path, return_path_host()),
         ("tracking_domain", profile.tracking_domain, tracking_host()),
@@ -398,6 +422,7 @@ def _all_unverified(profile: EspProfile) -> EspProfile:
         for name, present in (
             ("spf.includes", profile.spf_includes),
             ("dkim.selectors", profile.dkim_selectors),
+            ("dkim.alternatives", profile.dkim_alternatives),
             ("return_path", profile.return_path),
             ("tracking_domain", profile.tracking_domain),
             ("pitfalls", profile.pitfalls),

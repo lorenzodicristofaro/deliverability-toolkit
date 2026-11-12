@@ -11,8 +11,10 @@ partial facts gathered so far are returned, nothing is silently truncated.
 Hidden-text detection only looks at literal inline ``style`` values. It reports
 candidates, not proof: stylesheets are not evaluated. The off-screen rule (a negative
 ``left``/``top`` of at least 500 units on an absolutely/fixed positioned element, or a
-negative ``text-indent`` of that size) is a heuristic and `unverified`, like the Gmail
-clipping constant: no vendor documentation has been checked for it.
+negative ``text-indent`` of that size) is a heuristic and `unverified`; no vendor documentation
+has been checked for it.
+(The Gmail clipping constant is different: its value was confirmed by the maintainer on
+2026-11-12, not by Google documentation.)
 
 Default limits (2 MB input, 20k elements, depth 100, 100 attributes per element) are
 conservative bounds chosen to keep parsing cheap on hostile input while comfortably
@@ -31,8 +33,8 @@ from dataclasses import dataclass
 from html.parser import HTMLParser
 
 # Heuristic threshold from SPEC section 4.5 ("near 102 KB"), not a vendor guarantee.
-# unverified: the maintainer has not yet confirmed the Gmail clipping behaviour against
-# official Gmail documentation.
+# Value confirmed by the maintainer on 2026-11-12 from their own experience (source:
+# maintainer confirmation, not Google documentation).
 GMAIL_CLIP_THRESHOLD_BYTES = 102_400
 
 # Heuristic: a negative offset at least this large (px-like units) counts as off-screen.
@@ -121,7 +123,7 @@ class ContentStructure:
     charset: str | None = None
     has_nul: bool = False
     gmail_clip_threshold_bytes: int = GMAIL_CLIP_THRESHOLD_BYTES
-    exceeds_gmail_clip_threshold: bool = False  # heuristic, unverified
+    exceeds_gmail_clip_threshold: bool = False  # 102,400 bytes: maintainer-confirmed 2026-11-12
 
 
 class _Capped(Exception):

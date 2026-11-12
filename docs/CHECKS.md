@@ -175,6 +175,18 @@ What it checks, for each ESP assigned to the domain (one section per profile in
   whose chain (at most 8 hops) reaches a target that fits the profile's `target_pattern`
   (a `*` label is exactly one DNS label; no pattern: any target fits); a `txt` selector must
   hold a TXT record. A record of the other type is `ESP_DKIM_WRONG_TYPE`.
+- **Alternative DKIM sets** (`dkim.alternatives`, M6-23; MailUp: ml01+ml02 CNAMEs or a TXT key
+  at `ml00._domainkey`, maintainer decision 2026-11-12): DKIM is correct when every selector of
+  `dkim.selectors` is, OR every selector of one alternative set is. With the primary set
+  correct the alternatives are not queried. In an alternative, a `txt` selector counts only for
+  exactly one TXT record that is a valid, not revoked DKIM key (otherwise state `invalid`,
+  `reason` `syntax_error`, `revoked` or `multiple_records`). No set correct and every answer
+  in: one `ESP_DKIM_NO_OPTION_SATISFIED` listing the accepted setups, instead of the
+  per-selector findings. A DNS failure on a set that was needed and no set correct: only
+  `ESP_DNS_ERROR` (part `dkim.selectors.<name>` or `dkim.alternatives.<name>`), status `error`.
+  When a later set is correct the earlier failure gives no finding, but its `error` part in
+  `data` keeps `name`, `rdtype` and `failure`. `data` adds `dkim_alternatives` and
+  `dkim_satisfied_by` for these profiles only. Alternatives are never used for detection.
 - **Return path / tracking domain** at the hosts entered with the assignment: the expected
   record type must exist. Profiles carry no target for these, so only the type is compared.
   No host entered: `ESP_HOST_NOT_CONFIGURED`.
@@ -218,6 +230,7 @@ No ESP assigned: `ESP_NONE_ASSIGNED` (info) plus any detection findings.
 | `ESP_DKIM_RECORD_MISSING` | high | selector name absent |
 | `ESP_DKIM_TARGET_MISMATCH` | medium | no CNAME in the chain fits `target_pattern`; `reason` `chain_end`, `loop`, `empty_target` or `hop_limit` |
 | `ESP_DKIM_WRONG_TYPE` | medium | TXT where a CNAME is expected, or the reverse |
+| `ESP_DKIM_NO_OPTION_SATISFIED` | high | profile has `dkim.alternatives` and no DKIM set (primary or alternative) is satisfied; params list every accepted setup |
 | `ESP_RETURN_PATH_MISSING` | medium (info if the profile marks it optional) | NXDOMAIN at the return-path host |
 | `ESP_RETURN_PATH_MISMATCH` | medium (info if optional) | the host exists without the expected record type |
 | `ESP_TRACKING_MISSING` | low (info if optional) | NXDOMAIN at the tracking host |
@@ -337,8 +350,9 @@ the web denies them); it does not protect the instance from its operator.
   is `unverified` and no provider is claimed. A selector that is not in the list is not probed, so
   a DKIM result never proves DKIM is absent.
 - **Public Suffix List licence.** The organizational-domain lookup (DMARC fallback and same-org
-  report destinations) uses the PSL; its licence is recorded as `unverified` in
-  `seeds/public_suffix_source.yaml` and the maintainer still has to confirm it.
+  report destinations) uses the PSL; its licence (MPL-2.0) is recorded as verified in
+  `seeds/public_suffix_source.yaml`: the LICENSE text at github.com/publicsuffix/list was read on
+  2026-11-12 and the maintainer accepts it.
 - **No persistence.** Results are not stored: there is no history, scheduling or diff, and each
   request or page view runs the checks again.
 - No per-user rate limiting yet: one request can fan out many DNS queries (the DKIM probe).

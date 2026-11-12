@@ -44,6 +44,7 @@ underscore (`_spf`).
 | `spf.only_if_record` | no | Boolean, default `false` (M6-17). `true`: the includes are expected only when the sending domain already publishes an SPF record; a domain with no SPF record is not reported as missing them. Only with a non-empty `includes`. Set it only when the ESP's docs or a recorded maintainer decision say so (MailUp: maintainer decision 2026-11-11). |
 | `dkim.selectors` | yes | List (may be empty), at most 20 entries. Each: `name` (lowercase DNS label, unique), `type` (`cname` or `txt`), optional `target_pattern`. |
 | `dkim.selectors[].target_pattern` | no | Only on `cname` selectors. Restricted glob, see below. |
+| `dkim.alternatives` | no | M6-23. List of 1 to 5 alternative selector sets; each set is a non-empty list of at most 5 entries shaped like `dkim.selectors` entries. Only with a non-empty `dkim.selectors`. A selector name appears once in the whole `dkim` section. See "Alternative DKIM selector sets" below. |
 | `return_path` | no | `{type, optional, notes_key}`: `type` is `cname`, `txt` or `mx`; `optional` is a boolean (default false); `notes_key` optional. |
 | `tracking_domain` | no | Same shape as `return_path`. |
 | `pitfalls` | no | List, at most 30, of `{code, notes_key, severity}`. Static advice only. |
@@ -97,6 +98,34 @@ name. In that case:
 3. Tell the maintainer in the PR description: this is a known schema limitation, a later schema
    extension may handle it. Do not invent a pattern or list guessed names.
 
+### Alternative DKIM selector sets (`dkim.alternatives`)
+
+Some ESPs accept more than one DKIM setup (MailUp: the `ml01`/`ml02` CNAMEs, or a TXT record
+with the key at `ml00._domainkey`, maintainer decision 2026-11-12). The DKIM part is correct when
+every selector in `dkim.selectors` is correct OR every selector of one alternative set is:
+
+```yaml
+dkim:
+  selectors:
+    - {name: s1, type: cname, target_pattern: "s1.dkim.*.esp.example.net"}
+  alternatives:
+    - [{name: k0, type: txt}]
+```
+
+- When `selectors` is fully correct, the alternatives are not queried.
+- In an alternative set, a `txt` selector counts only when the name holds exactly one TXT record
+  that is a valid, not revoked DKIM key; a malformed record does not count. (A `txt` selector in
+  `selectors` keeps its rule: any TXT record.)
+- When no set is correct, one `ESP_DKIM_NO_OPTION_SATISFIED` finding lists every accepted setup
+  instead of one finding per selector. A DNS failure on a set that was needed is `error`, never
+  "missing" and never ok.
+- Alternatives are never used for ESP detection: a generic TXT selector name is no evidence of
+  the ESP.
+- Unverified paths: `dkim.alternatives` or `dkim.alternatives.<name>`. A set with an unverified
+  selector is not evaluated, and then a failing result gets no verdict.
+- Add alternatives only when the official docs or a recorded maintainer decision say the ESP
+  accepts that setup; record the source in a YAML comment if it is not in `sources`.
+
 ## `unverified` and `unverified_fields`
 
 Use `status: unverified` when you cannot confirm a part against official documentation (page
@@ -109,6 +138,7 @@ duplicates:
 
 - `spf.includes` (only if the list is non-empty)
 - `dkim.selectors` (only if non-empty) or `dkim.selectors.<name>`
+- `dkim.alternatives` (only if present) or `dkim.alternatives.<name>`
 - `return_path`, `tracking_domain` (only if present)
 - `pitfalls` (only if non-empty) or `pitfalls.<code>`
 
@@ -136,7 +166,7 @@ warning (`tests/esp/test_shipped_profiles.py`, not a failure). Re-read the sourc
 
 - **Check (`esp`)**: for each ESP assigned to a domain, the check compares live DNS with the
   profile and reports findings (`ESP_SPF_INCLUDE_MISSING`, `ESP_DKIM_*`, `ESP_RETURN_PATH_*`,
-  `ESP_TRACKING_MISSING`, `ESP_PROFILE_UNVERIFIED`, `ESP_DNS_ERROR`, and each pitfall as an info
+  `ESP_TRACKING_MISSING`, `ESP_DKIM_NO_OPTION_SATISFIED`, `ESP_PROFILE_UNVERIFIED`, `ESP_DNS_ERROR`, and each pitfall as an info
   finding). A DNS failure is `error`, never "missing".
 - **Detection (M6-13)**: reads the same profiles to spot ESPs that appear in a domain's DNS (SPF
   includes, DKIM selectors) without being assigned; each hit is reported as

@@ -14,6 +14,8 @@ directory (cached), no network access. The contributor guide (M6-12) documents t
       selectors:                               # may be empty
         - {name: s1, type: cname, target_pattern: "s1.dkim.*.esp.example.com"}
         - {name: k1, type: txt}
+      alternatives:                            # optional (M6-23), see Decisions
+        - [{name: k0, type: txt}]
     return_path: {type: cname, optional: false, notes_key: esp.example.return_path}  # optional
     tracking_domain: {type: cname, optional: true}                                     # optional
     pitfalls:                                  # optional, static advisory entries only
@@ -31,11 +33,19 @@ Decisions:
   evaluation of data, GM decision 2026-11-10). `code` is `ESP_<ID>_<NAME>` upper snake.
 - `unverified_fields` names the parts the maintainer could not confirm against official docs;
   checks must skip them (`EspProfile.is_verified`). Allowed paths: `spf.includes`,
-  `dkim.selectors`, `dkim.selectors.<name>`, `return_path`, `tracking_domain`, `pitfalls`,
+  `dkim.selectors`, `dkim.selectors.<name>`, `dkim.alternatives`, `dkim.alternatives.<name>`,
+  `return_path`, `tracking_domain`, `pitfalls`,
   `pitfalls.<code>`; each must name something present in the profile.
 - `spf.only_if_record` (optional boolean, default false, M6-17): when true, the includes are
   expected only if the sending domain already publishes an SPF record; a domain with no SPF
   record at all is not reported as missing them. Only allowed with a non-empty `includes`.
+- `dkim.alternatives` (optional, M6-23): alternative DKIM selector sets. The DKIM part is
+  satisfied when every selector of `dkim.selectors` is, OR every selector of one alternative
+  set is. A list of 1..MAX_DKIM_ALTERNATIVES sets, each a non-empty list of at most
+  MAX_ALTERNATIVE_SELECTORS entries with the shape of a `dkim.selectors` entry. Only with a
+  non-empty `dkim.selectors`; a selector name appears once in the whole `dkim` section (primary
+  and every set). Unverified paths: `dkim.alternatives`, `dkim.alternatives.<name>`.
+  Alternatives are never used for ESP detection (M6-13 probes `dkim.selectors` only).
 - Files are parsed with a `yaml.SafeLoader` subclass that additionally rejects duplicate keys,
   anchors/aliases and merge keys; each file is capped at MAX_FILE_BYTES.
 - The directory load is all-or-nothing: one bad file raises, no partial result.
@@ -63,6 +73,8 @@ MAX_FILE_BYTES: Final = 64 * 1024
 MAX_PROFILES: Final = 200
 MAX_INCLUDES: Final = 20
 MAX_SELECTORS: Final = 20
+MAX_DKIM_ALTERNATIVES: Final = 5
+MAX_ALTERNATIVE_SELECTORS: Final = 5
 MAX_PITFALLS: Final = 30
 MAX_SOURCES: Final = 10
 MAX_UNVERIFIED_FIELDS: Final = 50
@@ -160,6 +172,7 @@ class EspProfile:
     status: str
     unverified_fields: frozenset[str]
     spf_only_if_record: bool = False
+    dkim_alternatives: tuple[tuple[DkimSelector, ...], ...] = ()
 
     def is_verified(self, field: str) -> bool:
         """False if `field` (e.g. `dkim.selectors.s1`) or one of its parents is unverified.
@@ -327,10 +340,18 @@ def _record(value: object, where: str) -> RecordExpectation:
     )
 
 
-def _selectors(value: object, where: str) -> tuple[DkimSelector, ...]:
+def _selectors(
+    value: object,
+    where: str,
+    maximum: int = MAX_SELECTORS,
+    seen: set[str] | None = None,
+    *,
+    non_empty: bool = False,
+) -> tuple[DkimSelector, ...]:
+    """Selector entries; `seen` (updated in place) carries names already used in `dkim`."""
     out: list[DkimSelector] = []
-    seen: set[str] = set()
-    for i, raw in enumerate(_list(value, where, MAX_SELECTORS)):
+    seen = set() if seen is None else seen
+    for i, raw in enumerate(_list(value, where, maximum, non_empty=non_empty)):
         w = f"{where}[{i}]"
         e = _check_keys(raw, w, {"name", "type"}, frozenset({"target_pattern"}))
         name = _text(e["name"], f"{w}.name", MAX_LABEL_LENGTH)
@@ -347,6 +368,16 @@ def _selectors(value: object, where: str) -> tuple[DkimSelector, ...]:
             pattern = _target_pattern(e["target_pattern"], f"{w}.target_pattern")
         out.append(DkimSelector(name=name, type=kind, target_pattern=pattern))
     return tuple(out)
+
+
+def _alternatives(
+    value: object, where: str, seen: set[str]
+) -> tuple[tuple[DkimSelector, ...], ...]:
+    sets = _list(value, where, MAX_DKIM_ALTERNATIVES, non_empty=True)
+    return tuple(
+        _selectors(raw, f"{where}[{i}]", MAX_ALTERNATIVE_SELECTORS, seen, non_empty=True)
+        for i, raw in enumerate(sets)
+    )
 
 
 def _pitfalls(value: object, where: str, profile_id: str) -> tuple[Pitfall, ...]:
@@ -418,8 +449,14 @@ def _parse(data: object, file_id: str, today: date) -> EspProfile:
         only_if_record = _bool(spf["only_if_record"], "spf.only_if_record")
         if only_if_record and not includes:
             raise _fail("spf.only_if_record", "needs a non-empty spf.includes")
-    dkim = _check_keys(d["dkim"], "dkim", {"selectors"})
-    selectors = _selectors(dkim["selectors"], "dkim.selectors")
+    dkim = _check_keys(d["dkim"], "dkim", {"selectors"}, frozenset({"alternatives"}))
+    names: set[str] = set()
+    selectors = _selectors(dkim["selectors"], "dkim.selectors", seen=names)
+    alternatives: tuple[tuple[DkimSelector, ...], ...] = ()
+    if "alternatives" in dkim:
+        if not selectors:
+            raise _fail("dkim.alternatives", "needs a non-empty dkim.selectors")
+        alternatives = _alternatives(dkim["alternatives"], "dkim.alternatives", names)
     return_path = _record(d["return_path"], "return_path") if "return_path" in d else None
     tracking = _record(d["tracking_domain"], "tracking_domain") if "tracking_domain" in d else None
     pitfalls = _pitfalls(d["pitfalls"], "pitfalls", pid) if "pitfalls" in d else ()
@@ -431,6 +468,9 @@ def _parse(data: object, file_id: str, today: date) -> EspProfile:
     if selectors:
         present.add("dkim.selectors")
         present.update(f"dkim.selectors.{s.name}" for s in selectors)
+    if alternatives:
+        present.add("dkim.alternatives")
+        present.update(f"dkim.alternatives.{s.name}" for alt in alternatives for s in alt)
     if return_path is not None:
         present.add("return_path")
     if tracking is not None:
@@ -460,6 +500,7 @@ def _parse(data: object, file_id: str, today: date) -> EspProfile:
         status=status,
         unverified_fields=unverified,
         spf_only_if_record=only_if_record,
+        dkim_alternatives=alternatives,
     )
 
 

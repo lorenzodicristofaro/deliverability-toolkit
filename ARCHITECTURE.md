@@ -201,6 +201,8 @@ dkim:
   selectors:
     - { name: s1, type: cname, target_pattern: "s1.dkim.*.esp.example.com" }
     - { name: k1, type: txt }
+  alternatives:                  # optional (M6-23): DKIM ok if `selectors` OR one set is fully present
+    - [{ name: k0, type: txt }]  # never used for detection; alternative txt must be a valid key
 return_path: { type: cname, optional: false, notes_key: esp.example_esp.return_path }
 tracking_domain: { type: cname, optional: true }
 pitfalls:                        # static advisory entries; no `when:` conditions
