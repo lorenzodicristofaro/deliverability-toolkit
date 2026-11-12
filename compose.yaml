@@ -19,6 +19,16 @@ services:
       # profile use RESOLVER_MODE=unbound and RESOLVER_ADDRS=172.28.53.2:5353 (docs/UNBOUND.md).
       RESOLVER_MODE: ${RESOLVER_MODE:-system}
       RESOLVER_ADDRS: ${RESOLVER_ADDRS:-}
+      # Every other setting documented in .env.example (defaults equal the Settings defaults;
+      # tests/test_compose_config.py enforces both). Without these, .env values never reach
+      # the container (BASE_URL=https://... would be ignored: no Secure cookies, no HSTS).
+      ROLE: ${ROLE:-all}
+      ALLOW_SMTP_CHECKS: ${ALLOW_SMTP_CHECKS:-false}
+      ALLOW_REGISTRATION: ${ALLOW_REGISTRATION:-false}
+      BASE_URL: ${BASE_URL:-http://localhost:8000}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      SESSION_IDLE_TIMEOUT_MINUTES: ${SESSION_IDLE_TIMEOUT_MINUTES:-30}
+      SESSION_ABSOLUTE_TIMEOUT_MINUTES: ${SESSION_ABSOLUTE_TIMEOUT_MINUTES:-720}
     networks:
       - default  # internet access
       - dns      # reach the unbound profile at 172.28.53.2; internal, no outside access
