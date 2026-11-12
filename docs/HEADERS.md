@@ -128,6 +128,8 @@ taken from the docstring of `app/services/message_findings.py`.
 | MSG_MIME_TRUNCATED | low | MIME walk stopped at a cap (detail) |
 | MSG_NO_TEXT_PART | low | no text/plain part |
 | MSG_PARSER_LIMIT | medium | input rejected or capped (error-class) |
+| MSG_AUTHRES_UNPARSED | medium | an Authentication-Results field has no authserv-id or an error-severity parse issue; parameters are issue codes only (error-class) |
+| MSG_ALIGNMENT_NOT_EVALUATED | medium | computed DMARC alignment is not evaluated although a field is present; parameters are pair reason codes only (error-class) |
 
 ## Permission `message.analyze`
 
