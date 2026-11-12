@@ -17,7 +17,8 @@ Acceptance criteria:
 - en/it completeness test green; docs/HEADERS.md findings table updated.
 - No network. ruff, mypy, relevant tests green.
 New i18n keys: `finding.MSG_AUTHRES_UNPARSED.title/detail/remediation` and `finding.MSG_ALIGNMENT_NOT_EVALUATED.title/detail/remediation` (en + it), following the existing MSG_* key pattern; the coder states exact names.
-Status: todo
+Status: done
+Outcome: reproduced (15 tests); fixed in merge 247175e (MSG_AUTHRES_UNPARSED, MSG_ALIGNMENT_NOT_EVALUATED, medium, en+it); QA APPROVE (Opus); dev CI pending.
 
 ## Review details (copied from the code review of 2026-11-12, dev 06869fb)
 - Location:

@@ -16,7 +16,8 @@ Acceptance criteria:
 - Tests: wildcard zone answering every `*.example.com` TXT with `v=spf1 -all` and with `google-site-verification=abc` -> `DkimCheck(["default","google","s1"])` gives no per-selector syntax errors, no `found`, `DKIM_NO_SELECTOR_FOUND` emitted, one `DKIM_NON_KEY_TXT` with count 3; mixed zone with a real key at one selector and wildcard text at others; a real but malformed key (`v=DKIM1; p=` garbage, or `p=` with bad base64) still gives `DKIM_KEY_SYNTAX_ERROR`; `_domainkey` as empty non-terminal; evidence cap respected with 250 selectors; esp `txt` selector answered by non-DKIM TXT in tests/checks/test_esp_profile.py.
 - DNS failures still `error`. No network, no wall clock. ruff, mypy, relevant tests green.
 New i18n keys: `finding.DKIM_NON_KEY_TXT.title/detail/remediation` (en + it); follow the existing key pattern of dkim findings and state the exact names. Remediation must not claim vendor behaviour.
-Status: todo
+Status: done
+Outcome: reproduced (wildcard TXT made every selector found with DKIM_KEY_SYNTAX_ERROR; esp primary txt ok without a key); Sonnet round 1 got QA CHANGES REQUESTED (DKIM_MULTIPLE_RECORDS lost for a key next to a non-key TXT), escalated to Opus, fixed in round 2; merged aa9888f; QA APPROVE round 2; dev CI green.
 
 ## Review details (copied from the code review of 2026-11-12, dev 06869fb)
 - Location: `app/checks/dkim.py:114-127` (`if txt.records:` -> `found`), `app/checks/dkim.py:193-196` (one `DKIM_KEY_SYNTAX_ERROR` per record), `app/checks/esp_profile.py:494-501` (a primary `txt` selector is `ok` for any TXT record; `validate_key` is only set for alternatives).

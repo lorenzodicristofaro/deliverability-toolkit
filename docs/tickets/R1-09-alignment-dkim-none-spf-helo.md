@@ -17,7 +17,8 @@ Acceptance criteria:
 - No new user-facing strings expected (reason codes are internal; if a reason code is rendered, it must already go through an i18n key: check and report).
 - No network. ruff, mypy, relevant tests green.
 New i18n keys: none expected (state if a reason code is rendered)
-Status: todo
+Status: done
+Outcome: reproduced (19 tests); fixed in merge 32a0a31 (dkim=none -> pair not_evaluated reason no_signature, DMARC on SPF alone; spf from the first resinfo with smtp.mailfrom); QA APPROVE (Opus); dev CI green.
 
 ## Review details (copied from the code review of 2026-11-12, dev 06869fb)
 - Location:

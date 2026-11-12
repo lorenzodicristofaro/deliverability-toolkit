@@ -193,9 +193,9 @@ Tickets (docs/tickets/):
 - [x] R1-05 DNS-01 DMARC inherited policy uses sp (sonnet)
 - [x] R1-06 DNS-02 SPF tree own domain-spec target normaliser (opus)
 - [x] R1-07 DNS-03 trace reports an unfinished CNAME chain (opus); following the CNAME is a follow-up
-- [ ] R1-08 DNS-04 DKIM non-key TXT is not a found selector, one aggregated finding (sonnet)
-- [ ] R1-09 PARSE-02 alignment: dkim=none is no signature; spf from the resinfo with smtp.mailfrom (opus)
-- [ ] R1-10 PARSE-03 error status always carries an explaining finding (sonnet; depends R1-09)
+- [x] R1-08 DNS-04 DKIM non-key TXT is not a found selector, one aggregated finding (sonnet)
+- [x] R1-09 PARSE-02 alignment: dkim=none is no signature; spf from the resinfo with smtp.mailfrom (opus)
+- [x] R1-10 PARSE-03 error status always carries an explaining finding (sonnet; depends R1-09)
 - Lows, run only if budget allows:
 - [ ] R1-11 AUTH-06 missing-i18n-key warning shows the key (sonnet)
 - [ ] R1-12 AUTH-07 default error bodies translated, no echo, no blank 413 (sonnet)
@@ -223,6 +223,8 @@ Follow-ups:
 - R1-05 follow-up: inherited-sp scenario in tests/checks/test_acceptance_m3.py; assert the PCT_PARTIAL p argument in the sp-pct row.
 - R1-06 follow-up: comment in app/checks/dnsutil.py fetch_txt noting the SPF tree builds its TXT question directly; the SPF parser still accepts empty/over-long labels and names that the tree rejects as invalid_target.
 - R1-07 follow-up: follow the CNAME target in the trace (restart from the root within budgets); a CNAME from a non-AA server ends the trace instead of trying the next server; trace.py:556 uses getattr where ServerReply has the fields.
+- R1-09 follow-up: a stated dkim=none header.d=X still adds X to stated_ds, so a DKIM-Signature d=X is not reported as unverified (message_alignment.py:260-262); two spf resinfos with smtp.mailfrom: first wins (RFC 8601 silent).
+- R1-10 follow-up: MSG_AUTHRES_UNPARSED detail says the issue codes are 'listed in the finding data', but CLI/web do not show params unused by the text — add an {issues} placeholder (safe codes) or reword, en+it; property test could map each skipped area to its required code.
 Not ticketed — maintainer:
 - AUTH-04 (trusted proxy, remote lockout): folded into the existing item "Trusted-proxy setting for the client IP" in Follow-ups; no ticket.
 - INFRA-01 (push-policy deny rules, no server-side ruleset for tags and dev) and INFRA-02 (workflow file can raise its own token rights): touch `.claude/settings.json`, push and permission policy; maintainer decision.
