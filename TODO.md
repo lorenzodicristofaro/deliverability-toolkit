@@ -182,6 +182,47 @@ Carried over from M0-07 QA:
   - M6 closed 2026-11-12. Report: docs/reports/M6.md
   - Dependabot (resolved 2026-11-12): the two open alerts (#1 pyproject.toml, #2 uv.lock) are the same advisory GHSA-45c3-73f7-pv4m, fixed by M6-21 (dnspython 2.9.2, on main since PR #2 9d793cb). The "second unidentified alert" item is closed; the alerts should close on the next Dependabot scan.
 
+## R1 — Code review fixes 2026-11-12
+Goal: fix the findings of the maintainer-requested code review of dev 06869fb (review files in docs/reviews/2026-11-12/ on the review branch; each ticket carries its own copy of the details).
+Accept: each ticketed finding is reproduced by a failing test and fixed, or recorded as not reproduced; CI green on dev.
+Tickets (docs/tickets/):
+- [ ] R1-01 PARSE-01 quadratic style regexes (ReDoS) + `_REPLY` rewrite (opus)
+- [ ] R1-02 AUTH-01 release the DB connection after authentication (opus)
+- [ ] R1-03 AUTH-02 login throttle: per-IP limit, argon2 concurrency bound, eviction reset; includes the "Per-IP cap on throttle keys" item (opus)
+- [ ] R1-04 AUTH-03 compose.yaml forwards BASE_URL and the other documented settings (sonnet)
+- [ ] R1-05 DNS-01 DMARC inherited policy uses sp (sonnet)
+- [ ] R1-06 DNS-02 SPF tree own domain-spec target normaliser (opus)
+- [ ] R1-07 DNS-03 trace reports an unfinished CNAME chain (opus); following the CNAME is a follow-up
+- [ ] R1-08 DNS-04 DKIM non-key TXT is not a found selector, one aggregated finding (sonnet)
+- [ ] R1-09 PARSE-02 alignment: dkim=none is no signature; spf from the resinfo with smtp.mailfrom (opus)
+- [ ] R1-10 PARSE-03 error status always carries an explaining finding (sonnet; depends R1-09)
+- Lows, run only if budget allows:
+- [ ] R1-11 AUTH-06 missing-i18n-key warning shows the key (sonnet)
+- [ ] R1-12 AUTH-07 default error bodies translated, no echo, no blank 413 (sonnet)
+- [ ] R1-13 AUTH-08 sync DB calls on the event loop in async web handlers (sonnet; depends R1-02)
+- [ ] R1-14 AUTH-09 purge expired and revoked sessions (opus)
+- [ ] R1-15 AUTH-10 `__Host-` cookies on https, CSRF token expiry (opus; depends R1-04)
+- [ ] R1-16 AUTH-11 Cache-Control no-store centrally (sonnet)
+- [ ] R1-17 DNS-05 SPF terms after `all` not counted (opus)
+- [ ] R1-18 DNS-06 drop the 255-octet SPF_RECORD_TOO_LONG info branch (opus)
+- [ ] R1-19 DNS-07 empty reply without RA is an error (sonnet; confidence low)
+- [ ] R1-20 PARSE-04 `dtk check` escapes control characters (sonnet)
+- [ ] R1-21 PARSE-05 Received from_ip prefers the TCP-info comment (opus)
+- [ ] R1-22 PARSE-06 forged lower Authentication-Results field (opus; depends R1-09; design decision first)
+- [ ] R1-23 PARSE-07 message analyzer One-Click via the List-Unsubscribe parser (sonnet)
+- [ ] R1-24 PARSE-08 To/Cc counts from raw values (sonnet)
+- [ ] R1-25 INFRA-03 postgres compose profile: URL, retry, CI smoke (sonnet; depends R1-04)
+- [ ] R1-26 INFRA-04 pin app image bases by digest, rebuild check (sonnet; digests need network)
+- [ ] R1-27 INFRA-05 run Docker jobs for app/ and locales/ changes (sonnet)
+- [ ] R1-28 INFRA-06 migration race between replicas (sonnet)
+- [ ] R1-29 INFRA-07 app container hardening (sonnet; related to the safe_regex orphan item below; depends R1-04)
+Not ticketed — maintainer:
+- AUTH-04 (trusted proxy, remote lockout): folded into the existing item "Trusted-proxy setting for the client IP" in Follow-ups; no ticket.
+- INFRA-01 (push-policy deny rules, no server-side ruleset for tags and dev) and INFRA-02 (workflow file can raise its own token rights): touch `.claude/settings.json`, push and permission policy; maintainer decision.
+- AUTH-05: what a domain rename does to ESP hosts outside the new domain (clear, rewrite, or refuse the rename); maintainer decision.
+- PARSE-03 leniency question: should an Authentication-Results field without authserv-id whose resinfo list parsed cleanly count as evaluated? Not part of R1-10; maintainer decision (provider header formats unverified).
+- DNS open question: docs/CHECKS.md says every failed lookup gives `error`, but app/checks/dmarc.py:121-122 keeps `fail` when a high finding exists (deliberate per the code comment); maintainer confirms which rule holds, then the docs are aligned.
+
 ## M7 — Monitoring
 - [ ] Guarded outbound client (SSRF protection) + tests
 - [ ] Custom check kind http_fetch via guarded client (SPEC §5 still lists HTTP custom checks and http_fetch is deferred to M7: maintainer decision 2026-11-11, leave the wording and review it when M7 starts)
@@ -315,7 +356,7 @@ Maintainer decision 2026-11-12: moved from M9; no test domains or access yet, an
 - [ ] Throttle the `last_seen_at` write in resolve_session
 - [ ] DB-backed login throttle for multi-process deployments
 - [ ] Per-IP cap on throttle keys, plus a warning log when the table is full (a single IP can fill the table with locked keys and block new logins)
-- [ ] Trusted-proxy setting for the client IP (needed before any reverse-proxy deployment)
+- [ ] Trusted-proxy setting for the client IP (needed before any reverse-proxy deployment). Consequence added by the 2026-11-12 review: behind a proxy every client shares one throttle IP, so anyone who knows an email address can lock that account remotely (ten wrong passwords per 15 minutes) and can lock the setup wizard (five wrong setup tokens delay, ten lock it); the documented HTTPS path already implies a proxy; uvicorn `forwarded-allow-ips` default (127.0.0.1 only) is unverified, check the uvicorn documentation before designing (review AUTH-04)
 - [ ] `services.auth.rotate_session` helper (`_switch` reads the sessions row directly)
 - [ ] Dispose of the DB engine at shutdown via the lifespan
 - [ ] A breached-password corpus check, offline
