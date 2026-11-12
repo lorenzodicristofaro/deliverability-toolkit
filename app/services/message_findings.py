@@ -73,6 +73,7 @@ From is reported as ``MSG_MULTIPLE_FROM`` only (one finding per problem).
 Error-class conditions (``unevaluated``): ``date`` (invalid, or without a zone), ``received``
 (any unparsed hop), ``authres`` (an Authentication-Results field that could not be parsed),
 ``alignment`` (alignment not computable although Authentication-Results exist),
+``list_unsubscribe`` (a List-Unsubscribe field capped or unreadable, so One-Click is unknown),
 and ``parser`` (input rejected
 or capped).
 """
@@ -94,6 +95,7 @@ from app.parsers.authres import (
     AuthResParseError,
     parse_all_authentication_results,
 )
+from app.parsers.list_unsubscribe import analyze_list_unsubscribe
 from app.parsers.message import (
     ENCODED_WORD_INVALID,
     ENCODED_WORD_MALFORMED,
@@ -494,9 +496,15 @@ def _other_part(block: HeaderBlock, alignment: AlignmentReport, acc: _Acc) -> No
     if not unsub:
         acc.add("MSG_LIST_UNSUBSCRIBE_MISSING", "info")
     else:
-        # RFC 8058 section 3.1: the one-click post header carries "List-Unsubscribe=One-Click".
-        posts = block.get_all("List-Unsubscribe-Post")
-        if not any("list-unsubscribe=one-click" in p.raw_value.lower() for p in posts):
+        # RFC 8058 section 3.1 / 5 verdict from the shared parser (same as the content analyzer).
+        facts = analyze_list_unsubscribe(block)
+        if (
+            facts.https_uri_present is None
+            or facts.field_count > len(facts.fields)
+            or any(not f.evaluated or f.capped for f in facts.fields)
+        ):
+            acc.skip("list_unsubscribe")
+        elif not facts.one_click_eligible:
             acc.add("MSG_LIST_UNSUBSCRIBE_NO_ONECLICK", "info")
     broken = [w for w in block.warnings if w.code in _ENCODED_WORD_CODES]
     if broken:
