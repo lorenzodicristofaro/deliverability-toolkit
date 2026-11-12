@@ -327,15 +327,16 @@ Every role that can see a domain, a client viewer included, gets each probed sel
 provider in the DKIM result (maintainer decision 2026-11-10); the selector `notes` are admin data
 and never reach a result. See `docs/CHECKS.md` for the selector list and its caps.
 
-## Heuristic thresholds (all `unverified`)
+## Heuristic thresholds (`unverified`, except the Gmail clip size)
 
-No official mailbox provider source has been checked for any of these; none is attributed to a
+No official mailbox provider source has been checked for any of these (the Gmail clip size is
+confirmed by the maintainer only, 2026-11-12); none is attributed to a
 provider, and their texts say "advisory" (en) and "indicativa" (it). The maintainer is asked to
 confirm or replace them against official documentation.
 
 | Constant | Value | Used by |
 |---|---|---|
-| `GMAIL_CLIP_THRESHOLD_BYTES` | 102,400 | `CONTENT_GMAIL_CLIP_RISK` (the Gmail clipping behaviour is `unverified`) |
+| `GMAIL_CLIP_THRESHOLD_BYTES` | 102,400 | `CONTENT_GMAIL_CLIP_RISK` (value confirmed by the maintainer 2026-11-12 from their own experience, not by Google documentation; advisory) |
 | `MIN_VISIBLE_CHARS_PER_IMAGE` | 100 | `CONTENT_LOW_TEXT_IMAGE_RATIO` |
 | `MANY_LINK_DOMAINS_THRESHOLD` | 5 | `CONTENT_MANY_LINK_DOMAINS` |
 | `EXCESS_CSS_PERCENT`, `EXCESS_CSS_MIN_HTML_BYTES` | 50 percent, 10,240 | `CONTENT_EXCESS_CSS` |
