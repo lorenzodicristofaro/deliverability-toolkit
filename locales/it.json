@@ -816,6 +816,7 @@
   "tools.dns.trace.kind.skipped": "Saltato: server già interrogato per questa zona",
   "tools.dns.trace.outcome": "Esito della traccia",
   "tools.dns.trace.outcome.all_failed": "Non valutabile: tutti i server di una zona non hanno risposto.",
+  "tools.dns.trace.outcome.cname": "Il nome è un alias (CNAME): il server ha restituito la catena mostrata sotto, ma nessun record di questo tipo per la destinazione finale. La traccia non segue la destinazione; traccia quel nome per vederne i record.",
   "tools.dns.trace.outcome.deadline": "Non valutabile: la traccia ha esaurito il tempo.",
   "tools.dns.trace.outcome.depth_exceeded": "Non valutabile: troppe deleghe (limite di profondità raggiunto).",
   "tools.dns.trace.outcome.lame": "Non valutabile: delega lame, i server delegati non rispondono in modo autorevole.",

@@ -4,14 +4,18 @@ from __future__ import annotations
 
 import asyncio
 import socket
-from collections.abc import Callable
+from collections.abc import AsyncGenerator, Callable
 from typing import Any
 
+import dns.flags
+import dns.message
+import dns.rcode
+import dns.rrset
 import pytest
 
 from app.core.config import ResolverAddr
 from app.dns import backends
-from app.dns.egress import DEFAULT_POLICY, BlockReason
+from app.dns.egress import DEFAULT_POLICY, BlockReason, TargetPolicy
 from app.dns.knowledge import RootServer, root_hints
 from app.dns.trace import (
     DEFAULT_LIMITS,
@@ -853,6 +857,8 @@ def test_default_limits_are_the_named_constants() -> None:
 def test_only_answers_are_evaluations(outcome: TraceOutcome, state: ResultState) -> None:
     if outcome in (TraceOutcome.ok, TraceOutcome.nxdomain, TraceOutcome.nodata):
         assert state.value == outcome.value
+    elif outcome is TraceOutcome.cname:
+        assert state is ResultState.ok  # an alias was read: evaluated, never absence
     else:
         assert state is ResultState.error
 
@@ -881,3 +887,157 @@ async def test_no_socket_is_created(fake_dns: Any, monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr(socket, "getaddrinfo", boom)
     report = await run(fake_dns("delegation"), q("example.com"))
     assert report.outcome is TraceOutcome.ok
+
+
+# --- R1-07: CNAME at the query name into another zone (reported, not followed) ---------------
+
+_RR = tuple[str, int, str, list[str]]
+
+
+class _DocsPolicy(TargetPolicy):
+    """The production policy, except that documentation ranges (the fixture addresses) pass."""
+
+    def check(self, addr: ResolverAddr, trusted: bool) -> BlockReason | None:
+        reason = DEFAULT_POLICY.check(addr, trusted)
+        return None if reason is BlockReason.documentation else reason
+
+
+def _section(items: list[_RR]) -> list[dns.rrset.RRset]:
+    return [dns.rrset.from_text_list(n, ttl, "IN", ty, rd) for n, ttl, ty, rd in items]
+
+
+def _wire_trace(final: dict[str, Any]) -> tuple[Any, list[str]]:
+    """Real ``DnsPythonResolver.query_server`` over hand-built dnspython messages, no sockets:
+    the root (192.0.2.1) refers to example.com (ns1.example.com, 192.0.2.3), which answers with
+    ``final`` (rcode/answer/authority/flags)."""
+    sent_to: list[str] = []
+
+    async def transport(
+        wire: bytes, target: ResolverAddr, *, tcp: bool
+    ) -> AsyncGenerator[backends.WireReply, None]:
+        sent_to.append(target.host)
+        resp = dns.message.make_response(dns.message.from_wire(wire))
+        if target.host == "192.0.2.1":
+            resp.authority = _section([("example.com.", 86400, "NS", ["ns1.example.com."])])
+            resp.additional = _section([("ns1.example.com.", 86400, "A", ["192.0.2.3"])])
+        else:
+            resp.set_rcode(final.get("rcode", dns.rcode.NOERROR))
+            resp.flags |= final.get("flags", dns.flags.AA)
+            resp.answer = _section(final.get("answer", []))
+            resp.authority = _section(final.get("authority", []))
+        yield backends.WireReply(resp.to_wire(), target)
+
+    resolver = backends.DnsPythonResolver(
+        [], trusted=False, identity="wire", policy=_DocsPolicy(), transport=transport
+    )
+    return query_server_for(resolver), sent_to
+
+
+SOA = [("example.com.", 300, "SOA", ["ns1.example.com. h.example.com. 1 2 3 4 5"])]
+CNAME_WWW: _RR = ("www.example.com.", 300, "CNAME", ["host.example.net."])
+
+# (id, final server reply, outcome, answer rdata, chain (owner, target), target, hop detail)
+TRACE_CNAME_CASES: list[
+    tuple[
+        str,
+        dict[str, Any],
+        str,
+        tuple[str, ...],
+        list[tuple[str, str]],
+        str | None,
+        str | None,
+    ]
+] = [
+    (
+        "cname_into_other_zone",
+        {"answer": [CNAME_WWW]},
+        "cname",
+        (),
+        [("www.example.com", "host.example.net")],
+        "host.example.net",
+        "cname",
+    ),
+    (
+        "in_zone_then_other_zone",
+        {
+            "answer": [
+                ("www.example.com.", 300, "CNAME", ["a.example.com."]),
+                ("a.example.com.", 300, "CNAME", ["host.example.net."]),
+            ],
+            "authority": SOA,
+        },
+        "cname",
+        (),
+        [("www.example.com", "a.example.com"), ("a.example.com", "host.example.net")],
+        "host.example.net",
+        "cname",
+    ),
+    (
+        "non_authoritative_cname_flagged",
+        {"answer": [CNAME_WWW], "flags": 0},
+        "cname",
+        (),
+        [("www.example.com", "host.example.net")],
+        "host.example.net",
+        "non_authoritative",
+    ),
+    (
+        "in_zone_chain_with_record_is_ok",
+        {
+            "answer": [
+                ("www.example.com.", 300, "CNAME", ["a.example.com."]),
+                ("a.example.com.", 300, "A", ["192.0.2.7"]),
+            ]
+        },
+        "ok",
+        ("192.0.2.7",),
+        [],
+        None,
+        None,
+    ),
+    ("empty_aa_noerror_is_nodata", {"authority": SOA}, "nodata", (), [], None, None),
+    (
+        "nxdomain_with_cname_is_nxdomain",
+        {"rcode": dns.rcode.NXDOMAIN, "answer": [CNAME_WWW], "authority": SOA},
+        "nxdomain",
+        (),
+        [],
+        None,
+        None,
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    ("final", "outcome", "answer", "chain", "target", "detail"),
+    [c[1:] for c in TRACE_CNAME_CASES],
+    ids=[c[0] for c in TRACE_CNAME_CASES],
+)
+async def test_cname_at_query_name(
+    final: dict[str, Any],
+    outcome: str,
+    answer: tuple[str, ...],
+    chain: list[tuple[str, str]],
+    target: str | None,
+    detail: str | None,
+) -> None:
+    query_server, sent_to = _wire_trace(final)
+    report = await trace(
+        q("www.example.com"), query_server=query_server, root_hints=ROOTS, policy=FixturePolicy()
+    )
+    assert report.outcome.value == outcome
+    assert tuple(r.rdata_text for r in report.answer) == answer
+    assert sent_to == ["192.0.2.1", "192.0.2.3"]  # the target is reported, never followed
+    last = report.hops[-1]
+    assert last.kind is HopKind.answer
+    assert last.detail_code == detail
+    assert [(r.name, r.rdata_text) for r in report.cname_chain] == chain
+    assert report.cname_target == target
+    if outcome == "cname":
+        assert report.state is ResultState.ok  # evaluated; neither an error nor "no record"
+        assert last.state is ResultState.ok
+        assert [(r.name, r.rdtype, r.rdata_text) for r in last.records] == [
+            (n, "CNAME", t) for n, t in chain
+        ]
+        assert (report.final_zone, report.final_server) == ("example.com", "192.0.2.3")
+    assert_never_missing(report)

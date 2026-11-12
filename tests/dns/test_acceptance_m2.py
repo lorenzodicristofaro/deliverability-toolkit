@@ -601,7 +601,9 @@ def test_m2_guard_every_trace_outcome_is_translated_and_never_a_failure_of_absen
         assert all(load_catalogue(lang).get(k) for k in keys)
     for outcome in TraceOutcome:
         assert f'"{outcome.value}":' in template, outcome
-        if outcome not in (TraceOutcome.ok, TraceOutcome.nxdomain, TraceOutcome.nodata):
+        if outcome is TraceOutcome.cname:  # R1-07: an alias was read, never absence
+            assert outcome.state is S.ok
+        elif outcome not in (TraceOutcome.ok, TraceOutcome.nxdomain, TraceOutcome.nodata):
             assert outcome.state is S.error  # every non-answer outcome is a failure to evaluate
 
 

@@ -15,7 +15,9 @@ import pytest
 
 from app.api.v1.dns_tools import dns_backend
 from app.core.i18n import t
+from app.dns.backends import ServerReply
 from app.dns.knowledge import list_public_resolvers
+from app.dns.types import DnsQuestion, DnsRecord, DnsResult, ResultState
 from tests.support.dns_backend import ZONES, fake_backend
 from tests.web.test_domains_ui import World, get, post
 
@@ -241,6 +243,40 @@ def test_trace_invalid_input_is_422_without_echo(world: World, data: dict[str, s
     assert "<b>" not in r.text and "NOPE" not in r.text
     assert 'data-testid="trace-error"' in r.text
     assert "trace-result" not in r.text
+
+
+def use_cname_leaf(w: World, target: str) -> None:
+    """The example.com server (192.0.2.3) answers with an AA CNAME into another zone (R1-07)."""
+    backend, fs = fake_backend(ZONES)
+
+    async def ask(addr: str, q: DnsQuestion) -> Any:
+        if addr != "192.0.2.3":
+            return await fs.query_server(addr, q)
+        link = DnsRecord(q.name, "CNAME", 300, target)
+        result = DnsResult(q, ResultState.nodata, rcode=0, server=addr)
+        return ServerReply(result, authoritative=True, cname_chain=(link,), cname_target=target)
+
+    swapped = dataclasses.replace(backend, query_server=ask)
+    w.client.app.dependency_overrides[dns_backend] = lambda: swapped  # type: ignore[attr-defined]
+
+
+@pytest.mark.parametrize("lang", ["en", "it"])
+def test_trace_cname_outcome_rendered_and_escaped(world: World, lang: str) -> None:  # noqa: F811
+    use_cname_leaf(world, f"{EVIL}\x01.example.net")
+    html = trace_form(world, name="www.example.com", **{"Accept-Language": lang}).text
+    assert 'data-outcome="cname"' in html
+    label = re.escape(t("tools.dns.trace.outcome.cname", lang))
+    box = r'<p class="dns-state dns-state-(\w+)" data-state="(\w+)" data-kind="(\w+)"[^>]*>\s*'
+    m = re.search(box + label, html)
+    assert m and m.groups() == ("ok", "ok", "ok"), html[-1500:]
+    # Never "no record of this type" for an alias, and never a failure.
+    assert t("tools.dns.trace.outcome.nodata", lang) not in html
+    assert t("tools.dns.state.nodata", lang) not in html
+    assert 'data-testid="trace-cname-chain"' in html
+    assert EVIL not in html and "\x01" not in html
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;\\x01.example.net" in html
+    if lang == "it":
+        assert t("tools.dns.trace.outcome.cname", "en") not in html
 
 
 def test_trace_oversized_is_413(world: World) -> None:  # noqa: F811
