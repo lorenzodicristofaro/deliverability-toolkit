@@ -196,9 +196,33 @@ INLINE_CASES: list[tuple[str, list[dict[str, Any]], str, set[str]]] = [
     ),
     (
         "invalid_target_is_syntax_error",
-        [_txt("x.test", "v=spf1 include:bad_label.example.com -all")],
+        [_txt("x.test", "v=spf1 include:" + "x" * 64 + ".example.com -all")],
         "fail",
         {"SPF_SYNTAX_ERROR"},
+    ),
+    (
+        "empty_label_target_is_syntax_error",
+        [_txt("x.test", "v=spf1 a:a..example.com -all")],
+        "fail",
+        {"SPF_SYNTAX_ERROR"},
+    ),
+    (
+        "underscore_redirect_followed",
+        [_txt("x.test", "v=spf1 redirect=_x_.example.net"), _txt("_x_.example.net", "v=spf1 -all")],
+        "ok",
+        set(),
+    ),
+    (
+        "hyphen_edge_a_target_queried",
+        [_txt("x.test", "v=spf1 a:x-.example.net -all"), _a("x-.example.net")],
+        "ok",
+        set(),
+    ),
+    (
+        "missing_underscore_include_not_found",
+        [_txt("x.test", "v=spf1 include:a__b.example.net -all")],
+        "fail",
+        {"SPF_INCLUDE_NOT_FOUND"},
     ),
     ("empty_record", [_txt("x.test", "v=spf1")], "warn", {"SPF_NO_ALL"}),
     ("garbage_only", [_txt("x.test", "v=spf1 \x00 -all")], "fail", {"SPF_SYNTAX_ERROR"}),
@@ -280,6 +304,21 @@ async def test_flattening_hint_ranks_includes_and_generates_no_addresses() -> No
     ip = re.compile(r"\b\d{1,3}(\.\d{1,3}){3}\b")
     for text in (EN[hint.remediation_key or ""], IT[hint.remediation_key or ""], *hint.evidence):
         assert not ip.search(text)
+
+
+async def test_include_with_inner_underscore_is_fetched() -> None:
+    """R1-06 (DNS-02): a domain-spec label with "_" is a queryable name, not a syntax error."""
+    resolver = _fake(
+        [
+            _txt("example.com", "v=spf1 include:spf_c.example.net -all"),
+            _txt("spf_c.example.net", "v=spf1 ip4:192.0.2.0/24 -all"),
+        ]
+    )
+    r = await _check(resolver, "example.com")
+    assert DnsQuestion("spf_c.example.net", "TXT") in resolver.questions
+    assert "SPF_SYNTAX_ERROR" not in _codes(r)
+    assert r.status != "fail"
+    assert [n["domain"] for n in r.data["nodes"]] == ["example.com", "spf_c.example.net"]
 
 
 async def test_syntax_error_evidence_and_children_not_evaluated() -> None:

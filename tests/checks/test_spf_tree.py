@@ -14,10 +14,12 @@ from app.checks.spf_tree import (
     VOID_LOOKUP_LIMIT,
     SpfNode,
     SpfTree,
+    _spf_target,
     resolve_spf,
 )
 from app.core.domain_names import InvalidDomainName
 from app.dns.types import DnsQuestion, DnsResult, ResultState
+from app.parsers.spf import parse_spf
 from tests.dns.conftest import _no_network_in_dns_tests  # noqa: F401  (autouse socket guard)
 from tests.support.dns_zones import FakeResolver, load_zones, parse_zones
 
@@ -352,10 +354,90 @@ async def test_query_cap_bounds_hostile_record() -> None:
     assert tree.lookup_count > LOOKUP_LIMIT and tree.evaluated
 
 
+def _name(octets: int) -> str:
+    """A name of exactly ``octets`` octets (250-256): three 63-octet labels, one filler, x.test."""
+    name = ".".join(["a" * 63] * 3 + ["b" * (octets - 199)]) + ".x.test"
+    assert len(name) == octets
+    return name
+
+
+# R1-06: (target as written, expected outcome). "queried": the tree fetches the normalised name;
+# "invalid_target": the parser accepts the term but the name cannot be queried (DNS length or
+# empty label, or a presentation-format escape); "parse_error": the parser rejects the term, so
+# the tree never looks it up.
+TARGET_CASES: list[tuple[str, str, str]] = [
+    ("underscore_inner", "spf_c.x.test", "queried"),
+    ("double_underscore_inner", "a__b.x.test", "queried"),
+    ("double_underscore_leading", "__x.x.test", "queried"),
+    ("trailing_hyphen", "x-.x.test", "queried"),
+    ("leading_hyphen", "-x.x.test", "queried"),
+    ("lone_underscore", "_.x.test", "queried"),
+    ("one_trailing_dot", "spf_c.x.test.", "queried"),
+    ("uppercase", "SPF_C.X.Test", "queried"),
+    ("label_63", "a" * 63 + ".x.test", "queried"),
+    ("label_64", "a" * 64 + ".x.test", "invalid_target"),
+    ("name_253", _name(253), "queried"),
+    ("name_254", _name(254), "invalid_target"),
+    ("empty_label", "a..x.test", "invalid_target"),
+    ("leading_dot", ".x.test", "invalid_target"),
+    ("backslash_escape", "a\\046b.x.test", "invalid_target"),
+    ("trailing_double_dot", "x.test..", "parse_error"),
+    ("non_ascii", "\u00e9t\u00e9.x.test", "parse_error"),
+    ("control_character", "a\x01b.x.test", "parse_error"),
+    ("space", "a b.x.test", "parse_error"),
+    ("numeric_toplabel", "192.0.2.1", "parse_error"),
+]
+
+
+def _normalised(target: str) -> str:
+    return target.lower().removesuffix(".")
+
+
+@pytest.mark.parametrize(
+    ("target", "outcome"), [c[1:] for c in TARGET_CASES], ids=[c[0] for c in TARGET_CASES]
+)
+@pytest.mark.parametrize("mech", ["include:", "a:", "mx:", "exists:", "redirect="])
+async def test_target_normaliser(mech: str, target: str, outcome: str) -> None:
+    record = f"v=spf1 {mech}{target}" + ("" if mech == "redirect=" else " -all")
+    resolver = _fake([_txt("inv.test", record)])
+    tree = await resolve_spf(resolver, "inv.test")
+    asked = [q.name for q in resolver.questions]
+    parsed = parse_spf(record)
+    if outcome == "parse_error":
+        assert not parsed.is_valid
+        assert asked == ["inv.test"] and not tree.root.lookups
+        return
+    # The parser accepts every term the tree may follow (parser and tree agree on syntax).
+    assert parsed.is_valid
+    (lk,) = tree.root.lookups
+    if outcome == "queried":
+        assert not lk.invalid_target and lk.target == _normalised(target)
+        assert _normalised(target) in asked
+    else:
+        assert lk.invalid_target and lk.target is None
+        assert asked == ["inv.test"]
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("Spf_C.Example.NET.", "spf_c.example.net"),
+        ("\u212a.x.test", None),  # KELVIN SIGN lowercases to ASCII "k": rejected before lower()
+        ("x.test\x7f", None),
+        ("x", None),
+        (".", None),
+        ("", None),
+    ],
+)
+def test_spf_target_direct(raw: str, expected: str | None) -> None:
+    """Inputs the parser never lets through (non-ASCII cannot even be put in a TXT fixture)."""
+    assert _spf_target(raw) == expected
+
+
 @pytest.mark.parametrize(
     "record",
     [
-        "v=spf1 include:bad_label.example.com -all",
+        "v=spf1 include:a..example.com -all",
         "v=spf1 a:" + "x" * 64 + ".example.com -all",
     ],
 )

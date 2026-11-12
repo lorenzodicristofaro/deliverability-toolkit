@@ -98,6 +98,12 @@ module's `CODES`; `tests/checks/test_acceptance_m3.py` requires en and it text f
 | `SPF_DNS_ERROR` | medium (status `error`) | 4.4 |
 | `SPF_MX_TOO_MANY_HOSTS` | high | 4.6.4 |
 
+SPF tree targets (`include`, `redirect`, `a`, `mx`, `exists`) follow the RFC 7208 `domain-spec` rule
+the SPF parser applies plus DNS limits (visible ASCII labels such as `spf_c` or `x-`, 1-63 octets
+each, 253-octet name, no backslash), so only names that cannot be queried are `invalid_target`
+(`SPF_SYNTAX_ERROR`); DKIM and ESP CNAME targets intentionally keep the stricter `to_dns_name`
+host-name rule.
+
 ### DMARC (RFC 7489)
 
 | Code | Severity | RFC section |
