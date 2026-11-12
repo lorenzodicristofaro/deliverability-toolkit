@@ -497,7 +497,7 @@ async def test_two_sets_listed_in_the_finding() -> None:
 
 
 async def test_primary_txt_selector_keeps_any_txt_rule() -> None:
-    """A `txt` selector in `dkim.selectors` is not key-validated (unchanged behaviour)."""
+    """A primary `txt` selector is not strictly key-validated: any candidate passes (R1-08)."""
     profile = _fake(
         [[{"name": "k0", "type": "txt"}]],
         dkim={
@@ -505,7 +505,7 @@ async def test_primary_txt_selector_keeps_any_txt_rule() -> None:
             "alternatives": [[{"name": "k0", "type": "txt"}]],
         },
     )
-    r, _ = await _run({(f"p1._domainkey.{D}", "TXT"): ["not a key"]}, [profile])
+    r, _ = await _run({(f"p1._domainkey.{D}", "TXT"): ["v=DKIM1; p=not-validated"]}, [profile])
     assert _failures(r) == []
     assert r.data["esps"][0]["dkim_satisfied_by"] == "selectors"
 
