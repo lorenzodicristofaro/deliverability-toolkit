@@ -96,7 +96,9 @@ class SubjectFacts:
 
 
 _FOLD = re.compile(r"\r?\n(?=[ \t])")
-_REPLY = re.compile(r"^\s*(re|fwd?)\s*(?:\[\d{1,4}\])?\s*:", re.IGNORECASE)
+# No two adjacent ``\s*`` (R1-01): the optional counter carries its own trailing whitespace,
+# so a whitespace run is scanned once instead of split every way (quadratic).
+_REPLY = re.compile(r"^\s*(re|fwd?)\s*(?:\[\d{1,4}\]\s*)?:", re.IGNORECASE)
 _PUNCT = frozenset("!?！？")
 _BIDI_ALL = frozenset([0x061C, 0x200E, 0x200F, *range(0x202A, 0x202F), *range(0x2066, 0x206A)])
 _BIDI_OVERRIDE = frozenset([*range(0x202A, 0x202F), *range(0x2066, 0x206A)])

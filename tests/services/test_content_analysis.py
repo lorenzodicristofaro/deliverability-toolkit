@@ -196,6 +196,8 @@ def test_wrong_context_is_a_programming_error(world: World) -> None:
         ({"html": "<p " + " ".join(f"a{i}" for i in range(101)) + ">"}, "body_attribute_count"),
         ({"html": "x" * 2_000_001}, "body_input_size"),
         ({"text": "x" * 2_000_001}, "body_input_size"),
+        # R1-01: an over-cap inline style is not evaluated for hidden text, never "no hidden text".
+        ({"html": '<p style="font-size:' + "0" * 20_000 + 'x">hi</p>'}, "body_style_length"),
     ],
 )
 def test_body_caps_make_body_rules_and_overall_error(
