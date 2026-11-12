@@ -63,6 +63,8 @@ MSG_ENCODED_HEADER_BROKEN                low      undecodable RFC 2047 encoded-w
 MSG_MIME_TRUNCATED                       low      MIME walk stopped at a cap (detail)
 MSG_NO_TEXT_PART                         low      no text/plain part
 MSG_PARSER_LIMIT                         medium   input rejected or capped (error-class)
+MSG_AUTHRES_UNPARSED                     medium   Authentication-Results unusable (error-class)
+MSG_ALIGNMENT_NOT_EVALUATED              medium   no identifier to align (error-class)
 ======================================== ======== =========================================
 
 ``MSG_DUPLICATE_SINGLETON_HEADER`` is reported for Subject, Date and Message-ID; a repeated
@@ -147,6 +149,8 @@ CODES: tuple[str, ...] = (
     "MSG_MIME_TRUNCATED",
     "MSG_NO_TEXT_PART",
     "MSG_PARSER_LIMIT",
+    "MSG_AUTHRES_UNPARSED",
+    "MSG_ALIGNMENT_NOT_EVALUATED",
 )
 
 
@@ -337,7 +341,18 @@ def _auth_part(alignment: AlignmentReport, headers: tuple[AuthResHeader, ...], a
     if not headers:
         acc.add("MSG_AUTHRES_MISSING", "medium")
         return
-    if any(h.authserv_id is None or any(i.severity == "error" for i in h.issues) for h in headers):
+    unusable = [
+        h for h in headers if h.authserv_id is None or any(i.severity == "error" for i in h.issues)
+    ]
+    if unusable:
+        issue_codes = [i.code for h in unusable for i in h.issues if i.severity == "error"]
+        if any(h.authserv_id is None for h in unusable):
+            issue_codes.append("missing_authserv_id")
+        acc.add(
+            "MSG_AUTHRES_UNPARSED",
+            "medium",
+            {"issues": _joined(list(dict.fromkeys(issue_codes))), "count": len(unusable)},
+        )
         acc.skip("authres")
 
     ids: dict[str, str] = {}
@@ -394,6 +409,16 @@ def _alignment_part(alignment: AlignmentReport, have_authres: bool, acc: _Acc) -
             },
         )
     elif alignment.computed_dmarc == "not_evaluated" and have_authres:
+        reasons = [
+            p.reason
+            for p in alignment.pairs
+            if p.state in ("unknown", "not_evaluated") and p.reason
+        ]
+        acc.add(
+            "MSG_ALIGNMENT_NOT_EVALUATED",
+            "medium",
+            {"reasons": _joined(list(dict.fromkeys(reasons)))},
+        )
         acc.skip("alignment")
     if alignment.dmarc_mismatch:
         acc.add(

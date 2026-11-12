@@ -94,9 +94,21 @@ def test_base_message_is_clean_and_ok() -> None:
     assert r.unevaluated == () and r.evaluated and r.status == "ok"
 
 
+_NO_AUTHSERV_AR = (
+    "Authentication-Results: spf=pass smtp.mailfrom=example.com; dkim=pass header.d=example.com;"
+    " dmarc=pass header.from=example.com"
+)
+
 # (code, drop, add, body)   -- each must contain the code
 POSITIVE = [
     ("MSG_MISSING_FROM", ("From",), (), "x"),
+    ("MSG_AUTHRES_UNPARSED", ("Authentication-Results",), (_NO_AUTHSERV_AR,), "x"),
+    (
+        "MSG_ALIGNMENT_NOT_EVALUATED",
+        ("Authentication-Results",),
+        ("Authentication-Results: dkim=fail",),
+        "x",
+    ),
     ("MSG_MISSING_FROM", ("From",), ("From:   ",), "x"),
     ("MSG_MULTIPLE_FROM", (), ("From: b@example.com",), "x"),
     ("MSG_MISSING_DATE", ("Date",), (), "x"),
@@ -264,6 +276,8 @@ def test_positive(code: str, drop: tuple[str, ...], add: tuple[str, ...], body: 
 
 # (code that must NOT appear, drop, add)
 NEGATIVE = [
+    ("MSG_AUTHRES_UNPARSED", (), ()),
+    ("MSG_ALIGNMENT_NOT_EVALUATED", (), ()),
     ("MSG_MULTIPLE_FROM", (), ("To: y@example.net",)),
     ("MSG_DATE_NO_TIMEZONE", ("Date",), ("Date: Tue, 03 Nov 2026 10:00:00 GMT",)),
     ("MSG_DATE_NO_TIMEZONE", ("Date",), ("Date: Tue, 03 Nov 2026 10:00:00 -0000",)),
@@ -581,7 +595,7 @@ def test_long_header_derived_params_are_bounded() -> None:
 
 
 def test_codes_are_valid_unique_and_prefixed() -> None:
-    assert len(set(CODES)) == len(CODES) == 32
+    assert len(set(CODES)) == len(CODES) == 34
     assert all(CODE_RE.fullmatch(c) and c.startswith("MSG_") for c in CODES)
 
 
@@ -744,3 +758,87 @@ def test_mime_cap_after_warning_list_is_full(body: str) -> None:
     r = run(("Content-Type",), _MIXED, body=body)
     assert r.status == "error"
     assert "MSG_PARSER_LIMIT" in codes(r)
+
+
+# --- R1-10: every error status carries a finding that says why ---------------------------------
+
+EXPLAINS_ERROR = frozenset(
+    {
+        "MSG_DATE_INVALID",
+        "MSG_DATE_NO_TIMEZONE",
+        "MSG_RECEIVED_UNPARSED",
+        "MSG_PARSER_LIMIT",
+        "MSG_AUTHRES_UNPARSED",
+        "MSG_ALIGNMENT_NOT_EVALUATED",
+    }
+)
+_AR_DROP = ("Authentication-Results",)
+
+# (add, expected code, text expected in the finding parameters)
+SILENT_PATHS = [
+    ((_NO_AUTHSERV_AR,), "MSG_AUTHRES_UNPARSED", "missing_authserv_id"),
+    (("Authentication-Results: mx.example.net; spf",), "MSG_AUTHRES_UNPARSED", ""),
+    (("Authentication-Results: dkim=fail",), "MSG_ALIGNMENT_NOT_EVALUATED", "missing_d"),
+    (("Authentication-Results: mx.example.net; dkim=fail",), "MSG_ALIGNMENT_NOT_EVALUATED", ""),
+]
+
+
+@pytest.mark.parametrize(
+    ("add", "code", "param"), SILENT_PATHS, ids=[f"{s[1]}-{i}" for i, s in enumerate(SILENT_PATHS)]
+)
+def test_silent_error_paths_are_explained(add: tuple[str, ...], code: str, param: str) -> None:
+    r = run(_AR_DROP, add)
+    assert r.status == "error" and not r.evaluated
+    assert code in codes(r)
+    f = _find(r, code)
+    assert f.severity == "medium"
+    assert param in str(f.params)
+
+
+def test_alignment_finding_lists_reasons_only() -> None:
+    r = run(_AR_DROP, ("Authentication-Results: dkim=fail",))
+    f = _find(r, "MSG_ALIGNMENT_NOT_EVALUATED")
+    assert "reasons" in f.params
+    assert "dkim=fail" not in str(f.params)
+
+
+HOSTILE: list[tuple[tuple[str, ...], tuple[str, ...]]] = [
+    ((), ()),
+    (("Date",), ("Date: ???",)),
+    (("Date",), ("Date: Tue, 03 Nov 2026 10:00:00",)),
+    (("Received",), ("Received: garbage",)),
+    (("Received",), ("Received: ",)),
+    (_AR_DROP, ("Authentication-Results: ;;;",)),
+    (_AR_DROP, ("Authentication-Results: (unterminated",)),
+    (_AR_DROP, ("Authentication-Results: mx.example.net; spf",)),
+    (_AR_DROP, (_NO_AUTHSERV_AR,)),
+    (_AR_DROP, ("Authentication-Results: dkim=fail",)),
+    (_AR_DROP, ("Authentication-Results: =; =",)),
+    (("From",), ("From: <<<>>>",)),
+    (("From",), ("From: nobody",)),
+    (("From",), ()),
+    (
+        ("Received",),
+        tuple(f"Received: from a{i}.example by b.example; {BASE['Date'][5:]}" for i in range(120)),
+    ),
+]
+
+
+@pytest.mark.parametrize("case", range(len(HOSTILE)))
+def test_every_not_evaluated_result_has_an_explaining_finding(case: int) -> None:
+    drop, add = HOSTILE[case]
+    r = run(drop, add)
+    if r.evaluated:
+        return
+    assert codes(r) & EXPLAINS_ERROR, (r.unevaluated, codes(r))
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [b"\x00", b"From: a@example.com\x00\r\n\r\n", b"A: " + b"b" * (MAX_RAW_BYTES + 1)],
+    ids=["nul", "nul-header", "too-large"],
+)
+def test_rejected_input_is_explained(raw: bytes) -> None:
+    r = analyze_message(raw)
+    assert not r.evaluated
+    assert codes(r) & EXPLAINS_ERROR
