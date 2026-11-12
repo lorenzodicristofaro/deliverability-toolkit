@@ -21,11 +21,11 @@ from __future__ import annotations
 
 import re
 import sys
-import unicodedata
-from typing import Annotated, BinaryIO, Final
+from typing import Annotated, BinaryIO
 
 import typer
 
+from app.cli._text import visible as _visible
 from app.cli.check import EXIT_ERROR, EXIT_OK, EXIT_USAGE, EXIT_WARN
 from app.cli.tenant_scope import TenantIdOption, UserIdOption, operator_scope
 from app.core import i18n
@@ -38,7 +38,6 @@ from app.services.content_analysis import ContentAnalysis, ContentInput, analyze
 CHUNK = 64 * 1024
 # Same shape as the API accepts (app.api.v1.content._LANGUAGE).
 _LANGUAGE = re.compile(r"[a-z]{2,3}(?:-[a-z0-9]{2,8})*")
-_CONTROL: Final = frozenset({"Cc", "Cs", "Cf", "Co", "Cn", "Zl", "Zp"})
 
 CANNOT_READ_KEY = "cli.content.error.cannot_read"
 TOO_LARGE_KEY = "cli.content.error.too_large"
@@ -145,18 +144,6 @@ def exit_code(a: ContentAnalysis) -> int:
     if a.status in ("warn", "fail", "not_evaluated") or not a.complete:
         return EXIT_WARN
     return EXIT_OK
-
-
-def _visible(value: object) -> str:
-    """Control, format and unassigned characters shown as escapes (no terminal injection)."""
-    out: list[str] = []
-    for ch in str(value):
-        if unicodedata.category(ch) in _CONTROL:
-            code = ord(ch)
-            out.append(f"\\x{code:02x}" if code < 0x100 else f"\\u{code:04x}")
-        else:
-            out.append(ch)
-    return "".join(out)
 
 
 def _status(status: str, lang: str) -> str:

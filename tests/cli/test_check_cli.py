@@ -210,3 +210,93 @@ def test_catalogues_have_cli_keys_in_both_languages() -> None:
     assert cli_keys == {k for k in it if k.startswith("cli.check.")}
     for key in cli_keys:
         assert i18n.placeholders(en[key]) == i18n.placeholders(it[key])
+
+
+# R1-20 (PARSE-04): DNS-controlled bytes must never reach the terminal raw in text output.
+_FORGED_SPF = "v=spf1 include:\x1b[2J\x1b[31mFORGED.example.com bogus\x1b]0;title\x07 -all"
+_FORGED_DMARC = "v=DMARC1; p=none; rua=mailto:\x1b[31mx@example.com"
+
+
+def _hostile_zone(tmp_path: Path) -> Path:
+    zone = {
+        "zones": {
+            "default": [
+                {"name": "example.com", "type": "TXT", "ttl": 300, "rdata": [_FORGED_SPF]},
+                {"name": "_dmarc.example.com", "type": "TXT", "ttl": 300, "rdata": [_FORGED_DMARC]},
+            ]
+        }
+    }
+    path = tmp_path / "hostile.yaml"
+    path.write_text(json.dumps(zone), encoding="utf-8")
+    return path
+
+
+def test_text_output_has_no_raw_control_characters_from_dns(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    zone = _hostile_zone(tmp_path)
+    monkeypatch.setattr(cli_check, "resolver_factory", lambda: load_zones(zone).resolver())
+    r = runner.invoke(app, ["check", "example.com", "--only", "spf,dmarc", "--format", "text"])
+    assert r.exit_code in (0, 1, 2), r.output
+    for bad in ("\x1b", "\x07", "\x9b", "‮"):
+        assert bad not in r.output
+    assert "\\x1b[2J" in r.output
+
+
+def test_json_output_still_json_escapes_controls(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    zone = _hostile_zone(tmp_path)
+    monkeypatch.setattr(cli_check, "resolver_factory", lambda: load_zones(zone).resolver())
+    r = runner.invoke(app, ["check", "example.com", "--only", "spf,dmarc", "--format", "json"])
+    assert "\x1b" not in r.output and "\x07" not in r.output
+    assert "\\u001b" in r.output
+    json.loads(r.output)
+
+
+def _result(*, params: dict[str, object], evidence: tuple[str, ...]) -> CheckResult:
+    from app.checks.models import Finding
+
+    key = "cli.check.evidence"  # any key whose template shows the `text` parameter
+    f = Finding(
+        code="TEST",
+        severity="low",
+        title_key=key,
+        detail_key=key,
+        remediation_key=key,
+        params=params,
+        evidence=evidence,
+    )
+    return CheckResult(
+        check_id="spf",
+        target="example.com",
+        status="warn",
+        findings=(f,),
+        started_at=_NOW,
+        duration_ms=0,
+    )
+
+
+@pytest.mark.parametrize("where", ["param", "evidence"])
+@pytest.mark.parametrize(
+    ("char", "escaped"),
+    [
+        ("\x1b", "\\x1b"),
+        ("\x07", "\\x07"),
+        ("\r", "\\x0d"),
+        ("\x9b", "\\x9b"),
+        ("‮", "\\u202e"),
+        ("\n", "\\x0a"),
+    ],
+    ids=["esc", "bel", "cr", "c1", "bidi", "newline"],
+)
+def test_render_text_escapes_control_characters(where: str, char: str, escaped: str) -> None:
+    payload = f"before{char}FORGED"
+    res = (
+        _result(params={"text": payload}, evidence=())
+        if where == "param"
+        else _result(params={"text": "ok"}, evidence=(payload,))
+    )
+    out = cli_check.render_text([res], "en")
+    assert payload not in out
+    assert f"before{escaped}FORGED" in out
