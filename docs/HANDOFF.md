@@ -19,7 +19,7 @@ Resume with `/gm`. No coder is running.
 - A broken profiles directory: ESP routes 503 (localized), `esp` check `error`.
 - MailUp SPF include only when an SPF record exists (opt-in `spf.only_if_record`).
 - Non-code tickets: QA runs lint + relevant tests only, CI is the full-suite gate (docs/WORKFLOW.md §3, maintainer 2026-11-11).
-- Dependency audit: pip-audit run by hand (`uv export ... | uvx pip-audit --no-deps --disable-pip`); no CI job yet.
+- Dependency audit: pip-audit run by hand (`uv export ... | uvx pip-audit --no-deps --disable-pip`); CI job approved 2026-11-12 (M6-24).
 
 ## How the work runs now (maintainer decisions 2026-11-09)
 - Sonnet → Opus: once Sonnet code fails (QA, tests or CI), all further coder work on that ticket goes to a NEW coder on Opus (docs/WORKFLOW.md section 3).
@@ -32,14 +32,23 @@ Resume with `/gm`. No coder is running.
 - Agent worktrees start stale: give each coder the exact `dev` hash.
 - After a merge, check CI, then close the ticket and tick TODO.md.
 
+## Maintainer decisions 2026-11-12
+- Italian review APPROVED as is: esp.google_workspace.*, esp.microsoft_365.*, esp.mailup.*, esp.emailchef.*, esp.brevo.*, esp.mailgun.*, esp.sendgrid.tracking (review items closed).
+- PSL licence: MPL-2.0 (GM read github.com/publicsuffix/list LICENSE 2026-11-12), maintainer accepts -> M6-25.
+- Gmail clipping threshold 102,400 bytes confirmed by the maintainer (own experience, no URL) -> M6-25.
+- URL shorteners seed: keep as is, stays unverified; deferred, revisit if a census is published.
+- HTMX under CSP: closed, the app does not use HTMX; verify https://htmx.org/docs/ if it is ever introduced.
+- Dependabot: alerts #1 (pyproject.toml) and #2 (uv.lock) are the same advisory GHSA-45c3-73f7-pv4m, fixed by M6-21 (on main since PR #2 9d793cb); they should close on the next scan. The "unidentified second alert" item is resolved.
+- pip-audit CI job APPROVED -> M6-24.
+- MailUp DKIM (maintainer, MailUp platform knowledge): ml01+ml02 CNAMEs OR a valid TXT at ml00._domainkey -> M6-23.
+- Tickets ready to run (all parallel-safe): M6-23 (opus), M6-24 (sonnet), M6-25 (sonnet).
+
 ## Open maintainer decisions
 - CodeQL: switch Default → Advanced (Settings -> Advanced Security) before the qa → main PR. First real run settles whether `build-mode: none` is accepted for `actions`.
-- Second Dependabot alert (2 high on main) is unidentified. Maintainer pastes package/GHSA, or grants read-only access: token permission "Dependabot alerts: read" plus narrowing the `Bash(gh api *)` deny rule.
-- pip-audit CI job: proposal pending.
-- Italian review: esp.google_workspace.*, esp.microsoft_365.*, esp.mailup.*, esp.emailchef.*, esp.brevo.*, esp.mailgun.*, esp.sendgrid.tracking.
-- Carried over: M4 provider samples; Mailchimp/Postmark/HubSpot DKIM sources; PSL licence; HTMX under CSP; Gmail clipping and URL shorteners (t.co, tinyurl.com, ow.ly, buff.ly, lnkd.in, is.gd, j.mp) unverified.
+- Italian wording of the text M6-23 rewrites (esp.mailup.dkim_txt_alternative and any new key) needs review.
+- Carried over: M4 provider samples; Mailchimp/Postmark/HubSpot DKIM sources; URL shorteners unverified (deferred).
 
 ## Next 3 steps
 1. Maintainer: qa → main PR for M6 (switch CodeQL Default → Advanced first).
-2. Maintainer items: second Dependabot alert, pip-audit CI job, Italian review.
+2. Run M6-23, M6-24, M6-25.
 3. Plan M7 from TODO.md; review SPEC §5 HTTP custom checks wording at M7 start (`http_fetch` deferred, M5-22).
