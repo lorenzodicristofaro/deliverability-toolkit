@@ -136,8 +136,17 @@ def _with_assigned_domains(
 
 def optional_session(request: Request, db: DbDep, settings: SettingsDep) -> AuthSession | None:
     """The request's live session, or None (anonymous). Remembered on `request.state.auth_session`
-    so the shared render path (nav links) never resolves it twice."""
-    auth = _resolve(request, db, settings)
+    so the shared render path (nav links) never resolves it twice.
+
+    The DB session is closed before returning (R1-02): its transaction ends and the pooled
+    connection goes back to the pool, so a route that then awaits DNS or a slow body holds none;
+    a route that queries again simply begins a new transaction on the same `Session`. `close()`
+    detaches without expiring (unlike `rollback()`), so `auth.user` keeps its loaded columns and
+    reading them never lazy-loads; the `AuthSession` holds no other ORM object."""
+    try:
+        auth = _resolve(request, db, settings)
+    finally:
+        db.close()
     request.state.auth_session = auth
     return auth
 
