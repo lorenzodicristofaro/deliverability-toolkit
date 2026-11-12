@@ -434,3 +434,76 @@ def test_colonless_lines_with_one_valid_header_stay_evaluated() -> None:
     a = analyze_message(b"junk line\r\nFrom: a@b.example\r\nmore junk\r\n\r\nbody")
     assert a.status != "error"
     assert a.summary is not None
+
+
+def _alignment_msg(ar: str) -> bytes:
+    return (
+        "Return-Path: <a@example.com>\r\n"
+        "From: A <a@example.com>\r\n"
+        "To: x@example.net\r\n"
+        "Subject: s\r\n"
+        "Date: Tue, 03 Nov 2026 10:00:00 +0000\r\n"
+        "Message-ID: <2@example.com>\r\n"
+        f"Authentication-Results: mx.example.org; {ar}\r\n"
+        "MIME-Version: 1.0\r\n"
+        "Content-Type: text/plain\r\n"
+        "\r\nhello\r\n"
+    ).encode()
+
+
+# R1-09 end to end: (authres body, status, computed_dmarc, MSG_ALIGNMENT_FAIL expected)
+_R109_ROWS = [
+    (
+        "spf=fail smtp.mailfrom=example.com; dkim=none; dmarc=fail header.from=example.com",
+        "fail",
+        "fail",
+        True,
+    ),
+    (
+        "spf=fail smtp.mailfrom=example.com; dkim=none (message not signed) header.d=none;"
+        " dmarc=fail header.from=example.com",
+        "fail",
+        "fail",
+        True,
+    ),
+    (
+        "spf=pass smtp.mailfrom=example.com; dkim=none; dmarc=pass header.from=example.com",
+        None,
+        "pass",
+        False,
+    ),
+    (
+        "spf=pass smtp.helo=mail.example.com; spf=pass smtp.mailfrom=example.com;"
+        " dmarc=pass header.from=example.com",
+        None,
+        "pass",
+        False,
+    ),
+    (
+        "spf=pass smtp.mailfrom=example.com; spf=pass smtp.helo=mail.example.com;"
+        " dmarc=pass header.from=example.com",
+        None,
+        "pass",
+        False,
+    ),
+    (
+        "spf=fail smtp.mailfrom=example.com; dkim=fail; dmarc=fail header.from=example.com",
+        "error",
+        "not_evaluated",
+        False,
+    ),
+]
+
+
+@pytest.mark.parametrize(("ar", "status", "computed", "align_fail"), _R109_ROWS)
+def test_dkim_none_and_spf_helo_end_to_end(
+    ar: str, status: str | None, computed: str, align_fail: bool
+) -> None:
+    a = analyze_message(_alignment_msg(ar))
+    assert a.alignment is not None
+    assert a.alignment.computed_dmarc == computed
+    if status is not None:
+        assert a.status == status
+    else:
+        assert a.status not in ("error", "fail")
+    assert ("MSG_ALIGNMENT_FAIL" in {f.code for f in a.findings}) is align_fail

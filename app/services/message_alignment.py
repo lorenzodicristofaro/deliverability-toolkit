@@ -10,9 +10,12 @@ is computed here (computed). Trust in the authserv-id is not decided (RFC 8601 s
 each method the topmost Authentication-Results field that carries that method is used.
 
 Pairs (From domain vs identifier):
-- `spf`: `smtp.mailfrom` of the stated spf result when present, else the Return-Path header.
+- `spf`: `smtp.mailfrom` of the first stated spf result that carries one (a result for
+  `smtp.helo` listed before it is skipped), else the Return-Path header with no stated result.
 - `dkim`: one pair per stated dkim result (`header.d`), plus one per DKIM-Signature `d=` that
-  has no stated result with the same `d` (`unverified_signature=True`).
+  has no stated result with the same `d` (`unverified_signature=True`). A stated `dkim=none`
+  means the message was not signed (RFC 8601 section 2.7.1): its pair is `not_evaluated` with
+  reason `no_signature`, whatever `header.d` says.
 
 States: `aligned` (relaxed match AND stated pass), `aligned_but_not_passed` (domain match,
 result not `pass` or not stated), `misaligned`, `unknown` (From or identifier missing or
@@ -21,7 +24,8 @@ data. Relaxed match = same organizational domain (`app.core.org_domain`); when e
 a public suffix (no organizational domain) only an exact match counts.
 
 `computed_dmarc` is `pass` when any pair is `aligned`, `fail` when no pair is aligned, none
-is `unknown` and some pair has a stated result, else `not_evaluated`. `dmarc_mismatch` is set
+is `unknown` and some pair has a stated result other than `dkim=none`, else `not_evaluated`.
+So an unsigned message rests on SPF alone. `dmarc_mismatch` is set
 when the stated dmarc result (pass or fail) disagrees with the computed one; M4-09 turns it
 into a finding.
 """
@@ -45,6 +49,7 @@ PairKind = Literal["spf", "dkim"]
 DmarcComputed = Literal["pass", "fail", "not_evaluated"]
 
 MAX_DKIM_PAIRS = 50
+NO_SIGNATURE = "no_signature"
 
 _D_TAG = re.compile(r"^\s*d\s*=(.*)$", re.IGNORECASE | re.DOTALL)
 
@@ -202,6 +207,9 @@ def _pair(
 
     if source is None:
         return make("not_evaluated", "no_identifier")
+    if kind == "dkim" and stated == "none":
+        # The receiver stated that the message was not signed: there is no DKIM identifier.
+        return make("not_evaluated", NO_SIGNATURE)
     if from_id.domain is None:
         return make("unknown", from_id.reason)
     if ident.domain is None:
@@ -226,7 +234,7 @@ def analyze_alignment(block: HeaderBlock) -> AlignmentReport:
     pairs: list[AlignmentPair] = []
 
     spf_hdr, spf = _topmost(headers, "spf")
-    spf_info = spf[0] if spf else None
+    spf_info = next((i for i in spf if i.smtp_mailfrom is not None), None)
     stated_spf = spf_info.result if spf_info else None
     mailfrom = spf_info.smtp_mailfrom if spf_info else None
     if mailfrom is not None:
@@ -275,7 +283,9 @@ def analyze_alignment(block: HeaderBlock) -> AlignmentReport:
     computed: DmarcComputed
     if "aligned" in states:
         computed = "pass"
-    elif "unknown" in states or not any(p.stated_result is not None for p in pairs):
+    elif "unknown" in states or not any(
+        p.stated_result is not None and p.reason != NO_SIGNATURE for p in pairs
+    ):
         computed = "not_evaluated"
     else:
         computed = "fail"
