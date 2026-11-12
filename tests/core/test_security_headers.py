@@ -143,3 +143,87 @@ def test_unhandled_exception_still_propagates() -> None:
         pytest.raises(RuntimeError, match="secret-detail"),
     ):
         c.get("/t/boom")
+
+
+# R1-16 (AUTH-11): Cache-Control: no-store on every response to a request with a session cookie.
+SESSION = {"dt_session": "anything"}
+
+
+def _cache_app() -> FastAPI:
+    from fastapi.responses import HTMLResponse, StreamingResponse
+
+    app = _app("http://localhost:8000")
+
+    @app.get("/t/page", response_class=HTMLResponse)
+    def page() -> str:
+        return "<p>tenant</p>"
+
+    @app.get("/t/strict")
+    def strict(response: Response) -> dict[str, str]:
+        response.headers["Cache-Control"] = "private, no-store, max-age=0"
+        return {}
+
+    @app.get("/t/weak")
+    def weak(response: Response) -> dict[str, str]:
+        response.headers["Cache-Control"] = "public, max-age=600"
+        return {}
+
+    @app.get("/t/sse")
+    def sse() -> StreamingResponse:
+        return StreamingResponse(
+            iter([b"data: x\n\n"]),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache"},
+        )
+
+    @app.get("/t/forbidden")
+    def forbidden() -> None:
+        raise HTTPException(status_code=403)
+
+    return app
+
+
+@pytest.fixture(scope="module")
+def cache_client() -> Iterator[TestClient]:
+    with TestClient(_cache_app()) as c:
+        yield c
+
+
+@pytest.mark.parametrize(
+    ("path", "status"),
+    [
+        ("/t/page", 200),
+        ("/domains/1/authentication", 401),  # real route, invalid session,
+        ("/api/v1/domains", 401),  # real route, invalid session,
+        ("/t/forbidden", 403),
+        ("/api/v1/nope", 404),
+        ("/t/sse", 200),
+        ("/t/weak", 200),
+    ],
+)
+def test_session_cookie_responses_are_no_store(
+    cache_client: TestClient, path: str, status: int
+) -> None:
+    response = cache_client.get(path, cookies=SESSION)
+    assert response.status_code == status
+    assert response.headers.get_list("cache-control") == ["no-store"]
+
+
+def test_existing_no_store_is_kept(cache_client: TestClient) -> None:
+    response = cache_client.get("/t/strict", cookies=SESSION)
+    assert response.headers.get_list("cache-control") == ["private, no-store, max-age=0"]
+
+
+@pytest.mark.parametrize("path", ["/healthz", "/static/nope.css"])
+def test_healthz_and_static_not_forced(cache_client: TestClient, path: str) -> None:
+    response = cache_client.get(path, cookies=SESSION)
+    assert "no-store" not in response.headers.get("cache-control", "")
+
+
+@pytest.mark.parametrize("path", ["/t/page", "/api/v1/domains", "/nope"])
+def test_no_cookie_unchanged(cache_client: TestClient, path: str) -> None:
+    assert "cache-control" not in cache_client.get(path).headers
+
+
+def test_unrelated_cookie_unchanged(cache_client: TestClient) -> None:
+    assert "cache-control" not in cache_client.get("/t/page", cookies={"x": "y"}).headers
