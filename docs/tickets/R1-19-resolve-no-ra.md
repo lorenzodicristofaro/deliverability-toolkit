@@ -14,7 +14,7 @@ Acceptance criteria:
 - Wire-level rows: RA clear + empty NOERROR; RA clear + NXDOMAIN; RA set + NOERROR with data; RA set + empty NOERROR (still `nodata`); RA clear with answer data (state the chosen rule and test it).
 - Cache does not store the `error` result as `nodata`. No network. ruff, mypy, relevant tests green. docs/DNS.md updated.
 New i18n keys: only if the new detail code is user-visible: en + it, names stated by the coder
-Status: todo
+Status: parked (maintainer decision)
 
 ## Review details (copied from the code review of 2026-11-12, dev 06869fb)
 - Location: `app/dns/backends.py:317-335` (`interpret_response`: NOERROR, no answer, no referral -> `nodata`), `app/dns/backends.py:638-672` (`resolve` never looks at RA).
@@ -23,3 +23,6 @@ Status: todo
 - Suggested fix: in `resolve()` (recursive path only, not `query_server`), map a NOERROR/NXDOMAIN reply without RA to `error` with a detail code such as `recursion_unavailable`. Check first that the supported setups always set RA.
 - Tests to add: wire-level cases for RA clear with empty NOERROR, RA clear with NXDOMAIN, RA set (unchanged).
 - Confidence: low (real-world reachability not established).
+
+## Outcome (GM, 2026-11-12)
+Parked, no fix. Code path reproduced (scratch script, no network): a NOERROR reply with RA clear and empty sections gives `nodata`; `resolve()` never reads RA. Not established: whether any supported setup (Unbound profile, `system` mode incl. Docker embedded DNS, custom resolvers) ever returns such a reply. A fix would also need most DNS fixtures (which build replies without RA) to change. Maintainer to choose: (a) precautionary rule — empty NOERROR/NXDOMAIN without RA from a recursive resolver becomes error-class, answers with data trusted; or (b) drop the finding.
