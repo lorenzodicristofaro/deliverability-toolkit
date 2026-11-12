@@ -16,6 +16,7 @@ from typing import Any, Final
 
 from fastapi import APIRouter, Request
 from fastapi.responses import Response
+from starlette.concurrency import run_in_threadpool
 
 from app.api.v1.checks import ResolverDep
 from app.checks.finding_text import display_params
@@ -50,16 +51,22 @@ env.filters["finding_params"] = finding_params
 env.tests["https_url"] = https_only
 
 
+def _load_view(web: WebDep, db: DbDep, domain_id: int | None) -> Any:
+    """The domain view (sync DB work, run in a worker thread); the connection is released after."""
+    try:
+        return web.service.get(domain_id)
+    finally:
+        db.rollback()  # `view` holds plain values: no pooled connection is held during DNS
+
+
 @router.get("/domains/{domain_id}/authentication", include_in_schema=False)
 async def authentication_tab(
     request: Request, web: WebDep, db: DbDep, resolver: ResolverDep, domain_id: str
 ) -> Response:
     try:
-        view = web.service.get(_domain_id(domain_id))
+        view = await run_in_threadpool(_load_view, web, db, _domain_id(domain_id))
     except DomainServiceError as exc:
         return _denied(request, exc)
-    finally:
-        db.rollback()  # `view` holds plain values: no pooled connection is held during DNS
     principal = web.service.principal
     if not can(principal, Action.CHECK_RUN, DomainResource(web.ctx.tenant_id, view.id)):
         return _denied(request, Forbidden())

@@ -31,6 +31,7 @@ from typing import Annotated, Any, Final
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from starlette.concurrency import run_in_threadpool
 
 from app.api.v1.checks import ResolverDep
 from app.api.v1.domain_esps import esp_profiles
@@ -146,6 +147,40 @@ def _clean(form: dict[str, list[str]], name: str) -> str | None:
     return values[0]
 
 
+def _load(service: DomainEspService, web: Web, domain_id: int | None) -> tuple[Any, Any]:
+    """Sync DB reads of the tab (run in a worker thread): the records and the domain view."""
+    return service.list_for_domain(domain_id), web.service.get(domain_id)
+
+
+def _prepare(
+    service: DomainEspService,
+    web: Web,
+    db: DbDep,
+    profiles: ProfileSource,
+    view: Any,
+    run: bool,
+) -> tuple[bool, bool, list[str], Sequence[EspProfile], Any]:
+    """Sync DB work after the domain is known (run in a worker thread): the display decisions, the
+    catalogue and, with `check.run` and `run`, the ESP check (connection released before DNS)."""
+    principal = web.service.principal
+    resource = DomainResource(web.ctx.tenant_id, view.id)
+    can_write = can(principal, Action.DOMAIN_UPDATE, resource)
+    can_run = can(principal, Action.CHECK_RUN, resource)
+    notes: list[str] = []
+    catalogue: Sequence[EspProfile] = ()
+    try:
+        catalogue = service.catalogue()
+    except DomainEspError as exc:
+        notes.append(exc.key)
+    esp = None
+    if can_run and run:
+        try:
+            esp = resolve_esp_run(web.ctx, db, view.id, profiles)
+        finally:
+            db.rollback()  # no pooled connection is held during DNS
+    return can_write, can_run, notes, catalogue, esp
+
+
 async def _page(
     request: Request,
     web: Web,
@@ -162,29 +197,17 @@ async def _page(
 ) -> Response:
     service = _service(web, db, profiles)
     try:
-        records = service.list_for_domain(domain_id)
-        view = web.service.get(domain_id)
+        records, view = await run_in_threadpool(_load, service, web, domain_id)
     except DomainEspError as exc:
         return _failure(request, exc)
     except DomainServiceError:
         raise HTTPException(status_code=404) from None
-    principal = web.service.principal
-    resource = DomainResource(web.ctx.tenant_id, view.id)
-    can_write = can(principal, Action.DOMAIN_UPDATE, resource)
-    can_run = can(principal, Action.CHECK_RUN, resource)
-    notes: list[str] = []
-    catalogue: Sequence[EspProfile] = ()
-    try:
-        catalogue = service.catalogue()
-    except DomainEspError as exc:
-        notes.append(exc.key)
+    can_write, can_run, notes, catalogue, esp = await run_in_threadpool(
+        _prepare, service, web, db, profiles, view, run
+    )
     by_id = {p.id: p for p in catalogue}
     result: CheckResult | None = None
-    if can_run and run:
-        try:
-            esp = resolve_esp_run(web.ctx, db, view.id, profiles)
-        finally:
-            db.rollback()  # no pooled connection is held during DNS
+    if esp is not None:
         ctx = CheckContext(
             resolver=resolver, tenant_id=str(web.ctx.tenant_id), domain_id=str(view.id)
         )
@@ -235,10 +258,10 @@ async def esps_attach(
 ) -> Response:
     service = _service(web, db, profiles)
     try:  # permission and domain first: a denied caller never has its body read
-        did = service.check_write(_domain_id(domain_id))
+        did = await run_in_threadpool(service.check_write, _domain_id(domain_id))
     except DomainEspError as exc:
         return _failure(request, exc)
-    db.rollback()
+    await run_in_threadpool(db.rollback)
     raw = await read_form(request)
 
     async def again(status: int, key: str, echo: dict[str, str] | None = None) -> Response:
@@ -262,8 +285,12 @@ async def esps_attach(
         return await again(422, INVALID_FORM_KEY)
     echo = {"esp_id": esp_id, "return_path_host": rp, "tracking_host": tr}
     try:
-        service.assign(
-            did, esp_id, return_path_host=rp.strip() or None, tracking_host=tr.strip() or None
+        await run_in_threadpool(
+            service.assign,
+            did,
+            esp_id,
+            return_path_host=rp.strip() or None,
+            tracking_host=tr.strip() or None,
         )
     except EspFieldInvalid as exc:
         return await again(422, exc.key, echo)
@@ -287,8 +314,8 @@ async def esps_remove(
     service = _service(web, db, profiles)
     did = _domain_id(domain_id)
     try:
-        did = service.check_write(did)
-        service.remove(did, esp_id)
+        did = await run_in_threadpool(service.check_write, did)
+        await run_in_threadpool(service.remove, did, esp_id)
     except DomainEspError as exc:
         if exc.status in (404, 403):
             return _failure(request, exc)
