@@ -18,7 +18,7 @@ Acceptance criteria:
 - ruff, mypy, relevant tests green.
 New i18n keys: none expected
 Status: done
-Outcome: reproduced (sp-strict, sp-weak, sp-pct rows); fixed in merge e12a9ca; Sonnet fixtures used non-reserved .org domains, escalated to Opus (fixtures moved to .test, sp-aware texts); QA APPROVE (Opus); dev CI pending.
+Outcome: reproduced (sp-strict, sp-weak, sp-pct rows); fixed in merge e12a9ca; Sonnet fixtures used non-reserved .org domains, escalated to Opus (fixtures moved to .test, sp-aware texts); QA APPROVE (Opus); dev CI green.
 
 ## Review details (copied from the code review of 2026-11-12, dev 06869fb)
 - Location: `app/checks/dmarc.py:101-102` (`inherited`), `app/checks/dmarc.py:138-176` (`_analyse`: `effective_policy=p`, `DMARC_POLICY_NONE`, `DMARC_POLICY_QUARANTINE`, `DMARC_PCT_PARTIAL`, `DMARC_SUBDOMAIN_POLICY_WEAKER` all computed from `p`).
