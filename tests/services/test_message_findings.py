@@ -821,6 +821,14 @@ HOSTILE: list[tuple[tuple[str, ...], tuple[str, ...]]] = [
         ("Received",),
         tuple(f"Received: from a{i}.example by b.example; {BASE['Date'][5:]}" for i in range(120)),
     ),
+    # Over the List-Unsubscribe parser's value cap (folded under the header-line cap).
+    (
+        ("List-Unsubscribe", "List-Unsubscribe-Post"),
+        (
+            f"List-Unsubscribe: <https://example.com/{'a' * 5000}\r\n {'b' * 5000}>",
+            "List-Unsubscribe-Post: List-Unsubscribe=One-Click",
+        ),
+    ),
 ]
 
 
@@ -842,3 +850,128 @@ def test_rejected_input_is_explained(raw: bytes) -> None:
     r = analyze_message(raw)
     assert not r.evaluated
     assert codes(r) & EXPLAINS_ERROR
+
+
+# --- R1-23: One-Click verdict comes from the RFC 8058 parser (PARSE-07) ------------------------
+
+_LU = "List-Unsubscribe"
+_POST = "List-Unsubscribe-Post"
+_OK_POST = "List-Unsubscribe=One-Click"
+_HTTPS = f"{_LU}: <https://example.com/u>"
+
+# (label, extra header lines, expect the message finding)
+ONECLICK_ROWS = [
+    ("mailto-only", (f"{_LU}: <mailto:u@example.com>", f"{_POST}: {_OK_POST}"), True),
+    ("post-with-extra-words", (_HTTPS, f"{_POST}: x {_OK_POST} y"), True),
+    ("post-prefix-junk", (_HTTPS, f"{_POST}: X {_OK_POST}"), True),
+    ("post-suffix-junk", (_HTTPS, f"{_POST}: List-Unsubscribe=One-Click-Not"), True),
+    ("post-extra-parameter", (_HTTPS, f"{_POST}: {_OK_POST}; x=1"), True),
+    ("http-only", (f"{_LU}: <http://example.com/u>", f"{_POST}: {_OK_POST}"), True),
+    (
+        "duplicated-list-unsubscribe",
+        (_HTTPS, f"{_LU}: <https://example.com/v>", f"{_POST}: {_OK_POST}"),
+        True,
+    ),
+    ("post-missing", (_HTTPS,), True),
+    ("valid", (_HTTPS, f"{_POST}: {_OK_POST}"), False),
+    ("valid-abnf-case", (_HTTPS, f"{_POST}: list-unsubscribe=one-click"), False),
+]
+_ONECLICK_IDS = [r[0] for r in ONECLICK_ROWS]
+
+
+def _oneclick_raw(lines: tuple[str, ...]) -> bytes:
+    return msg(drop=(_LU, _POST), add=lines)
+
+
+@pytest.mark.parametrize(("label", "lines", "expect"), ONECLICK_ROWS, ids=_ONECLICK_IDS)
+def test_oneclick_finding_follows_rfc8058_parser(
+    label: str, lines: tuple[str, ...], expect: bool
+) -> None:
+    r = analyze_message(_oneclick_raw(lines))
+    assert ("MSG_LIST_UNSUBSCRIBE_NO_ONECLICK" in codes(r)) is expect
+    assert r.unevaluated == ()
+
+
+# The content analyzer's verdict (CONTENT_NO_ONE_CLICK) uses the exact-case Post comparison while
+# the parser's one_click_eligible accepts the ABNF case-insensitively (RFC 5234 section 2.3); the
+# case-only row is therefore not cross-checked here.
+_CROSS_ROWS = [r for r in ONECLICK_ROWS if r[0] != "valid-abnf-case"]
+
+
+@pytest.mark.parametrize(("label", "lines", "expect"), _CROSS_ROWS, ids=[r[0] for r in _CROSS_ROWS])
+def test_oneclick_matches_content_analyzer(
+    label: str, lines: tuple[str, ...], expect: bool
+) -> None:
+    from app.parsers.list_unsubscribe import analyze_list_unsubscribe
+    from app.services.content_findings import unsubscribe_findings
+
+    raw = _oneclick_raw(lines)
+    content = unsubscribe_findings(analyze_list_unsubscribe(parse_header_block(raw)))
+    in_content = "CONTENT_NO_ONE_CLICK" in {f.code for f in content.findings}
+    in_message = "MSG_LIST_UNSUBSCRIBE_NO_ONECLICK" in codes(analyze_message(raw))
+    assert in_content == in_message == expect
+
+
+def test_oneclick_overlong_field_is_not_evaluated() -> None:
+    # Folded so each physical line stays under the header-line cap; the value exceeds the
+    # List-Unsubscribe parser's value cap.
+    long_field = f"{_LU}: <https://example.com/{'a' * 5000}\r\n {'b' * 5000}>"
+    r = analyze_message(_oneclick_raw((long_field, f"{_POST}: {_OK_POST}")))
+    assert "list_unsubscribe" in r.unevaluated
+    assert r.status == "error"
+    assert "MSG_LIST_UNSUBSCRIBE_NO_ONECLICK" not in codes(r)
+    f = _find(r, "MSG_PARSER_LIMIT")
+    assert f.severity == "medium"
+    assert "list_unsubscribe" in f.params["limits"]
+
+
+# A field that is capped or unreadable leaves One-Click unknown only when nothing else decides it.
+_OVERLONG = f"{_LU}: <https://example.com/{'a' * 5000}\r\n {'b' * 5000}>"
+# More bracketed URIs than the parser's MAX_URIS (32): the field is capped, the https URI is first.
+_CAPPED = f"{_LU}: <https://example.com/u>," + ",".join(
+    f"\r\n <mailto:u{i}@example.com>" for i in range(40)
+)
+
+# (label, extra header lines, expect the message finding)
+DECIDED_ROWS = [
+    ("duplicated-one-overlong-https", (_OVERLONG, _HTTPS, f"{_POST}: {_OK_POST}"), True),
+    ("capped-https-bad-post", (_CAPPED, f"{_POST}: x {_OK_POST}"), True),
+    ("capped-https-post-missing", (_CAPPED,), True),
+    ("capped-https-valid-post", (_CAPPED, f"{_POST}: {_OK_POST}"), False),
+]
+
+
+@pytest.mark.parametrize(
+    ("label", "lines", "expect"), DECIDED_ROWS, ids=[r[0] for r in DECIDED_ROWS]
+)
+def test_oneclick_decided_despite_capped_field(
+    label: str, lines: tuple[str, ...], expect: bool
+) -> None:
+    r = analyze_message(_oneclick_raw(lines))
+    assert ("MSG_LIST_UNSUBSCRIBE_NO_ONECLICK" in codes(r)) is expect
+    assert r.unevaluated == () and r.status != "error"
+    assert "MSG_PARSER_LIMIT" not in codes(r)
+
+
+@pytest.mark.parametrize(
+    ("label", "lines", "expect"), DECIDED_ROWS, ids=[r[0] for r in DECIDED_ROWS]
+)
+def test_oneclick_decided_matches_content_analyzer(
+    label: str, lines: tuple[str, ...], expect: bool
+) -> None:
+    test_oneclick_matches_content_analyzer(label, lines, expect)
+
+
+def test_oneclick_duplicated_with_unreadable_field_is_never_oneclick() -> None:
+    # RFC 8058 needs exactly one List-Unsubscribe field, so the over-long one cannot change the
+    # answer. The content analyzer stays silent on One-Click here (https unknown): see the report.
+    lines = (_OVERLONG, f"{_LU}: <mailto:u@example.com>", f"{_POST}: {_OK_POST}")
+    r = analyze_message(_oneclick_raw(lines))
+    assert "MSG_LIST_UNSUBSCRIBE_NO_ONECLICK" in codes(r)
+    assert r.unevaluated == () and r.status != "error"
+
+
+def test_oneclick_no_unsubscribe_header_unchanged() -> None:
+    r = analyze_message(_oneclick_raw(()))
+    assert codes(r) == {"MSG_LIST_UNSUBSCRIBE_MISSING"}
+    assert r.unevaluated == ()
