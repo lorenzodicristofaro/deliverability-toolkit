@@ -12,3 +12,6 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 .pytest_cache/
+
+# Maintainer working brief for code reviews (local only)
+docs/reviews/BRIEF.md
