@@ -20,7 +20,12 @@
       "Bash(git push *--mirror*)",
       "Bash(git push *--delete*)",
       "Bash(git push * -d *)",
-      "Bash(git push * :*)"
+      "Bash(git push * :*)",
+      "Bash(gh pr merge *)",
+      "Bash(gh release *)",
+      "Bash(gh api *)",
+      "Bash(gh repo *)",
+      "Bash(gh secret *)"
     ]
   }
 }

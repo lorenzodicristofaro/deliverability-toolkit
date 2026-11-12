@@ -11,3 +11,4 @@ GNU AGPL-3.0-or-later. See [LICENSE](LICENSE).
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). Please also read the [Code of Conduct](CODE_OF_CONDUCT.md).
+To add an email service provider profile, follow the [ESP profile guide](docs/ESP_PROFILES.md).

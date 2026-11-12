@@ -9,22 +9,35 @@ behaviour of each route.
 from __future__ import annotations
 
 import json
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
+from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
+from sqlalchemy.exc import OperationalError
 
+from app.api.v1 import checks as checks_api
 from app.api.v1.checks import MAX_IDS
 from app.api.v1.dns_tools import dns_backend
-from app.checks.models import CheckResult
+from app.api.v1.domain_esps import esp_profiles
+from app.checks.custom import CustomDnsCheck
+from app.checks.esp_profile import EspProfileCheck
+from app.checks.models import CheckContext, CheckResult
+from app.checks.registry import CheckRegistry
 from app.core import i18n
 from app.core.config import Settings
 from app.core.db import create_db_engine, create_session_factory
 from app.core.i18n import t
+from app.core.tenancy import TenantContext
+from app.esp.profile import EspProfile, EspProfileError, load_esp_profiles
 from app.main import create_app
 from app.models import Membership
+from app.repositories.domain_esps import DomainEspRepository
+from app.services import domain_esps as esp_service
+from app.services.domain_esps import ProfileSource
 from tests.api.test_domains import B_SECRET_NAME, KEY, World, _seed, call
 from tests.support.dns_backend import fake_backend
 
@@ -42,6 +55,13 @@ ZONES: dict[str, list[dict[str, Any]]] = {
     ]
 }
 CHECKS = ("spf", "dkim", "dmarc")
+ESP_FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "esp" / "valid"
+
+
+def _fixture_profiles() -> ProfileSource:
+    return lambda: load_esp_profiles(ESP_FIXTURES)
+
+
 WIRE_KEYS = {"check_id", "target", "status", "findings", "data", "started_at", "duration_ms"}
 
 
@@ -65,6 +85,7 @@ def world(migrated_db_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[Wor
     application = create_app(settings)
     backend, _ = fake_backend(ZONES)
     application.dependency_overrides[dns_backend] = lambda: backend
+    application.dependency_overrides[esp_profiles] = _fixture_profiles
     try:
         with TestClient(application, raise_server_exceptions=True) as client:
             yield World(client, db, settings, tenant_a, tenant_b, users, domains)
@@ -187,7 +208,7 @@ def test_all_returns_every_check_sorted(world: World) -> None:
     r = call(world, "viewer", "POST", dpath(world, "assigned", "/all"))
     assert r.status_code == 200
     body = r.json()
-    assert [x["check_id"] for x in body] == sorted(CHECKS)
+    assert [x["check_id"] for x in body] == sorted([*CHECKS, "esp"])
     assert all(set(x) == WIRE_KEYS and x["target"] == "assigned.example" for x in body)
 
 
@@ -350,3 +371,295 @@ def test_openapi_documents_the_routes(world: World) -> None:
     ):
         assert "post" in spec["paths"][path]
     assert "CheckResult" in spec["components"]["schemas"]
+
+
+# --- ESP check in domain runs (M6-06) -----------------------------------------------------------
+
+B_HOST = "bounce." + B_SECRET_NAME
+FIXED = datetime(2026, 11, 10, 12, 0, tzinfo=UTC)
+
+
+def assign_esp(world: World, which: str, esp_id: str, **hosts: Any) -> None:
+    """Store an assignment through the tenant repository of the domain's own tenant."""
+    tenant = world.tenant_b if which == "other" else world.tenant_a
+    owner = world.users["b_owner" if which == "other" else "owner"]
+    repo = DomainEspRepository(TenantContext(tenant, owner), world.db)
+    assert repo.add(world.domains[which], esp_id, **hosts) is not None
+    world.db.commit()
+
+
+def set_profiles(world: World, source: ProfileSource) -> None:
+    world.client.app.dependency_overrides[esp_profiles] = lambda: source  # type: ignore[attr-defined]
+
+
+def broken_profiles() -> Sequence[EspProfile]:
+    raise EspProfileError("profile directory not found")
+
+
+def ids_of(response: Any) -> list[str]:
+    assert response.status_code == 200, response.text[:300]
+    return [x["check_id"] for x in response.json()]
+
+
+def by_id(response: Any, check_id: str) -> dict[str, Any]:
+    return next(x for x in response.json() if x["check_id"] == check_id)
+
+
+def codes(result: dict[str, Any]) -> list[str]:
+    return [f["code"] for f in result["findings"]]
+
+
+def test_all_without_esp_is_byte_equal_to_the_built_ins_plus_esp(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Updated on purpose by M6-13: `esp` (detection) now runs in `all` with no assignment, so
+    `all` equals the built-ins plus `esp`, byte for byte, and that `esp` entry is the single
+    ESP_NONE_ASSIGNED info result on a zone without ESP records."""
+    real = checks_api._context
+
+    def fixed(*args: Any, **kw: Any) -> CheckContext:
+        return real(*args, **kw).model_copy(update={"clock": lambda: FIXED})
+
+    monkeypatch.setattr(checks_api, "_context", fixed)
+    everything = call(world, "owner", "POST", dpath(world, "assigned", "/all"))
+    built_ins = call(
+        world,
+        "owner",
+        "POST",
+        dpath(world, "assigned", ""),
+        json={"ids": sorted([*CHECKS, "esp"])},
+    )
+    assert ids_of(everything) == sorted([*CHECKS, "esp"])
+    assert everything.content == built_ins.content
+    esp = by_id(everything, "esp")
+    assert codes(esp) == ["ESP_NONE_ASSIGNED"] and esp["status"] == "info"
+
+
+def test_esp_by_id_without_assignment_is_none_assigned(world: World) -> None:
+    r = call(world, "analyst", "POST", dpath(world, "assigned", "/esp"))
+    assert r.status_code == 200
+    body = r.json()
+    assert body["check_id"] == "esp" and body["status"] == "info"
+    assert codes(body) == ["ESP_NONE_ASSIGNED"]
+
+
+def test_all_with_broken_profiles_and_no_assignment_is_esp_error(world: World) -> None:
+    set_profiles(world, broken_profiles)
+    r = call(world, "owner", "POST", dpath(world, "assigned", "/all"))
+    assert ids_of(r) == sorted([*CHECKS, "esp"])
+    esp = by_id(r, "esp")
+    assert esp["status"] == "error" and codes(esp) == ["CHECK_INTERNAL_ERROR"]
+    assert all(x["status"] != "error" for x in r.json() if x["check_id"] != "esp")
+
+
+DETECTION_ZONES: dict[str, list[dict[str, Any]]] = {
+    "default": [
+        *ZONES["default"],
+        {
+            "name": "s1._domainkey.assigned.example",
+            "type": "CNAME",
+            "ttl": 300,
+            "rdata": ["s1.dkim.tenant-a.esp.example.com."],
+        },
+        {"name": B_SECRET_NAME, "type": "TXT", "ttl": 300, "rdata": ["v=spf1 -all"]},
+    ]
+}
+
+
+@pytest.mark.parametrize("tail", ["/all", "/esp"])
+def test_detection_of_tenant_a_never_reaches_tenant_b(world: World, tail: str) -> None:
+    """Two tenants: tenant A's domain has DNS of the unassigned example-esp; tenant A sees the
+    detection, tenant B's own run has none, and tenant B asking for A's domain is a 404."""
+    backend, _ = fake_backend(DETECTION_ZONES)
+    world.client.app.dependency_overrides[dns_backend] = lambda: backend  # type: ignore[attr-defined]
+    own = call(world, "analyst", "POST", dpath(world, "assigned", tail))
+    assert own.status_code == 200
+    esp_a = _esp_of(own)
+    assert "ESP_DETECTED_NOT_ASSIGNED" in codes(esp_a)
+    assert [d["id"] for d in esp_a["data"]["detection"]["detected"]] == ["example-esp"]
+
+    b_own = call(world, "b_owner", "POST", dpath(world, "other", tail), tenant="b")
+    assert b_own.status_code == 200
+    esp_b = _esp_of(b_own)
+    assert esp_b["data"]["detection"]["detected"] == []
+    assert "tenant-a" not in b_own.text and "assigned.example" not in b_own.text
+
+    foreign = call(world, "b_owner", "POST", dpath(world, "assigned", tail), tenant="b")
+    assert foreign.status_code == 404
+    assert "tenant-a" not in foreign.text and "example-esp" not in foreign.text
+
+
+@pytest.mark.parametrize("who", ["owner", "admin", "analyst"])
+def test_all_includes_esp_when_assigned(world: World, who: str) -> None:
+    assign_esp(world, "assigned", "example-esp")
+    r = call(world, who, "POST", dpath(world, "assigned", "/all"))
+    assert ids_of(r) == sorted([*CHECKS, "esp"])
+    esp = by_id(r, "esp")
+    assert [s["id"] for s in esp["data"]["esps"]] == ["example-esp"]
+    assert "ESP_SPF_INCLUDE_MISSING" in codes(esp)  # the fixture zone has no ESP include
+    assert esp["status"] != "ok"
+
+
+def test_esp_by_id_and_in_ids_body(world: World) -> None:
+    assign_esp(world, "assigned", "example-esp", return_path_host="bounce.assigned.example")
+    single = call(world, "owner", "POST", dpath(world, "assigned", "/esp"))
+    assert single.status_code == 200 and single.json()["check_id"] == "esp"
+    section = single.json()["data"]["esps"][0]
+    assert section["return_path"]["state"] != "not_configured"  # the stored host reached it
+    many = call(world, "owner", "POST", dpath(world, "assigned", ""), json={"ids": ["esp", "spf"]})
+    assert ids_of(many) == ["esp", "spf"]
+
+
+def test_esp_with_dkim_in_ids_body(world: World) -> None:
+    assign_esp(world, "assigned", "example-esp")
+    r = call(world, "owner", "POST", dpath(world, "assigned", ""), json={"ids": ["dkim", "esp"]})
+    assert ids_of(r) == ["dkim", "esp"]
+
+
+ESP_ROUTES = {"/all": None, "/esp": None, "": {"ids": ["spf", "esp"]}}
+
+
+def _esp_of(response: Any) -> dict[str, Any]:
+    body = response.json()
+    return body if isinstance(body, dict) else next(x for x in body if x["check_id"] == "esp")
+
+
+@pytest.mark.parametrize("tail", list(ESP_ROUTES))
+def test_client_viewer_gets_the_full_esp_result(
+    world: World, monkeypatch: pytest.MonkeyPatch, tail: str
+) -> None:
+    """M6-06c: on its assigned domain a client viewer gets the same `esp` result as an analyst
+    (notes, hostnames, evidence, findings; no redaction), in `all`, by id and in `ids`."""
+    real = checks_api._context
+
+    def fixed(*args: Any, **kw: Any) -> CheckContext:
+        return real(*args, **kw).model_copy(update={"clock": lambda: FIXED})
+
+    monkeypatch.setattr(checks_api, "_context", fixed)
+    assign_esp(
+        world,
+        "assigned",
+        "example-esp",
+        return_path_host="bounce.assigned.example",
+        tracking_host="t.assigned.example",
+    )
+    path = dpath(world, "assigned", tail)
+    viewer = call(world, "viewer", "POST", path, json=ESP_ROUTES[tail])
+    analyst = call(world, "analyst", "POST", path, json=ESP_ROUTES[tail])
+    assert viewer.status_code == analyst.status_code == 200
+    assert viewer.content == analyst.content
+    esp = _esp_of(viewer)
+    assert [s["id"] for s in esp["data"]["esps"]] == ["example-esp"]
+    assert "bounce.assigned.example" in viewer.text and "t.assigned.example" in viewer.text
+
+
+@pytest.mark.parametrize("tail", list(ESP_ROUTES))
+@pytest.mark.parametrize("which", ["unassigned", "other"])
+def test_client_viewer_esp_on_unassigned_or_foreign_domain_is_404(
+    world: World, tail: str, which: str
+) -> None:
+    """Two tenants: tenant B's domain (with an assignment) and tenant A's unassigned domain stay
+    404 for the viewer of tenant A, with no ESP data in the body."""
+    assign_esp(world, "other", "example-esp", return_path_host=B_HOST)
+    assign_esp(world, "unassigned", "example-esp", return_path_host="bounce.unassigned.example")
+    r = call(world, "viewer", "POST", dpath(world, which, tail), json=ESP_ROUTES[tail])
+    assert (r.status_code, r.json()) == (404, {"detail": t("api.error.not_found", "en")})
+    assert "example-esp" not in r.text and "bounce." not in r.text
+    assert B_SECRET_NAME not in r.text
+
+
+@pytest.mark.parametrize("tail", list(ESP_ROUTES))
+def test_client_viewer_check_run_toggle_still_denies_esp(world: World, tail: str) -> None:
+    assign_esp(world, "assigned", "example-esp")
+    set_toggles(world, "viewer", {"check.run": False})
+    r = call(world, "viewer", "POST", dpath(world, "assigned", tail), json=ESP_ROUTES[tail])
+    assert (r.status_code, r.json()) == (403, {"detail": t("api.error.forbidden", "en")})
+
+
+def test_tenant_b_assignment_never_reaches_tenant_a_run(world: World) -> None:
+    assign_esp(world, "other", "example-esp", return_path_host=B_HOST)
+    for tail in ("/all", "/esp"):
+        r = call(world, "owner", "POST", dpath(world, "assigned", tail))
+        assert r.status_code == 200
+        assert B_HOST not in r.text and B_SECRET_NAME not in r.text
+        assert "example-esp" not in r.text
+    r = call(world, "owner", "POST", dpath(world, "assigned", "/all"))
+    assert ids_of(r) == sorted([*CHECKS, "esp"])  # M6-13: `esp` always runs in `all`
+    assert by_id(r, "esp")["data"]["esps"] == []
+    # Tenant B's own run sees its assignment; tenant A's domain stays foreign to it.
+    own = call(world, "b_owner", "POST", dpath(world, "other", "/esp"), tenant="b")
+    assert own.status_code == 200
+    assert [s["id"] for s in own.json()["data"]["esps"]] == ["example-esp"]
+    foreign = call(world, "b_owner", "POST", dpath(world, "assigned", "/esp"), tenant="b")
+    assert foreign.status_code == 404
+
+
+def test_assigned_profile_no_longer_loaded_is_error(world: World) -> None:
+    assign_esp(world, "assigned", "example-esp")
+    assign_esp(world, "assigned", "gone-esp")
+    r = call(world, "owner", "POST", dpath(world, "assigned", "/all"))
+    esp = by_id(r, "esp")
+    assert esp["status"] == "error"
+    assert esp["data"]["unavailable"] == ["gone-esp"]
+    assert [s["id"] for s in esp["data"]["esps"]] == ["example-esp"]
+    missing = [f for f in esp["findings"] if f["code"] == "ESP_PROFILE_UNAVAILABLE"]
+    assert [f["params"] for f in missing] == [{"esp": "gone-esp"}]
+    assert by_id(r, "spf")["status"] == "ok"
+
+
+def test_only_unloaded_profiles_is_error_not_none_assigned(world: World) -> None:
+    assign_esp(world, "assigned", "gone-esp")
+    body = call(world, "owner", "POST", dpath(world, "assigned", "/esp")).json()
+    assert body["status"] == "error"
+    assert codes(body) == ["ESP_PROFILE_UNAVAILABLE"]
+    assert body["data"]["esps"] == [] and body["data"]["unavailable"] == ["gone-esp"]
+    assert body["data"]["detection"]["detected"] == []  # M6-13: detection still ran
+
+
+@pytest.mark.parametrize("tail", ["/all", "/esp"])
+def test_broken_profiles_make_only_esp_error(world: World, tail: str) -> None:
+    assign_esp(world, "assigned", "example-esp")
+    set_profiles(world, broken_profiles)
+    r = call(world, "owner", "POST", dpath(world, "assigned", tail))
+    assert r.status_code == 200
+    results = r.json() if tail == "/all" else [r.json()]
+    esp = next(x for x in results if x["check_id"] == "esp")
+    assert esp["status"] == "error" and codes(esp) == ["CHECK_INTERNAL_ERROR"]
+    if tail == "/all":
+        assert ids_of(r) == sorted([*CHECKS, "esp"])
+        assert by_id(r, "spf")["status"] == "ok" and by_id(r, "dmarc")["status"] == "ok"
+
+
+def test_repository_failure_makes_only_esp_error(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class Broken:
+        def list_for_domain(self, _domain_id: object) -> Any:
+            raise OperationalError("SELECT", {}, Exception("connection lost"))
+
+    class Repos:
+        domain_esps = Broken()
+
+    monkeypatch.setattr(esp_service, "repo_for", lambda _ctx, _db: Repos())
+    r = call(world, "owner", "POST", dpath(world, "assigned", "/all"))
+    assert ids_of(r) == sorted([*CHECKS, "esp"])
+    esp = by_id(r, "esp")
+    assert esp["status"] == "error" and codes(esp) == ["CHECK_INTERNAL_ERROR"]
+    assert by_id(r, "spf")["status"] == "ok"
+
+
+def test_free_route_does_not_know_esp(world: World) -> None:
+    r = call(world, "owner", "POST", FREE, json={"name": "example.com", "ids": ["esp"]})
+    assert r.status_code == 422
+
+
+def test_esp_is_a_reserved_id_custom_checks_cannot_take() -> None:
+    """Custom checks are registered as `custom:<scope>:<key>`, so a key `esp` never collides
+    with the ESP check and `with_checks` cannot raise DuplicateCheckError for it."""
+    for scope in ("tenant", "global"):
+        custom = CustomDnsCheck(
+            check_key="esp", kind="txt", definition={}, severity="low", scope=scope
+        )
+        assert custom.id == f"custom:{scope}:esp"
+        registry = CheckRegistry().with_checks([EspProfileCheck(()), custom])
+        assert registry.all_ids() == [f"custom:{scope}:esp", "esp"]

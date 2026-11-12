@@ -86,6 +86,12 @@ change, including the PostgreSQL params when local PostgreSQL is up, and the ful
 shared test fixtures, migrations or code used across the app. QA runs the full suite once, on the final round's
 commit. The GM runs it on the merge result. CI on `dev` remains the gate after every merge.
 
+Non-code tickets (maintainer decision 2026-11-11): when the diff touches only comments, documentation or data files
+(seeds, profiles, locale strings, notices), or only adds tests without changing app code, QA runs ruff, mypy and the
+relevant tests instead of the full suite; the GM skips a local full suite on the merge. CI on `dev` (SQLite and
+PostgreSQL) is the full-suite gate. Such tickets default to `sonnet` for coder and QA unless the data needs judgement
+across conflicting vendor sources.
+
 ## 4. Loop
 
 1. GM reads CLAUDE.md, WORKFLOW.md, TODO.md and `docs/HANDOFF.md` (if present).
@@ -98,10 +104,10 @@ commit. The GM runs it on the merge result. CI on `dev` remains the gate after e
 
 ## 5. Environments and repositories
 
-### Decision: one PRIVATE repository, three long-lived branches (Option A)
-- All work happens in one private repository. Branches: `feature/*` → `dev` → `qa` → `main`. `main` = release candidates (tags).
-- When the project is ready for release, a NEW public repository is created that contains only
-  clean release snapshots, never this repository's history. See `docs/RELEASE.md`.
+### Decision: one public repository, three long-lived branches (Option A)
+- All work happens in one public repository (full history). Branches: `feature/*` → `dev` → `qa` → `main`. `main` = releases (tags).
+- A release is a pull request `qa` → `main`, opened and merged by the maintainer, followed by an annotated tag
+  and a GitHub Release. See `docs/RELEASE.md`.
 - The three-repo layout (dev / qa / prod) was considered and rejected for now: more sync work,
   more tokens for GM/PM, duplicated CI. Revisit only if outside contributors need access to dev.
 - Three deployments in the home lab: `compose.dev.yaml`, `compose.qa.yaml`, `compose.prod.yaml`
@@ -109,24 +115,33 @@ commit. The GM runs it on the merge result. CI on `dev` remains the gate after e
 
 ### Push policy (important)
 - **Only the GM pushes, and only `dev` and `qa`** (maintainer decision 2026-11-04). Preconditions: QA APPROVE
-  and green local tests (for `qa`: milestone accepted). After each push the GM watches the run with
-  `gh run watch` and, on failure, sends the ticket back to `coder` with the log (counts toward the 2-round limit).
+  and green local tests (for `qa`: milestone accepted). The GM pushes `dev` after every merge; CI is the
+  per-ticket gate. After each push the GM polls the run with `gh run view` and, on failure, sends the ticket
+  back to `coder` with the log (counts toward the 2-round limit).
+- `qa` only ever receives a `dev` commit whose CI is green, so `qa` pushes do not run CI again (from M6-00).
+- What runs when (M6-00): `ci.yml` (lint, test-sqlite, test-postgres) runs on `dev` and `main` pushes and on
+  pull requests, skipped for docs-only changes. `ci-infra.yml` (docker-build, integration-unbound,
+  unbound-arm64-smoke) runs on `dev` pushes and pull requests only when a Docker-related path changes (list and
+  reasons at the top of that file); on `main` pushes `ci.yml` calls it without a path filter, so `main` runs
+  every job. `qa` pushes run nothing. A path-filtered or skipped workflow reports no check at all, so a
+  required check can stay Pending on a pull request that skips it (how the ruleset treats this is unverified).
+  `codeql.yml` (M6-15) runs CodeQL on `main` pushes, pull requests to `main` and weekly; not a required check.
 - Coder, PM and QA never push. `main`, tags, releases, force pushes and branch deletions stay with the human.
-- Enforced by `.claude/settings.json`: exact allow rules for `git push origin dev|qa`, deny rules for
-  `main`, tags, force, `--all`, `--mirror`, delete refspecs. `gh` uses a fine-grained token scoped to this
-  repository (Contents read/write, Actions read).
-- Reason: branch protection on private repositories may not be available on the free GitHub plan
-  (reported by users, not confirmed by official documentation: check your plan). Do not rely on it;
-  rely on the permission rules above (see `docs/SETUP.md`).
-- If you later get branch protection (paid plan), enable it for `qa` and `main` as a second layer.
+- Enforced in two layers. Client side, `.claude/settings.json`: exact allow rules for `git push origin dev|qa`,
+  deny rules for `main`, tags, force, `--all`, `--mirror`, delete refspecs, and for `gh pr merge`, `gh release`,
+  `gh api`, `gh repo`, `gh secret`. Server side, repository rulesets: `protect-qa` (no deletion, no force push)
+  and `protect-main` (no deletion, no force push, pull request required with 0 approvals, merge commits only,
+  required checks `lint`, `test-sqlite`, `test-postgres`, `secret-scan`). See `docs/SETUP.md`.
+- `qa` → `main` is a pull request opened and merged by the maintainer.
 
 ### Credentials and permissions
-- The machine where agents run has no GitHub write token and no production secrets.
+- The machine where agents run has a fine-grained GitHub token scoped to this repository: Contents read/write,
+  Actions read, no pull-request rights. It has no production secrets.
 - Production credentials, release tokens and the production encryption key are never present there.
 - QA and prod use separate databases and separate `SECRET_KEY` / `ENCRYPTION_KEY`. Never test on the production database.
 - Secret scanning runs on every commit (pre-commit hook) and in CI.
 - Test fixtures never contain real client domains, IPs or mailboxes: use `example.com` / reserved ranges
-  (the public release is built from a snapshot, but fixtures must be safe anyway).
+  (the repository is public, so fixtures must be safe).
 
 ## 6. Parallel work with worktrees
 

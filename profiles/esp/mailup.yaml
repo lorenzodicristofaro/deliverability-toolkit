@@ -1,0 +1,26 @@
+id: mailup
+name: MailUp (TeamSystem)
+homepage: https://www.mailup.com
+# Maintainer decision (2026-11-11): MailUp's SPF guidance (include:musvc.com) applies when the
+# sending domain already has an SPF record, which should then include musvc.com. A domain that
+# has never had an SPF record should not get one containing only MailUp's include; DMARC is not
+# affected, because SPF for DMARC is evaluated on the return-path domain, not the From domain.
+# `only_if_record` makes the esp check follow this (pitfall ESP_MAILUP_SPF_ONLY_IF_PUBLISHED).
+spf:
+  includes: [musvc.com]
+  only_if_record: true
+dkim:
+  selectors:
+    - {name: ml01, type: cname, target_pattern: "ml01.dkim.musvc.com"}
+    - {name: ml02, type: cname, target_pattern: "ml02.dkim.musvc.com"}
+pitfalls:
+  - {code: ESP_MAILUP_SPF_ONLY_IF_PUBLISHED, notes_key: esp.mailup.spf_only_if_published, severity: info}
+  - {code: ESP_MAILUP_DKIM_TXT_ALTERNATIVE, notes_key: esp.mailup.dkim_txt_alternative, severity: info}
+  - {code: ESP_MAILUP_UNAUTHENTICATED_VIA, notes_key: esp.mailup.unauthenticated_via, severity: info}
+verified_on: 2026-11-11
+sources:
+  - https://helpmailup.atlassian.net/wiki/spaces/MM/pages/37519747/DKIM+non+trovato
+  - https://helpmailup.atlassian.net/wiki/spaces/MM/pages/37519762/SPF+non+trovato
+  - https://helpmailup.atlassian.net/wiki/spaces/MM/pages/810156046/Configurazione+Record+SPF
+  - https://helpmailup.atlassian.net/wiki/spaces/MM/pages/809926670/Parametri+di+configurazione+SPF+DKIM+e+DMARC
+status: verified

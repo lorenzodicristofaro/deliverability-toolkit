@@ -1,0 +1,120 @@
+{% extends "base.html" %}
+{% block title %}{{ t("web.domain.esps.title") }} · {{ app_name }}{% endblock %}
+{% block content %}
+<p><a href="/domains/{{ domain_id }}">{{ t("domain.detail.title") }}</a></p>
+<h1 data-testid="esps-title">{{ t("web.domain.esps.heading", domain=display_name|visible) }}</h1>
+<nav class="tabs" aria-label="{{ t('checks.tab.label') }}">
+  {% if can_run %}<a href="/domains/{{ domain_id }}/authentication" data-testid="tab-authentication">{{ t("checks.tab.authentication") }}</a>{% endif %}
+  <a href="/domains/{{ domain_id }}/esps" aria-current="page" data-testid="tab-esps">{{ t("web.domain.esps.title") }}</a>
+  {% if can_run %}<a href="/domains/{{ domain_id }}/esps" data-testid="esps-run">{{ t("web.domain.esps.run") }}</a>{% endif %}
+</nav>
+{% if flash %}<p class="dns-state dns-state-ok" role="status" data-testid="esps-flash">{{ t(flash) }}</p>{% endif %}
+{% if error %}<p class="form-error" role="alert" data-testid="esps-form-error">{{ t(error) }}</p>{% endif %}
+{% for key in tab.notes %}<p class="form-error" role="alert" data-testid="esps-error">{{ t("web.domain.esps.error") }} {{ t(key) }}</p>{% endfor %}
+
+<section data-testid="esps-assigned">
+  <h2>{{ t("web.domain.esps.assigned") }}</h2>
+  {% if not tab.rows %}
+  <p class="empty-state" data-testid="esps-empty">{{ t("web.domain.esps.empty") }}</p>
+  {% else %}
+  <table>
+    <thead><tr>
+      <th scope="col">{{ t("web.domain.esps.col.name") }}</th>
+      <th scope="col">{{ t("web.domain.esps.col.status") }}</th>
+      <th scope="col">{{ t("web.domain.esps.col.verified_on") }}</th>
+      <th scope="col">{{ t("web.domain.esps.host_return_path") }}</th>
+      <th scope="col">{{ t("web.domain.esps.host_tracking") }}</th>
+      {% if can_write %}<th scope="col">{{ t("web.domain.esps.col.actions") }}</th>{% endif %}
+    </tr></thead>
+    <tbody>
+    {% for row in tab.rows %}
+      {% set r = row.record %}{% set p = row.profile %}
+      <tr data-esp="{{ r.esp_id }}">
+        <td class="dns-wrap">{% if p %}{{ p.name|visible }}{% else %}<code>{{ r.esp_id|visible }}</code>{% endif %}</td>
+        <td class="dns-wrap">
+          {% if p is none %}<strong data-testid="badge-missing">{{ t("web.domain.esps.profile_missing") }}</strong>
+          {% elif p.status == "unverified" %}<strong data-testid="badge-unverified">{{ t("web.domain.esps.unverified") }}</strong>
+            {% if p.unverified_fields %}<br>{% for f in p.unverified_fields|sort %}<code>{{ f|visible }}</code>{% if not loop.last %}, {% endif %}{% endfor %}{% endif %}
+          {% else %}<span data-testid="badge-verified">{{ t("web.domain.esps.verified") }}</span>{% endif %}
+          {% if p is not none and p.status == "unverified" %}
+          {% if p.sources %}<br>{{ t("web.domain.esps.sources") }}:
+            {% for s in p.sources %}{% if s is https_url %}<a href="{{ s }}" rel="noopener noreferrer">{{ s|visible }}</a>{% else %}<code>{{ s|visible }}</code>{% endif %}{% if not loop.last %}, {% endif %}{% endfor %}
+          {% endif %}
+          {% endif %}
+        </td>
+        <td>{% if p %}{{ p.verified_on.isoformat() }}{% endif %}</td>
+        <td class="dns-wrap">{% if r.return_path_host %}<code>{{ r.return_path_host|visible }}</code>{% endif %}</td>
+        <td class="dns-wrap">{% if r.tracking_host %}<code>{{ r.tracking_host|visible }}</code>{% endif %}</td>
+        {% if can_write %}
+        <td>
+          <form class="inline" method="post" action="/domains/{{ domain_id }}/esps/{{ r.esp_id|urlencode }}/remove">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button type="submit" data-testid="esp-remove-{{ r.esp_id }}">{{ t("web.domain.esps.remove") }}</button>
+          </form>
+        </td>
+        {% endif %}
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</section>
+
+{% if can_write %}
+<section data-testid="esps-attach">
+  <h2>{{ t("web.domain.esps.attach") }}</h2>
+  {% if tab.catalogue %}
+  <form method="post" action="/domains/{{ domain_id }}/esps">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <p><label>{{ t("web.domain.esps.col.name") }}
+      <select name="esp_id" required>
+        {% for p in tab.catalogue %}<option value="{{ p.id }}"{% if form.esp_id == p.id %} selected{% endif %}>{{ p.name|visible }}{% if p.status == "unverified" %} ({{ t("web.domain.esps.unverified") }}){% endif %}</option>{% endfor %}
+      </select></label></p>
+    <p><label>{{ t("web.domain.esps.host_return_path") }}
+      <input type="text" name="return_path_host" maxlength="253" value="{{ form.return_path_host }}" autocomplete="off"></label></p>
+    <p><label>{{ t("web.domain.esps.host_tracking") }}
+      <input type="text" name="tracking_host" maxlength="253" value="{{ form.tracking_host }}" autocomplete="off"></label></p>
+    <p><button type="submit" data-testid="esp-attach">{{ t("web.domain.esps.attach") }}</button></p>
+  </form>
+  {% else %}
+  <p class="empty-state">{{ t("web.domain.esps.catalogue_empty") }}</p>
+  {% endif %}
+</section>
+{% endif %}
+
+{% if tab.result is not none %}
+<section class="check-result" data-testid="esps-result" data-status="{{ tab.result.status }}">
+  <h2>{{ t("web.domain.esps.result") }}</h2>
+  {% set status_text = {"ok": t("checks.status.ok"), "warn": t("checks.status.warn"), "fail": t("checks.status.fail"), "info": t("checks.status.info"), "error": t("checks.status.error")} %}
+  <p class="dns-state dns-state-{{ "failure" if tab.result.status == "error" else ("ok" if tab.result.status == "ok" else "absent") }}"{% if tab.result.status == "error" %} role="alert"{% endif %} data-testid="status-esp">
+    <strong>{{ status_text[tab.result.status] }}</strong>
+    {% if tab.result.status == "error" %}<br>{{ t("checks.status.error_note") }}{% endif %}
+  </p>
+  {% for row in tab.rows if row.findings %}
+  <div data-testid="esp-findings-{{ row.record.esp_id }}">
+    <h3>{% if row.profile %}{{ row.profile.name|visible }}{% else %}<code>{{ row.record.esp_id|visible }}</code>{% endif %}</h3>
+    {% with findings = row.findings %}{% include "domains/_esp_findings.html" %}{% endwith %}
+  </div>
+  {% endfor %}
+  {% if tab.general %}
+  <div data-testid="esp-findings-general">
+    {% with findings = tab.general %}{% include "domains/_esp_findings.html" %}{% endwith %}
+  </div>
+  {% elif not tab.result.findings and tab.result.status != "error" %}
+  <p class="empty-state">{{ t("checks.no_findings") }}</p>
+  {% endif %}
+</section>
+{% endif %}
+
+{% if tab.result is not none %}
+<section data-testid="esps-detected">
+  <h2>{{ t("web.domain.esps.detected.title") }}</h2>
+  <p>{{ t("web.domain.esps.detected.hint") }}</p>
+  {% if tab.detected %}
+  {% with findings = tab.detected %}{% include "domains/_esp_findings.html" %}{% endwith %}
+  {% else %}
+  <p class="empty-state">{{ t("web.domain.esps.detected.none") }}</p>
+  {% endif %}
+</section>
+{% endif %}
+{% endblock %}

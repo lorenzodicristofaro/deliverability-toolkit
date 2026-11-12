@@ -45,7 +45,9 @@ Requirements:
 - A user may belong to several tenants (agency scenario) and switch between them.
 - Per-user, per-domain visibility (a client sees only their own domains).
 - Per-role or per-user feature toggles (e.g. a client viewer cannot run
-  content analysis, cannot see raw DNS tools, cannot see other ESP data).
+  content analysis, cannot see raw DNS tools, cannot see ESP data of domains
+  not assigned to them; on assigned domains they see assigned and detected ESPs
+  and the ESP check result read-only, maintainer decision 2026-11-10).
 - Optional read-only **share links** (token, expiry, revocable) for a domain report.
 - Audit log of sensitive actions (login, role change, rule change, export).
 - Local login with argon2 hashes + optional TOTP 2FA; OIDC/SSO is a later milestone.

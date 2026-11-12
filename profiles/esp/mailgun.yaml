@@ -1,0 +1,16 @@
+id: mailgun
+name: Mailgun
+homepage: https://www.mailgun.com
+spf:
+  includes: [mailgun.org]
+dkim:
+  selectors: []
+tracking_domain: {type: cname, optional: true, notes_key: esp.mailgun.tracking}
+pitfalls:
+  - {code: ESP_MAILGUN_DKIM_SELECTOR_IN_CONSOLE, notes_key: esp.mailgun.dkim_selector_in_console, severity: info}
+verified_on: 2026-11-11
+sources:
+  - https://documentation.mailgun.com/docs/mailgun/user-manual/domains/domains-verify
+  - https://help.mailgun.com/hc/en-us/articles/15353034939931-GoDaddy-DNS-Setup-Guide
+  - https://help.mailgun.com/hc/en-us/articles/16956951504539-How-can-I-rotate-my-DKIM-key
+status: verified

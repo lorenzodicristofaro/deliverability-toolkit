@@ -1,0 +1,2 @@
+# An unsafe YAML tag: must fail to parse, never construct an object.
+id: !!python/object/apply:os.getcwd []

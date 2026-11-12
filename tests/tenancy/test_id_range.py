@@ -78,6 +78,14 @@ def _check_ids(_w: World) -> dict[str, list[str]]:
     return {"ids": ["spf"]}
 
 
+def _esp_hosts(_w: World) -> dict[str, None]:
+    return {"return_path_host": None}
+
+
+def _esp_form(_w: World) -> dict[str, str]:
+    return {"esp_id": "example-esp"}
+
+
 Payload = Callable[[World], Any] | None
 
 # (method, route path) -> request payload. Must list every route with a numeric path id.
@@ -89,12 +97,18 @@ ID_ROUTES: dict[tuple[str, str], Payload] = {
     ("POST", "/domains/{domain_id}/delete"): None,
     ("GET", "/domains/{domain_id}/authentication"): None,
     ("GET", "/domains/{domain_id}/authentication/dkim/stream"): None,
+    ("GET", "/domains/{domain_id}/esps"): None,
+    ("POST", "/domains/{domain_id}/esps"): _esp_form,
+    ("POST", "/domains/{domain_id}/esps/{esp_id}/remove"): None,
     ("GET", "/api/v1/domains/{domain_id}"): None,
     ("PATCH", "/api/v1/domains/{domain_id}"): _name,
     ("DELETE", "/api/v1/domains/{domain_id}"): None,
     ("PUT", "/api/v1/domains/{domain_id}/access"): _access,
     ("POST", "/api/v1/domains/{domain_id}/checks"): _check_ids,
     ("POST", "/api/v1/domains/{domain_id}/checks/{check_id}"): None,
+    ("GET", "/api/v1/domains/{domain_id}/esps"): None,
+    ("PUT", "/api/v1/domains/{domain_id}/esps/{esp_id}"): _esp_hosts,
+    ("DELETE", "/api/v1/domains/{domain_id}/esps/{esp_id}"): None,
 }
 
 
@@ -108,7 +122,11 @@ def _outcome(response: Any) -> tuple[int, str | None, str]:
 
 def _call(world: World, who: str, key: tuple[str, str], domain_id: int) -> Any:
     method, template = key
-    path = template.replace("{domain_id}", str(domain_id)).replace("{check_id}", "all")
+    path = (
+        template.replace("{domain_id}", str(domain_id))
+        .replace("{check_id}", "all")
+        .replace("{esp_id}", "example-esp")
+    )
     payload = ID_ROUTES[key]
     body = None if payload is None else payload(world)
     if path.startswith("/api/"):
@@ -344,6 +362,9 @@ def test_out_of_range_ids_reach_no_query_outside_the_routes(world: World, value:
     assert repos.domains.get(value) is None
     assert repos.memberships.get_by_user(value) is None
     assert repos.domain_access.domain_ids_for_user(value) == frozenset()
+    assert repos.domain_esps.list_for_domain(value) == []
+    assert repos.domain_esps.add(value, "esp") is None
+    assert repos.domain_esps.remove(value, "esp") is False
     assert memberships.get_for_tenant(value) is None
     assert revoke_session(world.db, value) is False
     assert revoke_all_sessions(world.db, value) == 0
@@ -413,11 +434,18 @@ def test_parse_id(parser: Callable[[str], int | None], raw: str, expected: int |
 
 # Id columns that are neither `*_id` nor declared keys in every model.
 _EXTRA_ID_COLUMNS = {"created_by"}
+# `*_id` columns that are not row ids, with the reason (keys are (table, column)).
+_TEXT_ID_COLUMNS = {
+    ("domain_esps", "esp_id"): "ESP profile slug; profiles live in YAML, not in a table",
+}
 
 
 def _id_columns() -> Iterator[tuple[str, Any]]:
     for table in Base.metadata.sorted_tables:
         for column in table.columns:
+            exempt = (table.name, column.name) in _TEXT_ID_COLUMNS
+            if exempt and not column.primary_key and not column.foreign_keys:
+                continue
             if (
                 column.primary_key
                 or column.foreign_keys
@@ -452,7 +480,10 @@ def test_every_id_column_of_the_migrated_schema_is_integer(world: World) -> None
 # --- guards ------------------------------------------------------------------------------------
 
 # Path parameters that are not database ids, with the reason. Anything else must be parsed.
-NON_NUMERIC_PATH_PARAMS = {"check_id": "name of a registered check ('spf', 'all'), never a row"}
+NON_NUMERIC_PATH_PARAMS = {
+    "check_id": "name of a registered check ('spf', 'all'), never a row",
+    "esp_id": "ESP profile slug ('example-esp'), never a row",
+}
 # The functions that apply MAX_ID to text. `_domain_id` delegates to `parse_id` in both layers
 # (test_parse_id runs them through the same table).
 ID_PARSERS = {"parse_id", "_domain_id"}

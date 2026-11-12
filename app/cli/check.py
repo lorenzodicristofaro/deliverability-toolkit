@@ -18,6 +18,7 @@ import typer
 
 from app.checks.dkim import DkimCheck
 from app.checks.dkim_selectors import list_selectors
+from app.checks.finding_text import display_params
 from app.checks.models import CheckContext, CheckResult
 from app.checks.registry import CheckRegistry
 from app.core import i18n
@@ -74,7 +75,7 @@ def render_text(results: Sequence[CheckResult], lang: str) -> str:
         if not r.findings:
             lines.append("  " + t("cli.check.no_findings", lang))
         for f in r.findings:
-            params = dict(f.params)
+            params = display_params(f.code, f.params, lang)
             sev = t(f"cli.check.severity.{f.severity}", lang)
             lines.append(f"  [{sev}] {t(f.title_key, lang, **params)}")
             lines.append("    " + t(f.detail_key, lang, **params))

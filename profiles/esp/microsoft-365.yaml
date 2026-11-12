@@ -1,0 +1,18 @@
+id: microsoft-365
+name: Microsoft 365
+homepage: https://www.microsoft.com/microsoft-365
+spf:
+  includes: [spf.protection.outlook.com]
+dkim:
+  selectors:
+    - {name: selector1, type: cname}
+    - {name: selector2, type: cname}
+pitfalls:
+  - {code: ESP_MICROSOFT_365_TENANT_SPECIFIC_DKIM_TARGETS, notes_key: esp.microsoft_365.tenant_specific_dkim_targets, severity: info}
+  - {code: ESP_MICROSOFT_365_ENABLE_DKIM_SIGNING, notes_key: esp.microsoft_365.enable_dkim_signing, severity: info}
+  - {code: ESP_MICROSOFT_365_SPF_CLOUD_VARIANTS, notes_key: esp.microsoft_365.spf_cloud_variants, severity: info}
+verified_on: 2026-11-11
+sources:
+  - https://learn.microsoft.com/en-us/defender-office-365/email-authentication-spf-configure
+  - https://learn.microsoft.com/en-us/defender-office-365/email-authentication-dkim-configure
+status: verified

@@ -95,6 +95,7 @@ Tenant 1—N CustomRule / CustomSelector / CustomCheck / ESPProfileOverride
 Tenant 1—N ApiKey, ShareLink, Integration, AlertChannel
 Global rows (tenant_id NULL): selectors, rules, DNSBL list, ESP profiles
 ```
+ESP profiles: `ESPProfileOverride` is deferred beyond M6; M6 reads profiles from YAML only.
 
 Isolation strategy (defense in depth):
 1. Every tenant-owned table has a non-null `tenant_id`.
@@ -129,6 +130,14 @@ data JSON, timestamps), `dns_snapshots` (for diffing), `dkim_selectors`
 (cached from YAML + overrides), `dmarc_reports`, `dmarc_report_rows`,
 `integrations` (encrypted credentials), `alert_channels`, `alert_rules`,
 `alerts`, `api_keys`, `share_links`, `audit_log`, `settings`.
+The `esp_profiles` table is deferred beyond M6: M6 stores only `domain_esps`, profiles come
+from `profiles/esp/*.yaml`.
+`domain_esps` (M6-02): one row per (domain, ESP), composite FK (domain_id, tenant_id) to
+`domains` like `domain_access`, cascade from domain and tenant, at most 10 per domain
+(soft cap, checked by count). `esp_id` is a slug with no FK; the service checks it names a
+loaded profile. Optional `return_path_host` / `tracking_host` must be the domain or a
+subdomain of it. `DomainEspRepository.add` is idempotent and never changes stored hosts
+(use `update_hosts`).
 
 Retention: raw `check_results` are pruned by configurable policy; aggregates
 and DNS snapshots are kept longer.
@@ -176,31 +185,40 @@ and DNS snapshots are kept longer.
 
 ## 8. ESP profiles
 
-YAML validated by a JSON Schema in CI. Sketch:
+One YAML file per ESP in `profiles/esp/<id>.yaml`, loaded by `app/esp/profile.py` (M6-01).
+The hand-written strict loader IS the schema (no JSON Schema): unknown keys, duplicate YAML
+keys, anchors/aliases and merge keys are rejected, each file is size-capped, and the directory
+load is all-or-nothing. Shape (fake example):
 
 ```yaml
-id: sendgrid
-name: SendGrid
-homepage: https://sendgrid.com
+id: example-esp                  # slug [a-z0-9][a-z0-9-]{0,39}, equal to the file name
+name: Example ESP
+homepage: https://esp.example.com
 spf:
-  includes: ["sendgrid.net"]
+  includes: ["spf.esp.example.com"]
+  only_if_record: false          # optional (M6-17): true = includes expected only if an SPF record exists
 dkim:
   selectors:
-    - { name: s1, type: cname, target_pattern: "s1.domainkey.*.sendgrid.net" }
-    - { name: s2, type: cname, target_pattern: "s2.domainkey.*.sendgrid.net" }
-return_path:
-  type: cname
-  notes_key: esp.sendgrid.return_path
+    - { name: s1, type: cname, target_pattern: "s1.dkim.*.esp.example.com" }
+    - { name: k1, type: txt }
+return_path: { type: cname, optional: false, notes_key: esp.example_esp.return_path }
 tracking_domain: { type: cname, optional: true }
-pitfalls:
-  - code: ESP_SENDGRID_LINK_BRANDING_MISSING
-    when: "..."
+pitfalls:                        # static advisory entries; no `when:` conditions
+  - { code: ESP_EXAMPLE_ESP_LINK_BRANDING_MISSING, notes_key: esp.example_esp.link, severity: low }
 verified_on: 2026-11-02
 sources: ["<official doc URL>"]
+status: verified                 # unverified requires unverified_fields
+# unverified_fields: [return_path, dkim.selectors.s1]   # skipped by checks
 ```
 
-Every profile carries `verified_on` and official `sources`; CI warns when a
-profile is older than 12 months.
+`target_pattern` is a restricted glob (a `*` label matches exactly one DNS label, last two
+labels literal), never a regex and never evaluated as code. Pitfalls carry no condition (GM
+decision 2026-11-10: no expression evaluation of data).
+
+Every profile carries `verified_on` and official `sources`. CI validation is
+`tests/esp/test_shipped_profiles.py` in the normal pytest jobs: it loads the shipped profiles
+with the strict loader, checks their notes keys exist in en and it, and warns (does not fail)
+when a profile is older than 12 months.
 
 ## 9. Security
 

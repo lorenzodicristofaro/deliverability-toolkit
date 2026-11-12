@@ -1,9 +1,9 @@
-# SETUP — private repository and local environment
+# SETUP — repository and local environment
 
 Do this once, before the first `/gm` session.
 
 ## 1. Create the repository
-1. On GitHub create an **empty private** repository (no README, no license, no .gitignore).
+1. On GitHub create an **empty public** repository (no README, no license, no .gitignore).
 2. Locally:
 ```bash
 mkdir deliverability-toolkit && cd deliverability-toolkit
@@ -12,7 +12,7 @@ git config user.name "Your Name"
 git config user.email "you@example.com"
 ```
 3. Copy in: `SPEC.md`, `ARCHITECTURE.md`, `TODO.md`, `CLAUDE.md`, `docs/WORKFLOW.md`, `docs/SETUP.md`,
-   `docs/RELEASE.md`, `scripts/publish_release.sh`, `.release-ignore`, `.claude/agents/*.md`, `.claude/commands/gm.md`.
+   `docs/RELEASE.md`, `SECURITY.md`, `.claude/agents/*.md`, `.claude/commands/gm.md`.
 4. Add a `.gitignore` (at least: `.env`, `*.db`, `*.sqlite`, `data/`, `__pycache__/`, `.venv/`, `.worktrees/`).
 5. First commit and branches:
 ```bash
@@ -27,14 +27,20 @@ git push -u origin main dev qa      # done by you, not by agents
 Install `pre-commit` and add `.pre-commit-config.yaml` with ruff and a secret scanner (for example gitleaks).
 Check the scanner's current recommended hook configuration in its own documentation before pinning a version.
 Add the same scan to CI (M0).
+CI layout and which jobs run on which push: see "Push policy" in `docs/WORKFLOW.md`. `ci.yml` and `ci-infra.yml` are path-filtered, so a skipped run reports no check (see the rulesets below for the checks that are required).
 
 ## 3. Push permissions (GM pushes `dev` and `qa` only)
 Decision 2026-11-04: the GM session may push `dev` and `qa`; everything else stays with you (see `docs/WORKFLOW.md`).
 1. **Scoped credentials**: authenticate `gh` with a fine-grained token limited to this repository
-   (Contents: read/write, Actions: read). Do not use a token with access to other repositories.
+   (Contents: read/write, Actions: read, no pull-request rights). Do not use a token with access to other repositories.
 2. **Permission rules** in `.claude/settings.json` (checked in): exact allow rules for `git push origin dev`,
    `git push origin qa` (and both together), `gh run list|view|watch`; deny rules for `main`, tags, force
-   pushes, `--all`, `--mirror` and delete refspecs. Any other push form is not allowed and prompts.
+   pushes, `--all`, `--mirror` and delete refspecs; also deny `gh pr merge`, `gh release`, `gh api`, `gh repo`,
+   `gh secret`. Any other push form is not allowed and prompts.
+3. **Rulesets** (server side, repository Settings -> Rules): `protect-qa` (no deletion, no force push) and
+   `protect-main` (no deletion, no force push, pull request required with 0 approvals, merge commits only,
+   required checks `lint`, `test-sqlite`, `test-postgres`, `secret-scan`).
+4. **Private vulnerability reporting**: enable it in Settings -> Advanced Security, so `SECURITY.md` is accurate.
 The permission-rule syntax can change between Claude Code versions: after changes, **test it** by asking
 Claude Code to run `git push origin main` and `git push --force origin dev`, and confirm both are refused.
 

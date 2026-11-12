@@ -144,6 +144,100 @@ module's `CODES`; `tests/checks/test_acceptance_m3.py` requires en and it text f
 For DKIM the finding texts cite the RFCs without section numbers, so none are given here
 (`unverified`: the maintainer should add the sections after checking the RFC text).
 
+### ESP (`esp`, M6)
+
+`app/checks/esp_profile.py` (`EspProfileCheck`) with detection in `app/checks/esp_detection.py`;
+built per domain run by `resolve_esp_run` (`app/services/domain_esps.py`). It is not in
+`load_builtin_checks`: only the domain routes know `esp` (by id, in `ids` and in `all`, where it
+always runs); `/api/v1/checks/free` and the CLI `check` do not. Profiles are the YAML files in
+`profiles/esp/` (`docs/ESP_PROFILES.md`). Every role that may run checks on the domain gets the
+full result, a client viewer on an assigned domain included (M6-06c); assigning and removing
+ESPs needs `domain.update` (403 for a client viewer on an assigned domain, 404 where the domain
+is invisible).
+
+What it checks, for each ESP assigned to the domain (one section per profile in
+`data["esps"]`, sorted by id):
+
+- **SPF includes** (`spf.includes`): each include host must appear as an `include:` or
+  `redirect=` target anywhere in the domain's resolved SPF tree (nested includes count). The
+  part is `ok` when the term is present, but a DNS failure (servfail, timeout, ...) on the ESP's
+  own record or on anything it includes, or a cap stopping resolution there, is never swallowed
+  (M6-19): it adds `ESP_DNS_ERROR` with part `spf.lookups` and the result is `error`, with one
+  ESP as with several. NXDOMAIN or NODATA
+  on the include host is an answer, not a failure: the part stays `ok` and the missing target is
+  reported by the SPF check (`SPF_INCLUDE_NOT_FOUND`). A profile with
+  `spf.only_if_record: true` (M6-17, opt-in; MailUp) expects its includes only when the domain
+  already has an SPF record: when the domain's TXT query completes without an SPF record
+  (NXDOMAIN, NODATA, or only non-SPF TXT) the part state is `no_record`, each include
+  `not_required`, and no finding is added. A DNS failure on that lookup is still
+  `ESP_DNS_ERROR` and `error`; several SPF records or a syntax error are still `ESP_SPF_PERMERROR`.
+- **DKIM selectors** at `<selector>._domainkey.<domain>`: a `cname` selector must be a CNAME
+  whose chain (at most 8 hops) reaches a target that fits the profile's `target_pattern`
+  (a `*` label is exactly one DNS label; no pattern: any target fits); a `txt` selector must
+  hold a TXT record. A record of the other type is `ESP_DKIM_WRONG_TYPE`.
+- **Return path / tracking domain** at the hosts entered with the assignment: the expected
+  record type must exist. Profiles carry no target for these, so only the type is compared.
+  No host entered: `ESP_HOST_NOT_CONFIGURED`.
+- **Combined SPF lookup budget**: when two or more assigned ESPs with verified includes are
+  found in the SPF tree, the tree's lookup count is attributed to them
+  (`ESP_SPF_COMBINED_OVER_LIMIT` above 10, `ESP_SPF_COMBINED_NEAR_LIMIT` from 9). With two or
+  more such ESPs, any DNS failure or truncation in the tree adds one `ESP_DNS_ERROR` with part
+  `spf.lookups` naming all of them (`esp` "A, B"). With one, only a failure or a truncation
+  (a record or query a cap stopped, state `truncated`) at or below its own include hosts does
+  (`esp` that ESP); a failure elsewhere in the tree is the SPF check's.
+- **Detection**: the loaded profiles that are not assigned are probed for their verified SPF
+  include hosts (on the same SPF tree) and their verified `cname` selectors with a
+  `target_pattern` (one CNAME query each, first target only, at most 32 names, 8 in flight).
+  A hit is `ESP_DETECTED_NOT_ASSIGNED` (a possibly stale configuration); hits are listed in
+  `data["detection"]`. TXT selectors and CNAME selectors without a pattern are never used for
+  detection (they cannot be attributed to one ESP).
+
+**`error` semantics.** Only NXDOMAIN and NODATA count as absence. Any other DNS state on a name
+the check needs (servfail, refused, timeout, truncated, malformed, network_error, blocked,
+error), a name that cannot be built, an SPF tree with a DNS failure or truncated by a cap (when
+an include was not found, at or below an ESP's include host, or for the lookup budget), or an SPF record `resolve_spf` cannot follow
+(several records, syntax error: `ESP_SPF_PERMERROR`) makes that part not evaluated and the
+result `error`, never `ok` and never "missing". In detection, a failed DKIM probe makes the
+result `error` and stops new probes; an SPF tree with a failure, truncation or permerror makes
+it `error` when a candidate with verified includes cannot be ruled out. A profile id stored for the domain that is no longer loaded
+adds `ESP_PROFILE_UNAVAILABLE` and makes the result `error`; profiles that cannot be loaded, or
+a repository failure, give `CHECK_INTERNAL_ERROR` (status `error`).
+
+**Unverified fields.** A profile with status `unverified` adds `ESP_PROFILE_UNVERIFIED` (info,
+evidence the unverified fields). The parts named in `unverified_fields` (and their children)
+are not queried and get no verdict: their state is `skipped_unverified` and they are listed in
+the section's `skipped`. Unverified fields are never used for detection, and an unverified
+pitfall is not reported.
+
+No ESP assigned: `ESP_NONE_ASSIGNED` (info) plus any detection findings.
+
+| Code | Severity | Notes |
+|---|---|---|
+| `ESP_SPF_INCLUDE_MISSING` | high | include host not in the SPF tree |
+| `ESP_SPF_PERMERROR` | high (status `error`) | include not found and a record in the tree is a permerror |
+| `ESP_DKIM_RECORD_MISSING` | high | selector name absent |
+| `ESP_DKIM_TARGET_MISMATCH` | medium | no CNAME in the chain fits `target_pattern`; `reason` `chain_end`, `loop`, `empty_target` or `hop_limit` |
+| `ESP_DKIM_WRONG_TYPE` | medium | TXT where a CNAME is expected, or the reverse |
+| `ESP_RETURN_PATH_MISSING` | medium (info if the profile marks it optional) | NXDOMAIN at the return-path host |
+| `ESP_RETURN_PATH_MISMATCH` | medium (info if optional) | the host exists without the expected record type |
+| `ESP_TRACKING_MISSING` | low (info if optional) | NXDOMAIN at the tracking host |
+| `ESP_TRACKING_MISMATCH` | low (info if optional) | the host exists without the expected record type |
+| `ESP_HOST_NOT_CONFIGURED` | info | no return-path or tracking host entered for the assignment |
+| `ESP_PROFILE_UNVERIFIED` | info | the profile has unverified fields (not evaluated) |
+| `ESP_PITFALL` | info | static advice from the profile; the declared severity is only a param |
+| `ESP_NONE_ASSIGNED` | info | no ESP assigned to the domain |
+| `ESP_DNS_ERROR` | low (status `error`) | params name, record type and state |
+| `ESP_SPF_COMBINED_OVER_LIMIT` | high | two or more assigned ESPs, SPF over 10 lookups or truncated |
+| `ESP_SPF_COMBINED_NEAR_LIMIT` | low | two or more assigned ESPs, 9 or 10 lookups |
+| `ESP_DETECTED_NOT_ASSIGNED` | low | DNS records of a loaded ESP that is not assigned |
+| `ESP_DETECTION_TRUNCATED` | low | detection stopped at the 32-name DKIM cap (partial) |
+| `ESP_PROFILE_UNAVAILABLE` | low (status `error`) | assigned profile id no longer loaded (`app/services/domain_esps.py`) |
+
+None of these cite an RFC section: they compare DNS with the ESP profile data. The acceptance
+tests in `tests/esp/test_acceptance.py` run every shipped profile against a zone built from the
+profile (`tests/esp/dns_builder.py`) and its mutations; `tests/api/test_esp_acceptance.py`
+covers assignment and run end to end.
+
 ## Surfaces
 
 All three call `app/services/checks.py` and print the same `CheckResult` JSON.
