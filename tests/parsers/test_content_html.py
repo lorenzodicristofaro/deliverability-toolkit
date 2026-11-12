@@ -347,12 +347,17 @@ def test_hidden_reasons_linear_on_adversarial_values(make: Callable[[int], str])
     "make", [m for _, m in _ADVERSARIAL_STYLES], ids=[i for i, _ in _ADVERSARIAL_STYLES]
 )
 def test_parse_content_linear_on_adversarial_styles(make: Callable[[int], str]) -> None:
+    cap = ContentLimits().max_style_chars
+
     def call(n: int) -> Callable[[], object]:
-        html = f'<p style="{make(n)}">x</p>'
+        style = make(n)
+        # Every size, 4n included, stays under the per-attribute cap so the hidden-text test runs.
+        assert len(style) <= cap
+        html = f'<p style="{style}">x</p>'
         return lambda: parse_content(html, None)
 
-    # 2,000 and 8,000 chars: under the per-attribute cap, so the hidden-text test runs.
-    assert growth(call, 2_000) < _GROWTH_LIMIT
+    # n = 1,000 and 4,000: rows with two runs reach about 8,000 chars at 4n, still under the cap.
+    assert growth(call, 1_000) < _GROWTH_LIMIT
 
 
 @pytest.mark.parametrize(
