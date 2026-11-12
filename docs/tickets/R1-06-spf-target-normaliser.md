@@ -16,7 +16,8 @@ Acceptance criteria:
 - docs/CHECKS.md states which target rule the SPF tree uses and that DKIM/ESP CNAME targets are intentionally stricter.
 - No network; no wall clock. ruff, mypy, relevant tests green.
 New i18n keys: none
-Status: todo
+Status: done
+Outcome: reproduced (40 table cases + include:spf_c.example.net gave SPF_SYNTAX_ERROR without fetching); fixed in merge 9386afa (private _spf_target in spf_tree.py, tree builds its TXT question directly, same resolver/classify); QA APPROVE (Opus); dev CI green.
 
 ## Review details (copied from the code review of 2026-11-12, dev 06869fb)
 - Location: `app/checks/spf_tree.py:333-337` (`to_dns_name(raw)` -> `invalid_target=True`), `app/checks/spf.py:139-141` (`invalid_target` -> `SPF_SYNTAX_ERROR`, high), `app/core/domain_names.py:106-124` (`_LABEL_RE`: LDH with one optional leading underscore).

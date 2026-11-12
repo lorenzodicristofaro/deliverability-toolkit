@@ -191,8 +191,8 @@ Tickets (docs/tickets/):
 - [x] R1-03 AUTH-02 login throttle: per-IP limit, argon2 concurrency bound, eviction reset; includes the "Per-IP cap on throttle keys" item (opus)
 - [x] R1-04 AUTH-03 compose.yaml forwards BASE_URL and the other documented settings (sonnet)
 - [x] R1-05 DNS-01 DMARC inherited policy uses sp (sonnet)
-- [ ] R1-06 DNS-02 SPF tree own domain-spec target normaliser (opus)
-- [ ] R1-07 DNS-03 trace reports an unfinished CNAME chain (opus); following the CNAME is a follow-up
+- [x] R1-06 DNS-02 SPF tree own domain-spec target normaliser (opus)
+- [x] R1-07 DNS-03 trace reports an unfinished CNAME chain (opus); following the CNAME is a follow-up
 - [ ] R1-08 DNS-04 DKIM non-key TXT is not a found selector, one aggregated finding (sonnet)
 - [ ] R1-09 PARSE-02 alignment: dkim=none is no signature; spf from the resinfo with smtp.mailfrom (opus)
 - [ ] R1-10 PARSE-03 error status always carries an explaining finding (sonnet; depends R1-09)
@@ -221,6 +221,8 @@ Follow-ups:
 - R1-03 follow-up: login throttle limits (IP_MAX_ATTEMPTS, MAX_CONCURRENT_VERIFICATIONS, VERIFICATION_WAIT) are module constants; behind a reverse proxy the per-IP budget is shared by all users until the trusted-proxy item lands; consider settings.
 - R1-04 follow-up: optional startup warning for a non-localhost http:// BASE_URL; parity test could also assert every forwarded Settings field is documented.
 - R1-05 follow-up: inherited-sp scenario in tests/checks/test_acceptance_m3.py; assert the PCT_PARTIAL p argument in the sp-pct row.
+- R1-06 follow-up: comment in app/checks/dnsutil.py fetch_txt noting the SPF tree builds its TXT question directly; the SPF parser still accepts empty/over-long labels and names that the tree rejects as invalid_target.
+- R1-07 follow-up: follow the CNAME target in the trace (restart from the root within budgets); a CNAME from a non-AA server ends the trace instead of trying the next server; trace.py:556 uses getattr where ServerReply has the fields.
 Not ticketed — maintainer:
 - AUTH-04 (trusted proxy, remote lockout): folded into the existing item "Trusted-proxy setting for the client IP" in Follow-ups; no ticket.
 - INFRA-01 (push-policy deny rules, no server-side ruleset for tags and dev) and INFRA-02 (workflow file can raise its own token rights): touch `.claude/settings.json`, push and permission policy; maintainer decision.

@@ -18,7 +18,8 @@ Acceptance criteria:
 - API/UI test for the new outcome (translated label in it, hostile target text escaped).
 - Hand-built dnspython messages, no network, no wall clock. ruff, mypy, relevant tests green.
 New i18n keys: one label key for the new trace outcome (name follows the existing trace outcome key pattern; the coder states it), en + it.
-Status: todo
+Status: done
+Outcome: reproduced (AA reply with only a cross-zone CNAME gave nodata; trace ended nodata); fixed in merge fffce90 (new trace outcome `cname`, state ok, chain + target reported, not followed); QA APPROVE (Opus); dev CI green.
 
 ## Review details (copied from the code review of 2026-11-12, dev 06869fb)
 - Location: `app/dns/backends.py:242-265` (`_follow_chain` returns `None` with a non-empty CNAME chain), `app/dns/backends.py:325-335` (`interpret_response` -> `nodata`), `app/dns/trace.py:540-561` (authoritative `nodata` ends the trace as outcome `nodata`).
