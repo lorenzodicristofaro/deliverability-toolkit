@@ -205,7 +205,7 @@ Tickets (docs/tickets/):
 - [ ] R1-16 AUTH-11 Cache-Control no-store centrally (sonnet)
 - [ ] R1-17 DNS-05 SPF terms after `all` not counted (opus)
 - [ ] R1-18 DNS-06 drop the 255-octet SPF_RECORD_TOO_LONG info branch (opus)
-- [ ] R1-19 DNS-07 empty reply without RA is an error (sonnet; confidence low) — PARKED: maintainer decision (code path reproduced, real-world trigger unverified)
+- [ ] R1-19 DNS-07 empty reply without RA is an error (sonnet; confidence low) — maintainer 2026-11-12: precautionary rule (a)
 - [ ] R1-20 PARSE-04 `dtk check` escapes control characters (sonnet)
 - [ ] R1-21 PARSE-05 Received from_ip prefers the TCP-info comment (opus)
 - [ ] R1-22 PARSE-06 forged lower Authentication-Results field (opus; depends R1-09; design decision first)
