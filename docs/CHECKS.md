@@ -337,8 +337,9 @@ the web denies them); it does not protect the instance from its operator.
   is `unverified` and no provider is claimed. A selector that is not in the list is not probed, so
   a DKIM result never proves DKIM is absent.
 - **Public Suffix List licence.** The organizational-domain lookup (DMARC fallback and same-org
-  report destinations) uses the PSL; its licence is recorded as `unverified` in
-  `seeds/public_suffix_source.yaml` and the maintainer still has to confirm it.
+  report destinations) uses the PSL; its licence (MPL-2.0) is recorded as verified in
+  `seeds/public_suffix_source.yaml`: the LICENSE text at github.com/publicsuffix/list was read on
+  2026-11-12 and the maintainer accepts it.
 - **No persistence.** Results are not stored: there is no history, scheduling or diff, and each
   request or page view runs the checks again.
 - No per-user rate limiting yet: one request can fan out many DNS queries (the DKIM probe).
