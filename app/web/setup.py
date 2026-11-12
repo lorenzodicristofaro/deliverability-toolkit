@@ -17,7 +17,8 @@
   itself (token, CSRF, 404 once a user exists).
 - GET/POST /setup: 404 once setup is not required. POST needs the CSRF double-submit token
   (CSRFMiddleware) and the setup token; token attempts share the login throttle
-  (`app.web.auth.login_throttle`) under a fixed account key. Success creates the instance admin,
+  (`app.web.auth.login_throttle`) under a fixed account key, including its per-IP limit (one
+  budget per client IP for login and setup attempts, R1-03). Success creates the instance admin,
   the optional first tenant with an owner membership, and logs the admin in.
 
 Logs never carry the password, and the token appears only in the single issuance line.
