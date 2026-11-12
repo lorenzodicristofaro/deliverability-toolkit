@@ -313,6 +313,38 @@ async def test_invalid_txt_reason(record: str | None, reason: str) -> None:
     assert alt == [{"state": "invalid", "selector": "ml00", "reason": reason}]
 
 
+@pytest.mark.parametrize("state", [ResultState.servfail, ResultState.timeout])
+async def test_cname_failure_txt_ok_keeps_failure_detail(state: ResultState) -> None:
+    """The ml00 TXT decides the OR, so no finding; the ml01 failure stays visible in data."""
+    r, _ = await _run(_zone({ML01: state, ML00: [KEY]}), [MAILUP])
+    assert _failures(r) == []
+    assert r.status == "info"
+    (section,) = r.data["esps"]
+    assert section["dkim_satisfied_by"] == "alternatives.0"
+    ml01 = next(p for p in section["dkim"] if p["selector"] == "ml01")
+    assert ml01 == {
+        "state": "error",
+        "selector": "ml01",
+        "name": ML01[0],
+        "rdtype": "CNAME",
+        "failure": str(state),
+    }
+
+
+async def test_ml00_failure_detail_in_data() -> None:
+    r, _ = await _run(_zone({**NO_CNAMES, ML00: ResultState.timeout}), [MAILUP])
+    (alt,) = r.data["esps"][0]["dkim_alternatives"]
+    assert alt == [
+        {
+            "state": "error",
+            "selector": "ml00",
+            "name": ML00[0],
+            "rdtype": "TXT",
+            "failure": str(ResultState.timeout),
+        }
+    ]
+
+
 async def test_ml00_dns_failure_names_the_alternative_part() -> None:
     r, _ = await _run(_zone({**NO_CNAMES, ML00: ResultState.servfail}), [MAILUP])
     (err,) = [f for f in r.findings if f.code == "ESP_DNS_ERROR"]

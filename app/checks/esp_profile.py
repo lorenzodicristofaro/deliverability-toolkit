@@ -38,7 +38,8 @@ unverified with `EspProfile.is_verified`):
   finds valid and not revoked, else `invalid` with `reason` `multiple_records`, `revoked` or
   `syntax_error`; `cname` follows the rules above. Outcome:
   - a set satisfied: no DKIM finding (DNS errors of the sets tried before it are dropped: the
-    OR is decided);
+    OR is decided); their `error` parts in `data` keep `name`, `rdtype` and `failure` (the DNS
+    state, e.g. `servfail`), as every DKIM `error` part does;
   - none satisfied and a DNS error in a set tried: only the `ESP_DNS_ERROR` findings (part
     `dkim.selectors.<name>` or `dkim.alternatives.<name>`), result `error`;
   - none satisfied, all answered and every set verified: one `ESP_DKIM_NO_OPTION_SATISFIED`
@@ -385,6 +386,22 @@ def _one_esp_lookups(run: _Run, esp: EspProfile, tree: SpfTree) -> None:
 # --- DKIM ---------------------------------------------------------------------------------------
 
 
+def _dkim_error(
+    run: _Run,
+    esp: EspProfile,
+    part: str,
+    sel: DkimSelector,
+    name: str,
+    rdtype: str,
+    failure: str,
+    **extra: Any,
+) -> dict[str, Any]:
+    """Report the DNS failure and return the `error` part with its detail (name, record type,
+    failure state), kept in `data` even when a later DKIM set decides the result (M6-23)."""
+    run.dns_error(esp, part, name, rdtype, failure)
+    return _part("error", selector=sel.name, name=name, rdtype=rdtype, failure=failure, **extra)
+
+
 async def _follow_cname(
     run: _Run, esp: EspProfile, sel: DkimSelector, name: str, first: str, part: str
 ) -> dict[str, Any]:
@@ -406,11 +423,9 @@ async def _follow_cname(
         try:
             nxt = await fetch_cname(run.ctx.resolver, current)
         except InvalidDomainName:
-            run.dns_error(esp, part, current, "CNAME", "invalid_name")
-            return _part("error", selector=sel.name, chain=chain)
+            return _dkim_error(run, esp, part, sel, current, "CNAME", "invalid_name", chain=chain)
         if not nxt.evaluated:
-            run.dns_error(esp, part, current, "CNAME", str(nxt.state))
-            return _part("error", selector=sel.name, chain=chain)
+            return _dkim_error(run, esp, part, sel, current, "CNAME", str(nxt.state), chain=chain)
         if nxt.target is None:
             break
         chain.append(nxt.target)
@@ -463,15 +478,13 @@ async def _dkim_one(
         if sel.type == "cname":
             cname = await fetch_cname(run.ctx.resolver, name)
             if not cname.evaluated:
-                run.dns_error(esp, part, name, "CNAME", str(cname.state))
-                return _part("error", selector=sel.name)
+                return _dkim_error(run, esp, part, sel, name, "CNAME", str(cname.state))
             if cname.target is not None:
                 return await _follow_cname(run, esp, sel, name, cname.target, part)
             if cname.state == "nodata":
                 txt = await fetch_txt(run.ctx.resolver, name)
                 if not txt.evaluated:
-                    run.dns_error(esp, part, name, "TXT", str(txt.state))
-                    return _part("error", selector=sel.name)
+                    return _dkim_error(run, esp, part, sel, name, "TXT", str(txt.state))
                 if txt.records:
                     run.findings.append(
                         finding("ESP_DKIM_WRONG_TYPE", "medium", {**params, "found": "TXT"})
@@ -480,8 +493,7 @@ async def _dkim_one(
         else:
             txt = await fetch_txt(run.ctx.resolver, name)
             if not txt.evaluated:
-                run.dns_error(esp, part, name, "TXT", str(txt.state))
-                return _part("error", selector=sel.name)
+                return _dkim_error(run, esp, part, sel, name, "TXT", str(txt.state))
             if txt.records:
                 problem = _key_problem(txt.records) if validate_key else None
                 if problem is not None:
@@ -490,16 +502,14 @@ async def _dkim_one(
             if txt.state == "nodata":
                 cname = await fetch_cname(run.ctx.resolver, name)
                 if not cname.evaluated:
-                    run.dns_error(esp, part, name, "CNAME", str(cname.state))
-                    return _part("error", selector=sel.name)
+                    return _dkim_error(run, esp, part, sel, name, "CNAME", str(cname.state))
                 if cname.target is not None:
                     run.findings.append(
                         finding("ESP_DKIM_WRONG_TYPE", "medium", {**params, "found": "CNAME"})
                     )
                     return _part("wrong_type", selector=sel.name)
     except InvalidDomainName:
-        run.dns_error(esp, part, name, sel.type.upper(), "invalid_name")
-        return _part("error", selector=sel.name)
+        return _dkim_error(run, esp, part, sel, name, sel.type.upper(), "invalid_name")
     run.findings.append(finding("ESP_DKIM_RECORD_MISSING", "high", params))
     return _part("missing", selector=sel.name)
 
