@@ -126,6 +126,17 @@ across conflicting vendor sources.
   every job. `qa` pushes run nothing. A path-filtered or skipped workflow reports no check at all, so a
   required check can stay Pending on a pull request that skips it (how the ruleset treats this is unverified).
   `codeql.yml` (M6-15) runs CodeQL on `main` pushes, pull requests to `main` and weekly; not a required check.
+- pip-audit (M6-24): `pip-audit.yml` audits `uv.lock` (`uv export --frozen ... --all-groups`, then pinned
+  `uvx pip-audit --no-deps --disable-pip`) and fails on any known vulnerability. `ci.yml` calls it as the
+  `pip-audit` job, so it runs on `dev`/`main` pushes and pull requests and is skipped for docs-only changes like
+  the test jobs (maintainer decision 2026-11-12). New advisories appear without code changes, so the file also
+  runs weekly (Mondays) on its own; scheduled workflows run from `main`, so the schedule starts after the next
+  `qa` -> `main` promotion. Not a required check.
+- Red pip-audit: first bump the dependency (`uv lock --upgrade-package <name>`, with a regression test where
+  the advisory is reachable). If no fixed version exists, add a time-boxed ignore: `--ignore-vuln <GHSA id>` on
+  the pip-audit command, with a comment next to the flag (GHSA id, reason, expiry date), and the same three
+  facts in the commit message. Maximum 90 days; remove the flag when it expires or the fix ships. No silent
+  ignores.
 - Coder, PM and QA never push. `main`, tags, releases, force pushes and branch deletions stay with the human.
 - Enforced in two layers. Client side, `.claude/settings.json`: exact allow rules for `git push origin dev|qa`,
   deny rules for `main`, tags, force, `--all`, `--mirror`, delete refspecs, and for `gh pr merge`, `gh release`,
