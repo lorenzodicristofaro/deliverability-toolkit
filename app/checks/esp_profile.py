@@ -29,6 +29,24 @@ unverified with `EspProfile.is_verified`):
     `loop`, `empty_target` or `hop_limit` (the chain may continue past the limit).
   - `txt`: a TXT record is ok (also when served through a CNAME); none and a CNAME at the name
     is `wrong_type`; none and no CNAME is missing.
+- `dkim.alternatives` (M6-23), only for a profile that declares alternative selector sets: the
+  DKIM part is satisfied when every primary selector is `ok`, OR every selector of one
+  alternative set is. Each set is evaluated apart and its findings are kept only as decided
+  here. Primary satisfied: no alternative is queried (`not_required`). Otherwise the fully
+  verified sets are tried in order until one is satisfied (the rest are `not_required`). In an
+  alternative, a `txt` selector is `ok` only for exactly one TXT record that `parse_dkim_key`
+  finds valid and not revoked, else `invalid` with `reason` `multiple_records`, `revoked` or
+  `syntax_error`; `cname` follows the rules above. Outcome:
+  - a set satisfied: no DKIM finding (DNS errors of the sets tried before it are dropped: the
+    OR is decided);
+  - none satisfied and a DNS error in a set tried: only the `ESP_DNS_ERROR` findings (part
+    `dkim.selectors.<name>` or `dkim.alternatives.<name>`), result `error`;
+  - none satisfied, all answered and every set verified: one `ESP_DKIM_NO_OPTION_SATISFIED`
+    (high) whose params list the primary set (`selectors`) and the alternatives
+    (`alternatives`), evidence the names queried; the per-selector DKIM findings are not added;
+  - none satisfied and a set skipped as unverified: no verdict (the skip is listed).
+  `data` adds `dkim_alternatives` (one list of parts per set) and `dkim_satisfied_by`
+  (`selectors`, `alternatives.<index>` or None) for such profiles only.
 - `return_path` / `tracking_domain` at the assignment's host (`ESP_HOST_NOT_CONFIGURED` when
   unknown): the expected type is queried; NXDOMAIN is missing, NODATA (the name exists but holds
   no record of that type) is a mismatch. Profiles carry no target for these, so the type is all
@@ -95,6 +113,7 @@ from app.checks.spf_tree import LOOKUP_LIMIT, SpfTree, resolve_spf
 from app.core.domain_names import InvalidDomainName, to_ascii_domain, to_dns_name
 from app.dns.types import DnsQuestion
 from app.esp.profile import DkimSelector, EspProfile, RecordExpectation
+from app.parsers.dkim import parse_dkim_key
 
 CODES: tuple[str, ...] = (
     "ESP_SPF_INCLUDE_MISSING",
@@ -102,6 +121,7 @@ CODES: tuple[str, ...] = (
     "ESP_DKIM_RECORD_MISSING",
     "ESP_DKIM_TARGET_MISMATCH",
     "ESP_DKIM_WRONG_TYPE",
+    "ESP_DKIM_NO_OPTION_SATISFIED",
     "ESP_RETURN_PATH_MISSING",
     "ESP_RETURN_PATH_MISMATCH",
     "ESP_TRACKING_MISSING",
@@ -127,6 +147,8 @@ PartState = Literal[
     "not_configured",
     "skipped_unverified",
     "no_record",
+    "invalid",
+    "not_required",
 ]
 
 
@@ -364,10 +386,9 @@ def _one_esp_lookups(run: _Run, esp: EspProfile, tree: SpfTree) -> None:
 
 
 async def _follow_cname(
-    run: _Run, esp: EspProfile, sel: DkimSelector, name: str, first: str
+    run: _Run, esp: EspProfile, sel: DkimSelector, name: str, first: str, part: str
 ) -> dict[str, Any]:
     """Follow the chain from `first` until a target fits the selector's pattern."""
-    part = f"dkim.selectors.{sel.name}"
     pattern = sel.target_pattern
     chain = [first]
     seen = {name, first}
@@ -415,8 +436,27 @@ async def _follow_cname(
     return _part("mismatch", selector=sel.name, chain=chain, reason=reason)
 
 
-async def _dkim_one(run: _Run, esp: EspProfile, sel: DkimSelector) -> dict[str, Any]:
-    part = f"dkim.selectors.{sel.name}"
+def _key_problem(records: Sequence[str]) -> str | None:
+    """Why the TXT records at an alternative `txt` selector are not one usable DKIM key."""
+    if len(records) != 1:
+        return "multiple_records"
+    key = parse_dkim_key(records[0])
+    if not key.is_valid:
+        return "syntax_error"
+    if key.revoked:
+        return "revoked"
+    return None
+
+
+async def _dkim_one(
+    run: _Run,
+    esp: EspProfile,
+    sel: DkimSelector,
+    part_prefix: str = "dkim.selectors",
+    *,
+    validate_key: bool = False,
+) -> dict[str, Any]:
+    part = f"{part_prefix}.{sel.name}"
     name = f"{sel.name}._domainkey.{run.domain}"
     params = {"esp": esp.name, "selector": sel.name, "name": name, "type": sel.type.upper()}
     try:
@@ -426,7 +466,7 @@ async def _dkim_one(run: _Run, esp: EspProfile, sel: DkimSelector) -> dict[str, 
                 run.dns_error(esp, part, name, "CNAME", str(cname.state))
                 return _part("error", selector=sel.name)
             if cname.target is not None:
-                return await _follow_cname(run, esp, sel, name, cname.target)
+                return await _follow_cname(run, esp, sel, name, cname.target, part)
             if cname.state == "nodata":
                 txt = await fetch_txt(run.ctx.resolver, name)
                 if not txt.evaluated:
@@ -443,6 +483,9 @@ async def _dkim_one(run: _Run, esp: EspProfile, sel: DkimSelector) -> dict[str, 
                 run.dns_error(esp, part, name, "TXT", str(txt.state))
                 return _part("error", selector=sel.name)
             if txt.records:
+                problem = _key_problem(txt.records) if validate_key else None
+                if problem is not None:
+                    return _part("invalid", selector=sel.name, reason=problem)
                 return _part("ok", selector=sel.name)
             if txt.state == "nodata":
                 cname = await fetch_cname(run.ctx.resolver, name)
@@ -459,6 +502,95 @@ async def _dkim_one(run: _Run, esp: EspProfile, sel: DkimSelector) -> dict[str, 
         return _part("error", selector=sel.name)
     run.findings.append(finding("ESP_DKIM_RECORD_MISSING", "high", params))
     return _part("missing", selector=sel.name)
+
+
+def _options_text(sels: Sequence[DkimSelector]) -> str:
+    return ", ".join(f"{s.name} ({s.type.upper()})" for s in sels)
+
+
+async def _dkim_set(
+    run: _Run, esp: EspProfile, sels: Sequence[DkimSelector], prefix: str, *, validate_key: bool
+) -> tuple[list[dict[str, Any]], _Run]:
+    """Evaluate one selector set on its own collector (findings decided by the caller)."""
+    sub = _Run(run.ctx, run.domain)
+    parts = [
+        await _dkim_one(sub, esp, s, prefix, validate_key=validate_key)
+        for s in sorted(sels, key=lambda s: s.name)
+    ]
+    return parts, sub
+
+
+async def _dkim_with_alternatives(
+    run: _Run, esp: EspProfile, section: dict[str, Any], skipped: list[str]
+) -> None:
+    """Primary selectors OR one alternative set (module docstring)."""
+    sorted_primary = sorted(esp.dkim_selectors, key=lambda s: s.name)
+    verified = [s for s in sorted_primary if esp.is_verified(f"dkim.selectors.{s.name}")]
+    primary_verified = len(verified) == len(sorted_primary)
+    evaluated, sub = await _dkim_set(run, esp, verified, "dkim.selectors", validate_key=False)
+    done = {p["selector"]: p for p in evaluated}
+    primary: list[dict[str, Any]] = []
+    for s in sorted_primary:
+        if s.name in done:
+            primary.append(done[s.name])
+        else:
+            primary.append(_part("skipped_unverified", selector=s.name))
+            skipped.append(f"dkim.selectors.{s.name}")
+    section["dkim"] = primary
+    tried: list[_Run] = [sub]
+    unverified_set = not primary_verified
+    satisfied_by: str | None = None
+    if primary_verified and all(p["state"] == "ok" for p in primary):
+        satisfied_by = "selectors"
+    alternatives: list[list[dict[str, Any]]] = []
+    for i, alt in enumerate(esp.dkim_alternatives):
+        names = sorted(s.name for s in alt)
+        if satisfied_by is not None:
+            alternatives.append([_part("not_required", selector=n) for n in names])
+            continue
+        paths = [f"dkim.alternatives.{n}" for n in names]
+        if not all(esp.is_verified(p) for p in paths):
+            unverified_set = True
+            skipped.extend(paths)
+            alternatives.append([_part("skipped_unverified", selector=n) for n in names])
+            continue
+        parts, alt_run = await _dkim_set(run, esp, alt, "dkim.alternatives", validate_key=True)
+        alternatives.append(parts)
+        tried.append(alt_run)
+        if all(p["state"] == "ok" for p in parts):
+            satisfied_by = f"alternatives.{i}"
+    section["dkim_alternatives"] = alternatives
+    section["dkim_satisfied_by"] = satisfied_by
+    if satisfied_by is not None:
+        return
+    failed = [r for r in tried if not r.evaluated]
+    if failed:
+        run.evaluated = False
+        run.findings.extend(f for r in failed for f in r.findings if f.code == "ESP_DNS_ERROR")
+        return
+    if unverified_set:
+        return
+    run.findings.append(
+        finding(
+            "ESP_DKIM_NO_OPTION_SATISFIED",
+            "high",
+            {
+                "esp": esp.name,
+                "domain": run.domain,
+                "selectors": _options_text(sorted_primary),
+                "alternatives": "; ".join(
+                    _options_text(sorted(alt, key=lambda s: s.name))
+                    for alt in esp.dkim_alternatives
+                ),
+            },
+            [f"{s.name}._domainkey.{run.domain}" for s in sorted_primary]
+            + [
+                f"{s.name}._domainkey.{run.domain}"
+                for alt in esp.dkim_alternatives
+                for s in sorted(alt, key=lambda s: s.name)
+            ],
+        )
+    )
 
 
 # --- return path / tracking domain --------------------------------------------------------------
@@ -526,14 +658,17 @@ async def _profile(run: _Run, esp: EspProfile, hosts: EspHosts) -> dict[str, Any
         section["spf"] = _part("skipped_unverified")
         skipped.append("spf.includes")
 
-    dkim: list[dict[str, Any]] = []
-    for sel in sorted(esp.dkim_selectors, key=lambda s: s.name):
-        if esp.is_verified(f"dkim.selectors.{sel.name}"):
-            dkim.append(await _dkim_one(run, esp, sel))
-        else:
-            dkim.append(_part("skipped_unverified", selector=sel.name))
-            skipped.append(f"dkim.selectors.{sel.name}")
-    section["dkim"] = dkim
+    if esp.dkim_alternatives:
+        await _dkim_with_alternatives(run, esp, section, skipped)
+    else:
+        dkim: list[dict[str, Any]] = []
+        for sel in sorted(esp.dkim_selectors, key=lambda s: s.name):
+            if esp.is_verified(f"dkim.selectors.{sel.name}"):
+                dkim.append(await _dkim_one(run, esp, sel))
+            else:
+                dkim.append(_part("skipped_unverified", selector=sel.name))
+                skipped.append(f"dkim.selectors.{sel.name}")
+        section["dkim"] = dkim
 
     for part, expect, host in (
         ("return_path", esp.return_path, hosts.return_path_host),
