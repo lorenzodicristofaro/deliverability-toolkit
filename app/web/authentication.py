@@ -23,6 +23,7 @@ from app.checks.models import CheckContext
 from app.core.permissions import Action, DomainResource, can
 from app.services.checks import run_checks
 from app.services.domains import DomainServiceError, Forbidden
+from app.web.deps import DbDep
 from app.web.dns_tools import visible
 from app.web.domains import WebDep, _denied, _domain_id
 from app.web.templating import env, render
@@ -51,12 +52,14 @@ env.tests["https_url"] = https_only
 
 @router.get("/domains/{domain_id}/authentication", include_in_schema=False)
 async def authentication_tab(
-    request: Request, web: WebDep, resolver: ResolverDep, domain_id: str
+    request: Request, web: WebDep, db: DbDep, resolver: ResolverDep, domain_id: str
 ) -> Response:
     try:
         view = web.service.get(_domain_id(domain_id))
     except DomainServiceError as exc:
         return _denied(request, exc)
+    finally:
+        db.rollback()  # `view` holds plain values: no pooled connection is held during DNS
     principal = web.service.principal
     if not can(principal, Action.CHECK_RUN, DomainResource(web.ctx.tenant_id, view.id)):
         return _denied(request, Forbidden())
