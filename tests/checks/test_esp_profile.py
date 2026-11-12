@@ -774,3 +774,23 @@ def _assert_params_cover_placeholders(r: CheckResult) -> None:
         for key in (f.title_key, f.detail_key, f.remediation_key):
             assert key is not None
             assert placeholders(en[key]) <= set(f.params), (key, f.params)
+
+
+# --- R1-08: a primary `txt` selector answered by a non-DKIM TXT is not ok ----------------------
+
+
+@pytest.mark.parametrize(
+    ("records", "state"),
+    [
+        (["v=spf1 -all"], "missing"),
+        (["google-site-verification=abc"], "missing"),
+        (["x=1; note=p=2"], "missing"),
+        (["v=spf1 -all", "v=DKIM1; k=rsa; p=AAAA"], "ok"),
+        (["v=DKIM1; p=!!!"], "ok"),  # malformed candidate: primary keeps the minimal test
+        ([" V = dkim1 ; p=AAAA"], "ok"),
+    ],
+)
+async def test_primary_txt_selector_needs_a_key_candidate(records: list[str], state: str) -> None:
+    r, _ = await _run(_apply({K1: records}))
+    assert _dkim(r, "k1")["state"] == state
+    assert ("ESP_DKIM_RECORD_MISSING" in _codes(r)) is (state == "missing")

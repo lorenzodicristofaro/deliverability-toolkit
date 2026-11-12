@@ -106,6 +106,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Final, Literal
 
+from app.checks.dkim import is_dkim_key_candidate
 from app.checks.dnsutil import classify, fetch_cname, fetch_txt
 from app.checks.esp_detection import SpfView, detect
 from app.checks.models import CheckContext, CheckResult, Finding, Severity, Target, finding
@@ -494,7 +495,9 @@ async def _dkim_one(
             txt = await fetch_txt(run.ctx.resolver, name)
             if not txt.evaluated:
                 return _dkim_error(run, esp, part, sel, name, "TXT", str(txt.state))
-            if txt.records:
+            # A primary selector needs at least a DKIM key candidate; a TXT that is not one (a
+            # wildcard answer) is no key: fall through to "missing". Alternatives validate fully.
+            if txt.records and (validate_key or any(map(is_dkim_key_candidate, txt.records))):
                 problem = _key_problem(txt.records) if validate_key else None
                 if problem is not None:
                     return _part("invalid", selector=sel.name, reason=problem)

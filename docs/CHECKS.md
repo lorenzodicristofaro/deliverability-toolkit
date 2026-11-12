@@ -44,6 +44,12 @@ A check is a class with a string `id` and `async run(ctx: CheckContext, target: 
   one selector is found, the status follows the findings. If none is found and any failed, the
   status is `error`. `DKIM_NO_SELECTOR_FOUND` appears only when every selector was `not_found`.
   A probe cut short by the stream deadline is `error`.
+  A TXT record counts as a DKIM key candidate if it starts with `v=DKIM1` (case and spaces
+  tolerated) or has a `p=` tag; a malformed candidate is still `DKIM_KEY_SYNTAX_ERROR`. A selector
+  whose TXT records are all non-candidates (typically a wildcard TXT such as `v=spf1 -all`) is
+  `not_found`, with no syntax error; ONE `DKIM_NON_KEY_TXT` (info) per run gives the count and up
+  to 20 selector names with a truncated text. In `esp` checks a primary `txt` selector answered
+  only by non-candidates is missing, not ok.
   An empty list (every selector disabled) probes nothing: status `error` with
   `DKIM_NO_SELECTORS_PROBED`, never a verdict about the domain. A list cut by the probe cap is
   incomplete: status `error` with `DKIM_SELECTORS_CAPPED`, and `data["dropped"]` gives the number.
@@ -152,6 +158,7 @@ follows the section 6.6.3 step 6 path as before.
 | `DKIM_PROBE_ERRORS` | low | none |
 | `DKIM_NO_SELECTORS_PROBED` | low | none |
 | `DKIM_SELECTORS_CAPPED` | low | none |
+| `DKIM_NON_KEY_TXT` | info | none |
 
 For DKIM the finding texts cite the RFCs without section numbers, so none are given here
 (`unverified`: the maintainer should add the sections after checking the RFC text).

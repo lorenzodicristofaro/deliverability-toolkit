@@ -464,3 +464,149 @@ async def test_seed_notes_never_reach_a_result() -> None:
     assert long_notes
     for notes in long_notes:
         assert notes not in text
+
+
+# --- R1-08: a TXT record that is not a DKIM key is not a found selector --------------------------
+
+KEY = "v=DKIM1; k=ed25519; p=11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo="
+
+
+class _Wild:
+    """Zone with a wildcard TXT: every ``*.example.com`` name answers ``wild``; ``exact`` names
+    answer their own list; ``empty`` names (empty non-terminals) answer NODATA."""
+
+    identity = "wild"
+
+    def __init__(
+        self,
+        wild: list[str],
+        exact: dict[str, list[str]] | None = None,
+        empty: tuple[str, ...] = (),
+    ) -> None:
+        self.wild, self.exact, self.empty = wild, exact or {}, empty
+
+    async def resolve(self, q: DnsQuestion) -> DnsResult:
+        if q.rdtype != "TXT" or q.name in self.empty:
+            return DnsResult(q, ResultState.nodata)
+        data = self.exact.get(q.name, self.wild)
+        recs = tuple(DnsRecord(q.name, "TXT", 60, d) for d in data)
+        return DnsResult(q, ResultState.ok, recs) if recs else DnsResult(q, ResultState.nodata)
+
+
+def _count(r: CheckResult, code: str) -> int:
+    return sum(f.code == code for f in r.findings)
+
+
+@pytest.mark.parametrize("text", ["v=spf1 -all", "google-site-verification=abc"])
+async def test_wildcard_txt_is_not_a_found_selector(text: str) -> None:
+    r = await DkimCheck(["default", "google", "s1"]).run(
+        _ctx(_Wild([text])), Target(domain="a.example.com")
+    )
+    assert r.data["found"] == 0
+    assert _codes(r) == {"DKIM_NO_SELECTOR_FOUND", "DKIM_NON_KEY_TXT"}
+    assert _count(r, "DKIM_NON_KEY_TXT") == 1
+    f = next(f for f in r.findings if f.code == "DKIM_NON_KEY_TXT")
+    assert f.severity == "info"
+    assert f.params["count"] == 3
+    assert f.evidence == (f"default: {text}", f"google: {text}", f"s1: {text}")
+    assert r.status == "info"
+    assert all(s["state"] == "not_found" for s in r.data["selectors"])
+
+
+async def test_mixed_zone_real_key_and_wildcard_text() -> None:
+    wild = _Wild(["v=spf1 -all"], {"google._domainkey.a.example.com": [KEY]})
+    r = await DkimCheck(["default", "google", "s1"]).run(_ctx(wild), Target(domain="a.example.com"))
+    assert r.data["found"] == 1
+    assert _sel(r, "google")["state"] == "found"
+    assert _sel(r, "default")["state"] == "not_found"
+    assert "DKIM_NO_SELECTOR_FOUND" not in _codes(r)
+    assert "DKIM_KEY_SYNTAX_ERROR" not in _codes(r)
+    non_key = next(f for f in r.findings if f.code == "DKIM_NON_KEY_TXT")
+    assert non_key.params["count"] == 2
+
+
+async def test_non_key_txt_next_to_a_key_at_the_same_selector_is_ignored() -> None:
+    wild = _Wild([], {"s1._domainkey.a.example.com": ["v=spf1 -all", KEY]})
+    r = await DkimCheck(["s1"]).run(_ctx(wild), Target(domain="a.example.com"))
+    assert _sel(r, "s1")["state"] == "found"
+    assert "DKIM_MULTIPLE_RECORDS" not in _codes(r)
+    assert "DKIM_NON_KEY_TXT" not in _codes(r)
+
+
+@pytest.mark.parametrize(
+    "record",
+    [
+        "v=DKIM1; p=!!!notbase64",
+        "v=DKIM1",
+        "v=DKIM1; k=rsa",
+        "p=!!!",
+        "k=rsa; p=%%%",
+        "  V = dkim1 ; k=rsa; p=@@@",
+        "V=DKIM1;p=@@@",
+        " p = @@@",
+    ],
+)
+async def test_malformed_candidates_stay_found_with_syntax_error(record: str) -> None:
+    r = await DkimCheck(["s1"]).run(_ctx(_Wild([record])), Target(domain="a.example.com"))
+    assert _sel(r, "s1")["state"] == "found"
+    assert "DKIM_NON_KEY_TXT" not in _codes(r)
+    assert "DKIM_KEY_SYNTAX_ERROR" in _codes(r)
+
+
+@pytest.mark.parametrize(
+    ("record", "expected"),
+    [
+        ("v=DKIM1; k=rsa; p=AAAA", True),
+        ("V=dkim1", True),
+        ("  v = DKIM1;", True),
+        ("k=rsa; p=AAAA", True),
+        ("p=", True),
+        ("P=AAAA", True),
+        ("v=spf1 -all", False),
+        ("google-site-verification=abc", False),
+        ("x=1; note=p=2", False),  # p= inside another value
+        ("v=spf1 include:p=x.example.com -all", False),
+        ("help=p", False),
+        ("", False),
+        (";;;", False),
+        ("v=DKIM", False),
+        ("=p=", False),
+        ("tag-like text; not=a key", False),
+    ],
+)
+def test_is_dkim_key_candidate(record: str, expected: bool) -> None:
+    assert dkim_mod.is_dkim_key_candidate(record) is expected
+
+
+async def test_empty_non_terminal_domainkey_is_not_found_without_non_key_finding() -> None:
+    wild = _Wild([], empty=("s1._domainkey.a.example.com",))
+    r = await DkimCheck(["s1"]).run(_ctx(wild), Target(domain="a.example.com"))
+    assert _codes(r) == {"DKIM_NO_SELECTOR_FOUND"}
+
+
+async def test_non_key_evidence_is_capped_truncated_and_sanitised() -> None:
+    names = [f"s{i}" for i in range(250)]
+    text = "v=spf1\n" + "x" * 500
+    r = await DkimCheck(names).run(_ctx(_Wild([text])), Target(domain="a.example.com"))
+    f = next(f for f in r.findings if f.code == "DKIM_NON_KEY_TXT")
+    assert f.params["count"] == 250
+    assert len(f.evidence) == dkim_mod.MAX_NON_KEY_EVIDENCE
+    for line in f.evidence:
+        assert "\n" not in line
+        assert len(line) <= len("s249: ") + dkim_mod.MAX_NON_KEY_TEXT + 3
+    assert _count(r, "DKIM_NON_KEY_TXT") == 1
+
+
+async def test_dns_failure_still_error_with_non_key_selectors() -> None:
+    class Mixed(_Wild):
+        async def resolve(self, q: DnsQuestion) -> DnsResult:
+            if q.name.startswith("bad."):
+                return DnsResult(q, ResultState.servfail)
+            return await super().resolve(q)
+
+    r = await DkimCheck(["bad", "s1"]).run(
+        _ctx(Mixed(["v=spf1 -all"])), Target(domain="a.example.com")
+    )
+    assert r.status == "error"
+    assert "DKIM_PROBE_ERRORS" in _codes(r)
+    assert "DKIM_NO_SELECTOR_FOUND" not in _codes(r)

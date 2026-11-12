@@ -35,6 +35,7 @@ into a result: selector ``notes`` are admin data and never reach a result.
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 from collections import deque
 from collections.abc import AsyncIterator, Iterable, Mapping, Sequence
@@ -61,12 +62,37 @@ CODES: tuple[str, ...] = (
     "DKIM_PROBE_ERRORS",
     "DKIM_NO_SELECTORS_PROBED",
     "DKIM_SELECTORS_CAPPED",
+    "DKIM_NON_KEY_TXT",
 )
 
 # ARCHITECTURE section 6: bounded concurrency, every selector probed.
 PROBE_CONCURRENCY = 8
 MAX_CNAME_DEPTH = 8
 RSA_WEAK_BITS = 1024
+# DKIM_NON_KEY_TXT evidence: at most this many selectors, each text cut to this many characters.
+MAX_NON_KEY_EVIDENCE = 20
+MAX_NON_KEY_TEXT = 80
+
+_V_DKIM1 = re.compile(r"\s*v\s*=\s*dkim1", re.IGNORECASE)
+_CONTROL = re.compile(r"[\x00-\x1f\x7f]")
+
+
+def is_dkim_key_candidate(record: str) -> bool:
+    """Minimal test: is this TXT record meant to be a DKIM key (valid or not)?
+
+    True if it starts with ``v=DKIM1`` (case and spaces tolerated) or has a ``p`` tag in its
+    ``;``-separated tag list. Anything else (an SPF record, a site-verification string) is a TXT
+    record that is not a DKIM key. It says nothing about validity: a malformed candidate is still
+    a candidate and gets the parser's syntax errors.
+    """
+    if _V_DKIM1.match(record):
+        return True
+    for tag in record.split(";"):
+        name, eq, _ = tag.partition("=")
+        if eq and name.strip().lower() == "p":
+            return True
+    return False
+
 
 SelectorState = Literal["found", "not_found", "error"]
 
@@ -82,6 +108,7 @@ class SelectorResult:
     key_type: str | None = None
     bits: int | None = None
     provider: str | None = None  # who operates the selector, from the selector list; never notes
+    non_key_records: tuple[str, ...] = ()  # TXT present but none is a DKIM key (state not_found)
 
 
 def seed_providers() -> dict[str, str]:
@@ -115,13 +142,18 @@ async def _follow(ctx: CheckContext, selector: str, name: str) -> SelectorResult
         if not txt.evaluated:
             return _error(selector, name, chain, str(txt.state))
         if txt.records:
-            key = parse_dkim_key(txt.records[0])
+            candidates = tuple(r for r in txt.records if is_dkim_key_candidate(r))
+            if not candidates:  # e.g. a wildcard TXT: something answers, but not a key
+                return SelectorResult(
+                    selector, name, "not_found", chain=tuple(chain), non_key_records=txt.records
+                )
+            key = parse_dkim_key(candidates[0])
             return SelectorResult(
                 selector,
                 name,
                 "found",
                 chain=tuple(chain),
-                records=txt.records,
+                records=candidates,
                 key_type=key.key_type,
                 bits=key.bits,
             )
@@ -216,6 +248,13 @@ def _key_findings(sel: dict[str, Any], key: DkimKey) -> list[Finding]:
     return out
 
 
+def _non_key_evidence(r: SelectorResult) -> str:
+    text = _CONTROL.sub("?", r.non_key_records[0])
+    if len(text) > MAX_NON_KEY_TEXT:
+        text = text[:MAX_NON_KEY_TEXT] + "..."
+    return f"{r.selector}: {text}"
+
+
 def _selector_data(res: SelectorResult) -> dict[str, Any]:
     return {
         "selector": res.selector,
@@ -258,6 +297,16 @@ def summarize(
     if dropped:
         findings.append(
             finding("DKIM_SELECTORS_CAPPED", "low", {"probed": len(names), "dropped": dropped})
+        )
+    non_key = [r for r in ordered if r.non_key_records]
+    if non_key:
+        findings.append(
+            finding(
+                "DKIM_NON_KEY_TXT",
+                "info",
+                {"count": len(non_key), "total": len(ordered)},
+                [_non_key_evidence(r) for r in non_key[:MAX_NON_KEY_EVIDENCE]],
+            )
         )
     if complete:
         if failed:
