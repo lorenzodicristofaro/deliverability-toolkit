@@ -5,8 +5,8 @@ text renderers (CLI text, web templates) call :func:`display_params` before form
 finding's templates, so tokens that are not meant to be read raw become localized phrases:
 
 - ``reason`` of ``ESP_SPF_PERMERROR`` and ``ESP_DKIM_TARGET_MISMATCH``;
-- ``part`` of ``ESP_DNS_ERROR`` and ``ESP_HOST_NOT_CONFIGURED`` (``dkim.selectors.<name>`` names
-  the selector);
+- ``part`` of ``ESP_DNS_ERROR`` and ``ESP_HOST_NOT_CONFIGURED`` (``dkim.selectors.<name>`` and,
+  M6-23, ``dkim.alternatives.<name>`` name the selector);
 - ``pitfall`` of ``ESP_PITFALL`` becomes the profile's note (``params.notes_key``) plus the code.
 
 An unknown token keeps its raw value. A missing or unknown ``notes_key`` gives a localized
@@ -24,6 +24,7 @@ DKIM_SELECTOR_PART_KEY: Final = "checks.esp.part.dkim_selector"
 PITFALL_WITH_NOTE_KEY: Final = "checks.esp.pitfall.with_note"
 PITFALL_NO_NOTE_KEY: Final = "checks.esp.pitfall.no_note"
 DKIM_SELECTOR_PART_PREFIX: Final = "dkim.selectors."
+DKIM_ALTERNATIVE_PART_PREFIX: Final = "dkim.alternatives."
 
 _PARTS: Final[Mapping[str, str]] = {
     "spf.includes": "checks.esp.part.spf_includes",
@@ -51,11 +52,13 @@ TOKEN_KEYS: Final[Mapping[tuple[str, str], Mapping[str, str]]] = {
 
 
 def _dkim_part(value: str, lang: str) -> str:
-    """``dkim.selectors.<name>`` -> "the DKIM selector <name>"; anything else stays raw."""
-    if value.startswith(DKIM_SELECTOR_PART_PREFIX):
-        selector = value[len(DKIM_SELECTOR_PART_PREFIX) :]
-        if selector:
-            return t(DKIM_SELECTOR_PART_KEY, lang, selector=selector)
+    """``dkim.selectors.<name>`` or ``dkim.alternatives.<name>`` -> "the DKIM selector <name>";
+    anything else stays raw."""
+    for prefix in (DKIM_SELECTOR_PART_PREFIX, DKIM_ALTERNATIVE_PART_PREFIX):
+        if value.startswith(prefix):
+            selector = value[len(prefix) :]
+            if selector:
+                return t(DKIM_SELECTOR_PART_KEY, lang, selector=selector)
     return value
 
 
