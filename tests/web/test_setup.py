@@ -387,7 +387,7 @@ def test_setup_requires_csrf(env: Env, running: Running) -> None:
 
 
 def test_oversized_body_is_refused(env: Env, running: Running) -> None:
-    response = _post(running, tenant_name="a" * 5000)
+    response = _post(running, tenant_name="a" * 9000)
     assert response.status_code == 413
     assert _count(env, User) == 0
 

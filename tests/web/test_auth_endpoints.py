@@ -265,7 +265,7 @@ def test_missing_fields_and_bad_bodies(world: World) -> None:
     headers = {"X-CSRF-Token": token, "Content-Type": "application/x-www-form-urlencoded"}
     for body in [b"", b"email=&password=", b"\xff\xfe", b"email=a&email=b&password=x"]:
         assert world.client.post("/login", content=body, headers=headers).status_code == 401
-    too_big = b"email=a&pad=" + b"a" * 5000
+    too_big = b"email=a&pad=" + b"a" * 9000
     assert world.client.post("/login", content=too_big, headers=headers).status_code == 413
 
 
@@ -623,7 +623,7 @@ def test_switch_body_too_large(world: World) -> None:
     token = _session_token(world)
     response = world.client.post(
         "/tenants/switch",
-        content=b"tenant_id=1&pad=" + b"a" * 5000,
+        content=b"tenant_id=1&pad=" + b"a" * 9000,
         headers={"X-CSRF-Token": token, "Content-Type": "application/x-www-form-urlencoded"},
     )
     assert response.status_code == 413

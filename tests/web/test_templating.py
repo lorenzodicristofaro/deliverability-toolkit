@@ -259,7 +259,7 @@ def test_language_post_header_token_and_bad_utf8(client: TestClient) -> None:
     assert response.status_code == 303
     big = client.post(
         "/language",
-        content=b"lang=it&pad=" + b"a" * 5000,
+        content=b"lang=it&pad=" + b"a" * 9000,
         headers={"X-CSRF-Token": token, "Content-Type": "application/x-www-form-urlencoded"},
     )
     assert big.status_code == 413
@@ -363,7 +363,7 @@ def test_404_page_is_translated(client: TestClient, accept: str, title: str) -> 
 def test_404_for_api_clients_stays_json(client: TestClient) -> None:
     response = client.get("/nope", headers={"Accept": "application/json"})
     assert response.status_code == 404
-    assert response.json() == {"detail": "Not Found"}
+    assert response.json() == {"detail": "Not found."}
 
 
 @pytest.mark.parametrize(

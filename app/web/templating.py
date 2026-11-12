@@ -12,6 +12,7 @@ are capped at `MAX_FORM_BYTES` and invalid UTF-8 yields an empty form.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from http.cookies import CookieError, SimpleCookie
 from pathlib import Path
 from typing import Any, Final
@@ -33,7 +34,9 @@ TEMPLATES_DIR: Final = WEB_DIR / "templates"
 STATIC_DIR: Final = WEB_DIR / "static"
 LANGUAGE_COOKIE: Final = "dt_lang"
 LANGUAGE_COOKIE_MAX_AGE: Final = 365 * 24 * 3600
-MAX_FORM_BYTES: Final = 4096
+# Sized for the setup form maxima: 2 x 128-character passwords, a 200-character tenant name and a
+# 254-character email, worst case 12 bytes per character once percent-encoded (about 6 KB).
+MAX_FORM_BYTES: Final = 8192
 APP_NAME: Final = "Deliverability Toolkit"
 # Percent-decoding rounds applied by safe_next (catches /%2F%2F and double encoding).
 _NEXT_DECODE_ROUNDS: Final = 3
@@ -195,6 +198,27 @@ def render(request: Request, template: str, status_code: int = 200, **context: A
     return response
 
 
+def error_page(
+    request: Request, status_code: int, key: str, headers: Mapping[str, str] | None = None
+) -> HTMLResponse:
+    """Translated generic error page (`ui.error.<key>.title/.detail`). Never shows request data."""
+    response = render(
+        request,
+        "errors/generic.html",
+        status_code=status_code,
+        title_key=f"ui.error.{key}.title",
+        detail_key=f"ui.error.{key}.detail",
+    )
+    for name, value in (headers or {}).items():
+        response.headers[name] = value
+    return response
+
+
+def payload_too_large(request: Request) -> HTMLResponse:
+    """The localized 413 page for a small form over MAX_FORM_BYTES (replaces an empty 413)."""
+    return error_page(request, 413, "too_large")
+
+
 def render_server_error(scope: Scope) -> bytes:
     """Translated 500 page for the security-headers fallback. No request object, no CSRF token,
     no exception details. May raise; the caller falls back to the plain response."""
@@ -243,7 +267,7 @@ async def switch_language(request: Request) -> Response:
     CSRF is enforced by the middleware (token in the form body or X-CSRF-Token)."""
     form = await read_form(request)
     if form is None:
-        return Response(status_code=413)
+        return payload_too_large(request)
     lang = form_value(form, "lang")
     target = safe_next(form_value(form, "next"))
     response = RedirectResponse(target, status_code=303)

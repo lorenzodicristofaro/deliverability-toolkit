@@ -280,7 +280,7 @@ def test_trace_cname_outcome_rendered_and_escaped(world: World, lang: str) -> No
 
 
 def test_trace_oversized_is_413(world: World) -> None:  # noqa: F811
-    assert post(world, "analyst", TRACE, {"name": "a" * 5000}).status_code == 413
+    assert post(world, "analyst", TRACE, {"name": "a" * 9000}).status_code == 413
 
 
 def test_trace_request_deadline_is_not_an_answer(
@@ -437,7 +437,7 @@ def test_propagation_too_many_ids_and_oversized(world: World) -> None:  # noqa: 
     body = "name=example.com&type=A&" + "&".join(f"resolver_ids=r{i}" for i in range(9))
     r = post(world, "analyst", PROP, content=body.encode())
     assert r.status_code == 422
-    assert post(world, "analyst", PROP, {"name": "a" * 5000}).status_code == 413
+    assert post(world, "analyst", PROP, {"name": "a" * 9000}).status_code == 413
 
 
 def test_propagation_too_many_targets_has_its_own_message(
