@@ -210,7 +210,7 @@ Tickets (docs/tickets/):
 - [ ] R1-21 PARSE-05 Received from_ip prefers the TCP-info comment (opus)
 - [ ] R1-22 PARSE-06 forged lower Authentication-Results field (opus; depends R1-09; design decision first)
 - [ ] R1-23 PARSE-07 message analyzer One-Click via the List-Unsubscribe parser (sonnet) — PARKED mid-fix (usage limit), reproduced (15 tests)
-- [x] R1-24 PARSE-08 To/Cc counts from raw values (sonnet) — dev CI pending at 07e0a0f
+- [x] R1-24 PARSE-08 To/Cc counts from raw values (sonnet)
 - [ ] R1-25 INFRA-03 postgres compose profile: URL, retry, CI smoke (sonnet; depends R1-04)
 - [ ] R1-26 INFRA-04 pin app image bases by digest, rebuild check (sonnet; digests need network)
 - [ ] R1-27 INFRA-05 run Docker jobs for app/ and locales/ changes (sonnet)

@@ -4,7 +4,7 @@ Resume with `/gm`. No coder or QA agent is running. Current milestone: **R1 — 
 (TODO.md, before M7; tickets docs/tickets/R1-*.md). M7 starts after R1.
 
 ## State
-- `dev` at 07e0a0f (pushed). CI green up to 33ef234; CI for 07e0a0f (R1-24 merge) pending at handoff — check it first.
+- `dev` at 07e0a0f (pushed). CI green at 07e0a0f.
 - `qa` a4cd8a7 and `main` 9d793cb unchanged (nothing goes to qa/main in R1, maintainer instruction).
 - Review source (read-only, never merge): /home/lorenzo/projects/dt-review-2026-11-12, branch review/code-review-2026-11-12.
 - Every finding is reproduced by a failing test before any fix; not reproducible -> stop, mark "not reproduced", report.
@@ -12,7 +12,7 @@ Resume with `/gm`. No coder or QA agent is running. Current milestone: **R1 — 
 ## R1 ticket status
 - Done (QA APPROVE, merged, dev CI green): R1-01 PARSE-01, R1-02 AUTH-01, R1-03 AUTH-02, R1-04 AUTH-03, R1-05 DNS-01,
   R1-06 DNS-02, R1-07 DNS-03, R1-08 DNS-04, R1-09 PARSE-02, R1-10 PARSE-03, R1-11 AUTH-06, R1-19 DNS-07, R1-20 PARSE-04.
-- Done, CI pending: R1-24 PARSE-08 (merge 07e0a0f).
+- Also done, CI green: R1-24 PARSE-08 (merge 07e0a0f).
 - Parked:
   - R1-16 AUTH-11 Cache-Control: branch feature/r1-16-cache-control-no-store, commit e88efe5 (base 33ef234). Opus QA was
     interrupted by the limit; rerun QA from scratch. Open question for QA: the rule keys on the dt_session cookie; check
@@ -36,9 +36,9 @@ Resume with `/gm`. No coder or QA agent is running. Current milestone: **R1 — 
   becomes global behind a proxy until then).
 - PARSE-03 leniency: should an Authentication-Results field without authserv-id count as evaluated?
 - docs/CHECKS.md vs app/checks/dmarc.py:121-122 (failed external-auth lookup: error vs fail).
-- Housekeeping: about 150 stale agent worktrees under .claude/worktrees from M0-M6 and R1; propose removing the merged ones.
+- Housekeeping done 2026-11-13: 151 merged agent worktrees removed (branches kept); kept R1-16, R1-23 and two locked merged ones (R1-07, R1-08 round 1).
 
 ## Next 3 steps
-1. Check CI for 07e0a0f; then rerun Opus QA on R1-16 (e88efe5) and finish R1-23.
+1. Rerun Opus QA on R1-16 (e88efe5) and finish R1-23.
 2. Continue the low tickets in TODO order (R1-12, R1-13, R1-14, ...), one or two coders on disjoint files.
 3. At R1 end: full suite on dev, short report docs/reports/R1.md, maintainer report (fixed / not reproduced / escalated / open).

@@ -23,4 +23,4 @@ Status: done
 - Tests to add: one row with an encoded display name containing `=2C`, one with an encoded `<` and `@` in the display name.
 - Confidence: high.
 
-Outcome: reproduced (4 of 12 rows); fixed in merge 07e0a0f (count from raw_value); QA APPROVE (Opus); dev CI pending at handoff.
+Outcome: reproduced (4 of 12 rows); fixed in merge 07e0a0f (count from raw_value); QA APPROVE (Opus); dev CI green.
