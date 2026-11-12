@@ -20,4 +20,4 @@ Acceptance criteria:
 - Lint clean: `uv run ruff check . && uv run ruff format --check . && uv run mypy app`; relevant tests only (non-code ticket per docs/WORKFLOW.md section 3; CI is the full-suite gate).
 
 New i18n keys: none
-Status: todo
+Status: done (merged 348959d, QA APPROVE; dev CI green)

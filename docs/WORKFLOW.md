@@ -92,6 +92,9 @@ relevant tests instead of the full suite; the GM skips a local full suite on the
 PostgreSQL) is the full-suite gate. Such tickets default to `sonnet` for coder and QA unless the data needs judgement
 across conflicting vendor sources.
 
+QA worktree rule (GM, 2026-11-12): `qa-reviewer` reviews in its own temporary git worktree and never checks out a
+branch in the main working tree (a QA run once left the main tree on a detached HEAD).
+
 ## 4. Loop
 
 1. GM reads CLAUDE.md, WORKFLOW.md, TODO.md and `docs/HANDOFF.md` (if present).

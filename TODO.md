@@ -140,10 +140,10 @@ Carried over from M0-07 QA:
   - [x] M5-25 acceptance tests + docs/CONTENT.md
 
 ## M6 — ESP profiles
-- [ ] YAML schema + CI validation, loader, per-domain ESP assignment
-- [ ] Profile checks (SPF include, DKIM CNAMEs, return-path, tracking domain)
-- [ ] Initial profiles verified against official docs, incl. MailUp/TeamSystem and other Italian ESPs
-- [ ] Contributor guide for adding a profile
+- [x] YAML schema + CI validation, loader, per-domain ESP assignment
+- [x] Profile checks (SPF include, DKIM CNAMEs, return-path, tracking domain)
+- [x] Initial profiles verified against official docs, incl. MailUp/TeamSystem and other Italian ESPs
+- [x] Contributor guide for adding a profile
 - Accept: each profile has `verified_on` + sources; sample domains produce expected findings.
 - Tickets (docs/tickets/):
   - [x] M6-00 CI: fewer billed Actions minutes (no CI on qa, path-filtered infra jobs)
@@ -176,9 +176,10 @@ Carried over from M0-07 QA:
   - [x] M6-22 docs: record the xato.net dataset terms (public domain, Mark Burnett) in the password list header and THIRD_PARTY_NOTICES, add attribution (sonnet; resolves the "MAINTAINER TO CONFIRM ... xato.net" item below)
   - [ ] M6-21 nit (QA, optional): tests/dns/test_backends.py:229-247 — add a pointer-chain variant whose chain resolves to the qname itself, to prove a vulnerable parser cannot yield a spoofed ok.
   - [x] pip-audit as a CI job on dev: APPROVED by the maintainer 2026-11-12 -> M6-24
-  - [ ] M6-23 MailUp DKIM: ml01+ml02 CNAMEs OR ml00 TXT, alternative selector sets in the ESP schema (opus; maintainer decision 2026-11-12)
-  - [ ] M6-24 CI: pip-audit job on every dev push and PR plus weekly run (sonnet, parallel-safe)
-  - [ ] M6-25 knowledge data: PSL licence MPL-2.0 and Gmail clip size 102,400 marked verified (sonnet, parallel-safe)
+  - [x] M6-23 MailUp DKIM: ml01+ml02 CNAMEs OR ml00 TXT, alternative selector sets in the ESP schema (opus; maintainer decision 2026-11-12); merged 99e408b, QA APPROVE
+  - [x] M6-24 CI: pip-audit job on dev pushes and PRs (skips docs-only pushes) plus weekly run on main (sonnet); merged 2336d26, QA APPROVE
+  - [x] M6-25 knowledge data: PSL licence MPL-2.0 and Gmail clip size 102,400 marked verified (sonnet); merged 348959d, QA APPROVE
+  - M6 closed 2026-11-12. Report: docs/reports/M6.md
   - Dependabot (resolved 2026-11-12): the two open alerts (#1 pyproject.toml, #2 uv.lock) are the same advisory GHSA-45c3-73f7-pv4m, fixed by M6-21 (dnspython 2.9.2, on main since PR #2 9d793cb). The "second unidentified alert" item is closed; the alerts should close on the next Dependabot scan.
 
 ## M7 — Monitoring
@@ -195,8 +196,6 @@ Carried over from M0-07 QA:
 - Accept: real-world report samples parsed; zip-bomb and XXE tests pass.
 
 ## M9 — Integrations and extra records
-- [ ] Google Postmaster Tools (OAuth, per domain) — verify current API first
-- [ ] Microsoft SNDS — verify current access method first
 - [ ] BIMI (SVG Tiny-PS + VMC/CMC), MTA-STS, TLS-RPT, DANE, DNSSEC view
 - [ ] Provider requirements checklist (Gmail/Yahoo/Microsoft) as dated data
 - [ ] Optional SMTP module (off by default)
@@ -205,6 +204,12 @@ Carried over from M0-07 QA:
 - [ ] Share links, tenant branding, PDF/CSV/JSON export, audit log UI, TOTP, API keys
 - [ ] Docs site, OpenAPI, install guides (Docker, Unraid/Synology/Proxmox notes), screenshots
 - [ ] Security review checklist, dependency/license audit, v0.1.0 release
+- Note: v0.1.0 ships without the M11 integrations (Postmaster Tools, SNDS).
+
+## M11 — External reputation integrations
+Maintainer decision 2026-11-12: moved from M9; no test domains or access yet, and the rest must work first. SPEC unchanged (both already optional, no milestone in SPEC).
+- [ ] Google Postmaster Tools (OAuth, per domain) — verify current API first
+- [ ] Microsoft SNDS — verify current access method first
 
 ## Follow-ups (post-M1)
 - Maintainer principle 2026-11-11 (ESP profiles): the known-record checks exist mainly to find which records a domain already has and associate them with an ESP; the seed/profile list is a convenient starting point for the best-known providers; whether a vendor marks a record required or optional matters little, because if a record is missing the client is told to add it. Vendor required/optional disputes are not escalated.
@@ -214,7 +219,7 @@ Carried over from M0-07 QA:
 - [x] MAINTAINER (M6-10): Brevo-blocked part resolved by M6-16. Italian of esp.google_workspace.* and esp.microsoft_365.* APPROVED as is by the maintainer 2026-11-12 (Microsoft labels kept in English: the it-it page is inconsistent).
 - [x] MAINTAINER (M6-08 vendor facts, unverified): resolved by M6-16. SendGrid link-branding/tracking CNAME (host, target, optional); Mailgun DKIM selector name, tracking host, whether Automatic Sender Security/key rotation makes DKIM a CNAME, whether the tracking CNAME is required with tracking off. Maintainer is collecting the official pages (2026-11-11).
 - [x] MAINTAINER (M6-16): the Mailgun tracking CNAME optional/required confirmation is closed by the maintainer principle above (2026-11-11). Italian of esp.brevo.*, esp.mailgun.*, esp.sendgrid.tracking APPROVED as is by the maintainer 2026-11-12.
-- [ ] ESP schema gaps (M6-16, later milestone): per-domain generated DKIM selector names (Mailgun TXT, Mailgun ASS pdk-like CNAMEs); DKIM "TXT or CNAME" alternatives (Brevo, Mailgun, SendGrid m1 vs s1/s2); verification TXT records (Brevo code); target for tracking_domain/return_path; Brevo new-flow branded CNAMEs (help article 35337929909778, "only available to some accounts").
+- [ ] ESP schema gaps (M6-16, later milestone): per-domain generated DKIM selector names (Mailgun TXT, Mailgun ASS pdk-like CNAMEs); DKIM "TXT or CNAME" alternatives (the mechanism exists since M6-23, `dkim.alternatives`; applying it to Brevo, Mailgun and SendGrid m1 vs s1/s2 is open and needs official sources); verification TXT records (Brevo code); target for tracking_domain/return_path; Brevo new-flow branded CNAMEs (help article 35337929909778, "only available to some accounts").
 - [x] DKIM seed (M6-16): brevo1/brevo2 confirmed on help.brevo.com; adding them needs `"help.brevo.com": "brevo"` in `_VENDOR_HOSTS` in tests/checks/test_dkim_selectors.py. Moved to M6-18.
 - [ ] SendGrid domain-authentication page documentation error recorded (M6-16 QA): it says "To route click and open tracking statistics ... Twilio SendGrid requires this CNAME record" under the bullet describing the s1/s2 DKIM CNAMEs, and mentions a selector "s" while the table uses s1/s2; profile values follow the table. "optional" for link branding rests on "If you choose No, you can add Link Branding later".
 - [ ] M6-17 QA nits: (a) docs/templates/esp-profile.example.yaml: add a commented `only_if_record` line pointing to the docs/ESP_PROFILES.md table (new opt-in field `spf.only_if_record`, used only by MailUp). (b) locales/it.json:227 `esp.mailup.spf_only_if_published`: avoid repeating "il DMARC" (e.g. "...perché verifica l'SPF sul dominio del return-path..."); nit (b) CLOSED 2026-11-12: the maintainer approved the Italian as is. (c) Optional test: opt-in profile with an "ok" DNS answer carrying no TXT records (classified as error), same path as the existing failure-state test.

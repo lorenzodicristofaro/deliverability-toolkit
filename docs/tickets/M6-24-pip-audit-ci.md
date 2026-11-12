@@ -7,7 +7,7 @@ Depends on: M6-21 (merged)
 Parallel-safe: yes with M6-23 and M6-25 (disjoint files)
 Model: sonnet. QA model: sonnet (CI config only, no secrets; QA checks pins and permissions by hand).
 
-Goal: maintainer approved 2026-11-12. Turn the manual dependency audit into a CI gate. New advisories appear without code changes, so the job must not be skipped on docs-only pushes.
+Goal: maintainer approved 2026-11-12. Scope change (maintainer 2026-11-12, overrides the lines below): skip docs-only pushes/PRs like the test jobs; the weekly scheduled run covers new advisories. Turn the manual dependency audit into a CI gate. New advisories appear without code changes, so the job must not be skipped on docs-only pushes.
 
 Change:
 - Add a `pip-audit` job to .github/workflows/ci.yml, running on every push to dev and every PR, not behind the docs-only path filter that skips the test jobs.
@@ -27,4 +27,4 @@ Acceptance criteria:
 - Real proof is the first dev CI run after merge (GM checks).
 
 New i18n keys: none
-Status: todo
+Status: done (merged 2336d26, QA APPROVE; dev CI green, pip-audit job green on its first dev run)

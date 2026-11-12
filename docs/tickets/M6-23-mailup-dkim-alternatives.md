@@ -28,4 +28,4 @@ Acceptance criteria (table-driven, no network):
 
 New i18n keys: reworded `esp.mailup.dkim_txt_alternative` (en + it); possibly one key for the "both options expected" message (coder to name; en + it). Italian wording for new text goes to the maintainer review.
 Unverified external fact: the ml00 behaviour rests on the maintainer's statement of 2026-11-12, not on a checked official page.
-Status: todo
+Status: done (merged 99e408b, QA APPROVE twice; full suite SQLite 24769 / PG 30513 passed on dbf6768, targeted re-check green on 2d5e20c; dev CI green on 99e408b)
