@@ -48,7 +48,10 @@ A check is a class with a string `id` and `async run(ctx: CheckContext, target: 
   tolerated) or has a `p=` tag; a malformed candidate is still `DKIM_KEY_SYNTAX_ERROR`. A selector
   whose TXT records are all non-candidates (typically a wildcard TXT such as `v=spf1 -all`) is
   `not_found`, with no syntax error; ONE `DKIM_NON_KEY_TXT` (info) per run gives the count and up
-  to 20 selector names with a truncated text. In `esp` checks a primary `txt` selector answered
+  to 20 selector names with a truncated text. A selector with at least one candidate is `found`:
+  every TXT record at the name still counts for `DKIM_MULTIPLE_RECORDS` (a verifier may pick the
+  non-key one), while key findings (syntax, size, revoked, test mode) look at candidates only.
+  In `esp` checks a primary `txt` selector answered
   only by non-candidates is missing, not ok.
   An empty list (every selector disabled) probes nothing: status `error` with
   `DKIM_NO_SELECTORS_PROBED`, never a verdict about the domain. A list cut by the probe cap is

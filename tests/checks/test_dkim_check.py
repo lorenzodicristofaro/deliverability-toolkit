@@ -525,11 +525,17 @@ async def test_mixed_zone_real_key_and_wildcard_text() -> None:
     assert non_key.params["count"] == 2
 
 
-async def test_non_key_txt_next_to_a_key_at_the_same_selector_is_ignored() -> None:
+async def test_non_key_txt_next_to_a_key_at_the_same_selector_is_multiple_records() -> None:
+    """A verifier may pick either record: every TXT at the name counts (R1-08 QA)."""
     wild = _Wild([], {"s1._domainkey.a.example.com": ["v=spf1 -all", KEY]})
     r = await DkimCheck(["s1"]).run(_ctx(wild), Target(domain="a.example.com"))
     assert _sel(r, "s1")["state"] == "found"
-    assert "DKIM_MULTIPLE_RECORDS" not in _codes(r)
+    multi = [f for f in r.findings if f.code == "DKIM_MULTIPLE_RECORDS"]
+    assert len(multi) == 1
+    assert multi[0].severity == "medium"
+    assert sorted(multi[0].evidence) == sorted(["v=spf1 -all", KEY])
+    # key findings only for the candidate: the SPF text is no syntax error
+    assert "DKIM_KEY_SYNTAX_ERROR" not in _codes(r)
     assert "DKIM_NON_KEY_TXT" not in _codes(r)
 
 

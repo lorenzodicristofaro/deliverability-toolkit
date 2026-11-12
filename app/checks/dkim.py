@@ -103,7 +103,7 @@ class SelectorResult:
     name: str
     state: SelectorState
     chain: tuple[str, ...] = ()  # CNAME targets followed, in order
-    records: tuple[str, ...] = ()  # TXT records at the end of the chain
+    records: tuple[str, ...] = ()  # every TXT record at the end of the chain (state found)
     reason: str | None = None  # why the state is ``error``
     key_type: str | None = None
     bits: int | None = None
@@ -153,7 +153,7 @@ async def _follow(ctx: CheckContext, selector: str, name: str) -> SelectorResult
                 name,
                 "found",
                 chain=tuple(chain),
-                records=candidates,
+                records=txt.records,  # all of them: a verifier may pick a non-key one
                 key_type=key.key_type,
                 bits=key.bits,
             )
@@ -224,7 +224,7 @@ def _selector_findings(res: SelectorResult) -> list[Finding]:
         return out
     if len(res.records) > 1:
         out.append(finding("DKIM_MULTIPLE_RECORDS", "medium", sel, res.records))
-    for raw in res.records:
+    for raw in filter(is_dkim_key_candidate, res.records):  # key findings: candidates only
         out.extend(_key_findings(sel, parse_dkim_key(raw)))
     return out
 
