@@ -50,7 +50,8 @@ Callers MUST check ``reply.referral`` BEFORE ``reply.result.state``: a referral 
 placeholder state ``nodata`` and is never "missing". ``ServerReply.authoritative`` carries the AA
 flag (trace uses it to accept nxdomain/nodata as final only from an authoritative server).
 ``resolve`` is for recursive servers only; a referral there is a lame server and yields
-``error`` (detail ``unexpected_referral``).
+``error`` (detail ``unexpected_referral``). A NOERROR-without-answer or NXDOMAIN reply without the
+RA flag is ``error`` too (detail ``no_recursion``); answers with data stay valid (R1-19).
 """
 
 from __future__ import annotations
@@ -131,6 +132,8 @@ class ServerReply:
     result: DnsResult
     referral: Referral | None = None
     authoritative: bool = False
+    # RA flag of the parsed response (RFC 1035 section 4.1.1); False when none was parsed.
+    recursion_available: bool = False
     # Unfinished CNAME chain at the query name (``result.state`` nodata, no records): the CNAME
     # records and the last target, which this server did not answer for. Empty/None otherwise.
     cname_chain: tuple[DnsRecord, ...] = ()
@@ -643,6 +646,7 @@ class DnsPythonResolver:
             result,
             out.referral,
             authoritative=bool(resp.flags & dns.flags.AA),
+            recursion_available=bool(resp.flags & dns.flags.RA),
             cname_chain=out.cname_chain,
             cname_target=out.cname_target,
         )
@@ -705,6 +709,19 @@ class DnsPythonResolver:
                 server=r.server,
                 elapsed_ms=r.elapsed_ms,
                 detail_code="unexpected_referral",
+            )
+        if reply.result.state in (ResultState.nodata, ResultState.nxdomain) and (
+            not reply.recursion_available
+        ):
+            # An empty answer from a server that does not offer recursion proves no absence (R1-19).
+            r = reply.result
+            return DnsResult(
+                question=question,
+                state=ResultState.error,
+                server=r.server,
+                rcode=r.rcode,
+                elapsed_ms=r.elapsed_ms,
+                detail_code="no_recursion",
             )
         return reply.result
 
