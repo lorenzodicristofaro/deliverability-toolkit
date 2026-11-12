@@ -186,7 +186,7 @@ Carried over from M0-07 QA:
 Goal: fix the findings of the maintainer-requested code review of dev 06869fb (review files in docs/reviews/2026-11-12/ on the review branch; each ticket carries its own copy of the details).
 Accept: each ticketed finding is reproduced by a failing test and fixed, or recorded as not reproduced; CI green on dev.
 Tickets (docs/tickets/):
-- [ ] R1-01 PARSE-01 quadratic style regexes (ReDoS) + `_REPLY` rewrite (opus)
+- [x] R1-01 PARSE-01 quadratic style regexes (ReDoS) + `_REPLY` rewrite (opus)
 - [ ] R1-02 AUTH-01 release the DB connection after authentication (opus)
 - [ ] R1-03 AUTH-02 login throttle: per-IP limit, argon2 concurrency bound, eviction reset; includes the "Per-IP cap on throttle keys" item (opus)
 - [ ] R1-04 AUTH-03 compose.yaml forwards BASE_URL and the other documented settings (sonnet)
@@ -216,6 +216,8 @@ Tickets (docs/tickets/):
 - [ ] R1-27 INFRA-05 run Docker jobs for app/ and locales/ changes (sonnet)
 - [ ] R1-28 INFRA-06 migration race between replicas (sonnet)
 - [ ] R1-29 INFRA-07 app container hardening (sonnet; related to the safe_regex orphan item below; depends R1-04)
+Follow-ups:
+- R1-01 follow-up: an over-cap inline style also marks the links section not evaluated (content_analysis.py treats any body not-evaluated reason as incomplete); narrow it to body + rules. Timing tests in tests/parsers/test_content_html.py add ~25 s; consider a `slow` marker.
 Not ticketed — maintainer:
 - AUTH-04 (trusted proxy, remote lockout): folded into the existing item "Trusted-proxy setting for the client IP" in Follow-ups; no ticket.
 - INFRA-01 (push-policy deny rules, no server-side ruleset for tags and dev) and INFRA-02 (workflow file can raise its own token rights): touch `.claude/settings.json`, push and permission policy; maintainer decision.

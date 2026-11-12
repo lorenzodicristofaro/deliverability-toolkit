@@ -17,7 +17,8 @@ Acceptance criteria:
 - `_NEG` and the `charset\s*=\s*` search reviewed; if linear, add a comment and a test row, no change.
 - Tests table-driven, malformed input included, no network. ruff, mypy and relevant tests green.
 New i18n keys: none expected. If a new reason code needs user text: en + it, listed in the PR.
-Status: todo
+Status: done
+Outcome: reproduced (old regexes ~15-16x growth for 4x input), fixed in merge f9650a3, QA APPROVE, dev CI green.
 
 ## Review details (copied from the code review of 2026-11-12, dev 06869fb)
 - Location:
