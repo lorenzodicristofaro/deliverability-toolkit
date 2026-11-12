@@ -56,7 +56,7 @@ from app.services.setup import (
 )
 from app.web import auth as web_auth
 from app.web.deps import DbDep, SettingsDep, _session_factory
-from app.web.templating import APP_NAME, form_value, read_form, render
+from app.web.templating import APP_NAME, form_value, payload_too_large, read_form, render
 
 logger = logging.getLogger("app.setup")
 # Own level: the token line must reach the operator even with LOG_LEVEL above WARNING.
@@ -193,7 +193,7 @@ async def setup_form(request: Request) -> HTMLResponse:
 async def setup_submit(request: Request, db: DbDep, settings: SettingsDep) -> Response:
     form = await read_form(request)
     if form is None:
-        return Response(status_code=413)
+        return payload_too_large(request)
     await run_in_threadpool(_ensure_pending, request)
     email = form_value(form, "email")
     tenant_name = form_value(form, "tenant_name")

@@ -40,7 +40,7 @@ from app.services.domains import (
     NotFound,
 )
 from app.web.deps import CurrentSession, DbDep, tenant_ctx
-from app.web.templating import read_form, render
+from app.web.templating import payload_too_large, read_form, render
 
 router = APIRouter()
 
@@ -218,7 +218,7 @@ async def create_domain(request: Request, web: WebDep) -> Response:
         return _denied(request, exc)
     form = await read_form(request)
     if form is None:
-        return Response(status_code=413)
+        return payload_too_large(request)
     name = clean_field(form, NAME_FIELD)
     if name is None:
         return _form_page(request, mode="add", status_code=422, error=InvalidRequest.key)
@@ -274,7 +274,7 @@ async def rename_domain(request: Request, web: WebDep, domain_id: str) -> Respon
         return _denied(request, exc)
     form = await read_form(request)
     if form is None:
-        return Response(status_code=413)
+        return payload_too_large(request)
     name = clean_field(form, NAME_FIELD)
     if name is None:
         return _form_page(

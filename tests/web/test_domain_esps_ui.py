@@ -477,7 +477,7 @@ def test_repeated_field_is_422(world: World) -> None:
 
 
 def test_oversized_body_is_413(world: World) -> None:
-    r = post_as(world, "owner", path(world), {"esp_id": ESP, "return_path_host": "a" * 6000})
+    r = post_as(world, "owner", path(world), {"esp_id": ESP, "return_path_host": "a" * 9000})
     assert r.status_code == 413
     assert stored(world) == []
 

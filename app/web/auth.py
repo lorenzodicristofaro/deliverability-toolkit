@@ -50,7 +50,14 @@ from app.services.auth import (
 )
 from app.services.login_throttle import MAX_CONCURRENT_VERIFICATIONS, LoginThrottle
 from app.web.deps import LOGIN_PATH, CurrentSession, DbDep, SettingsDep
-from app.web.templating import form_value, read_form, render, request_language, safe_next
+from app.web.templating import (
+    form_value,
+    payload_too_large,
+    read_form,
+    render,
+    request_language,
+    safe_next,
+)
 
 logger = logging.getLogger("app.auth")
 
@@ -174,7 +181,7 @@ def _login(
 async def login(request: Request, db: DbDep, settings: SettingsDep) -> Response:
     form = await read_form(request)
     if form is None:
-        return Response(status_code=413)
+        return payload_too_large(request)
     email = form_value(form, "email")
     password = form_value(form, "password")
     next_path = safe_next(form_value(form, "next"))
@@ -275,7 +282,7 @@ async def switch_tenant(
 ) -> Response:
     form = await read_form(request)
     if form is None:
-        return Response(status_code=413)
+        return payload_too_large(request)
     tenant_id = parse_id(form_value(form, "tenant_id"))
     next_path = safe_next(form_value(form, "next"))
     issued = await run_in_threadpool(_switch, db, settings, auth, tenant_id)
