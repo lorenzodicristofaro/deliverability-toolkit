@@ -10,7 +10,8 @@ Routes (all POST, so the CSRF rules are those of `/api/v1/domains`):
   may run checks on the domain gets the full `esp` result, client viewers on their assigned
   domains included (M6-06c). The free route does not know `esp`;
 - `/domains/{domain_id}/checks`: body `{"ids": [...]}`;
-- `/checks/free`: body `{"name": ..., "ids": [...]}`, no tenant data.
+- `/checks/free`: body `{"name": ..., "ids": [...]}`, no tenant data. `name` may be an IP literal
+  only when `ids` is exactly the DNSBL check (M7-05); non-public IPs are never queried.
 
 The response body is the `CheckResult` wire JSON of the M3-02 service, byte for byte
 (`model_dump_json`), so the API and the CLI print the same thing. A single check answers with one
@@ -49,6 +50,7 @@ from app.api.v1.dns_tools import Backend
 from app.api.v1.domain_esps import esp_profiles
 from app.api.v1.domains import _domain_id
 from app.checks.dkim import DkimCheck
+from app.checks.dnsbl_engine import DnsblQueryError, parse_target
 from app.checks.models import CheckContext, CheckResult
 from app.checks.registry import CheckRegistry
 from app.core.domain_names import InvalidDomainName, to_dns_name
@@ -165,6 +167,15 @@ def _validate_ids(request: Request, ids: Sequence[str], *, esp: bool = False) ->
     return list(ids)
 
 
+def _is_ip_dnsbl(name: str, ids: Sequence[str]) -> bool:
+    """Free route only: an IP literal is a valid target when the request is the DNSBL check alone
+    (M7-05); everything else about the name is validated by the service."""
+    try:
+        return all(i == "dnsbl" for i in ids) and parse_target(name).kind == "ip"
+    except DnsblQueryError:
+        return False
+
+
 _MANY: dict[int | str, dict[str, Any]] = {200: {"model": list[CheckResult]}}
 
 
@@ -223,9 +234,10 @@ async def _run_many(
     name: str,
     ctx: CheckContext,
     registry: CheckRegistry | None = None,
+    allow_ip: bool = False,
 ) -> Response:
     try:
-        results = await run_checks(ids, name, ctx, registry=registry)
+        results = await run_checks(ids, name, ctx, registry=registry, allow_ip=allow_ip)
     except (UnknownCheck, InvalidTarget):
         raise _invalid(request) from None
     return _json(results, many=True)
@@ -291,9 +303,10 @@ async def run_free_checks(
 ) -> Response:
     payload = _parse(request, FreeIn, body)
     ids = _validate_ids(request, payload.ids)
-    try:
-        to_dns_name(payload.name, allow_underscore=False)
-    except InvalidDomainName:
-        raise _invalid(request) from None
+    if not _is_ip_dnsbl(payload.name, ids):
+        try:
+            to_dns_name(payload.name, allow_underscore=False)
+        except InvalidDomainName:
+            raise _invalid(request) from None
     await run_in_threadpool(db.rollback)  # no tenant rows here: just hold no transaction during DNS
-    return await _run_many(request, ids, payload.name, _context(resolver))
+    return await _run_many(request, ids, payload.name, _context(resolver), allow_ip=True)

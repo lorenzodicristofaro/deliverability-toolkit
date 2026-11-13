@@ -54,7 +54,7 @@ ZONES: dict[str, list[dict[str, Any]]] = {
         {"name": "example.com", "type": "TXT", "ttl": 300, "rdata": ["v=spf1 -all"]},
     ]
 }
-CHECKS = ("spf", "dkim", "dmarc")
+CHECKS = ("spf", "dkim", "dmarc", "dnsbl")
 ESP_FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "esp" / "valid"
 
 

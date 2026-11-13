@@ -6,7 +6,7 @@ How the deliverability checks work, as implemented. Design rules live in `ARCHIT
 ## Check interface
 
 A check is a class with a string `id` and `async run(ctx: CheckContext, target: Target) -> CheckResult`
-(`app/checks/models.py`, protocol `Check`). Registered ids: `dkim`, `dmarc`, `spf`.
+(`app/checks/models.py`, protocol `Check`). Registered ids: `dkim`, `dmarc`, `dnsbl`, `spf`.
 
 - `CheckContext`: resolver, clock, optional `tenant_id` / `domain_id`. No database handle by design.
 - `CheckResult`: `check_id`, `target`, `status`, `findings`, `data`, `started_at`, `duration_ms`.
@@ -277,6 +277,36 @@ None of these cite an RFC section: they compare DNS with the ESP profile data. T
 tests in `tests/esp/test_acceptance.py` run every shipped profile against a zone built from the
 profile (`tests/esp/dns_builder.py`) and its mutations; `tests/api/test_esp_acceptance.py`
 covers assignment and run end to end.
+
+### DNSBL / URIBL (`dnsbl`, M7-05)
+
+`app/checks/dnsbl.py` (`DnsblCheck`) over the engine `app/checks/dnsbl_engine.py` and the list
+data `seeds/dnsbl.yaml` (`docs/DNSBL.md`). Registered in `load_builtin_checks`, so it is part of
+`all` and of the CLI default.
+
+- **Targets (choice).** A domain name runs the `domain` lists. An IP literal runs the `ip` lists,
+  but only on the tenant-less routes: `/api/v1/checks/free` and the CLI, and only when the request
+  is the `dnsbl` check alone (an IP is a 422 / usage error for any other check). The domain routes
+  always use the registered domain name. The IPs that a domain's MX/A records resolve to are NOT
+  checked (out of scope for M7-05). Private, loopback, link-local, documentation, multicast and
+  IPv4-mapped forms of those are never queried (`not_applicable`); the query-name builder is
+  private to the engine, which applies that rule first.
+- **Status.** Any list `error` (refused, resolver refused, blocked resolver, unverified list, DNS
+  failure, unmapped or malformed answer) gives status `error` AND a finding naming the list.
+  Never `ok` when any list errored. A list `listed` gives `DNSBL_LISTED` with a severity from the
+  category (our own mapping in `CATEGORY_SEVERITY`: malware, phishing, cracked_site `high`;
+  unknown `medium`; informational categories `low`). All clean gives `ok`.
+- **Finding codes.** `DNSBL_LISTED`, `DNSBL_LIST_ERROR`, `DNSBL_LIST_REFUSED`,
+  `DNSBL_LIST_UNVERIFIED`; the list name, return code, category and reason are params (templates
+  escape them; the CLI escapes control characters). `DNSBL_NO_LISTS_APPLICABLE` (info) says that
+  nothing was queried (every list disabled or not applicable), so that is never shown as clean.
+- **Enablement.** A list with `default_enabled: false` (all three shipped lists today) runs only if
+  its id is in the check's `enabled_ids` (the instance-admin setting). A disabled list is
+  `not_applicable` / `list_disabled` and no DNS query is sent. The persisted admin setting, its
+  endpoint and the usage-policy confirmation screen are NOT implemented yet (they need a
+  migration and an admin route, outside the M7-05 file scope): until then `enabled_ids` is empty.
+- **Permissions.** Same as every check: `check.run` on a tenant domain, `dns.tools` on the free
+  route; the CLI has none.
 
 ## Surfaces
 
