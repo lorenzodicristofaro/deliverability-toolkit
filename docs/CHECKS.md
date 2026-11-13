@@ -104,7 +104,7 @@ module's `CODES`; `tests/checks/test_acceptance_m3.py` requires en and it text f
 | `SPF_NO_ALL` | medium | 4.7 |
 | `SPF_REDIRECT_WITH_ALL` | low | 5.1, 6.1 |
 | `SPF_PTR_DEPRECATED` | low | 5.5 |
-| `SPF_RECORD_TOO_LONG` | medium (answer over 450 octets) or info (a string over 255 octets) | 3.3, 3.4 |
+| `SPF_RECORD_TOO_LONG` | medium (name plus SPF text over 450 octets; a record over 255 octets published as several strings is valid and not flagged, R1-18) | 3.4 (3.3 for multiple strings) |
 | `SPF_RESOLUTION_TRUNCATED` | info | 4.6.4 |
 | `SPF_FLATTENING_HINT` | info | none (advisory; no addresses are generated) |
 | `SPF_DNS_ERROR` | medium (status `error`) | 4.4 |

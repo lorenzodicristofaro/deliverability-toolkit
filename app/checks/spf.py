@@ -65,11 +65,10 @@ MAX_AFTER_ALL_EVIDENCE = 10
 # Lookup count from which SPF_NEAR_LOOKUP_LIMIT / SPF_FLATTENING_HINT are emitted (9 and 10
 # are still within the RFC 7208 section 4.6.4 limit of LOOKUP_LIMIT).
 NEAR_LOOKUP_THRESHOLD = 9
-# RFC 1035 section 3.3 / RFC 7208 section 3.3: one TXT character-string holds at most 255
-# octets; a longer record must be published as several strings.
-TXT_STRING_MAX = 255
 # RFC 7208 section 3.4: keep name + record text under 450 octets so the answer fits in a
-# 512-octet UDP DNS message.
+# 512-octet UDP DNS message. This is the only size rule checked: a record over 255 octets is
+# valid when published as several strings (section 3.3), and the joined text cannot show
+# string boundaries anyway (R1-18).
 DNS_ANSWER_GUIDELINE = 450
 
 
@@ -168,14 +167,10 @@ def _node_findings(node: SpfNode) -> list[Finding]:
 def _length_findings(node: SpfNode) -> list[Finding]:
     if not node.records:
         return []
-    longest = max(len(r.encode("utf-8", "surrogateescape")) for r in node.records)
     size = len(node.domain) + sum(len(r.encode("utf-8", "surrogateescape")) for r in node.records)
     if size > DNS_ANSWER_GUIDELINE:
         params = {"name": node.domain, "length": size, "limit": DNS_ANSWER_GUIDELINE}
         return [finding("SPF_RECORD_TOO_LONG", "medium", params)]
-    if longest > TXT_STRING_MAX:
-        params = {"name": node.domain, "length": longest, "limit": TXT_STRING_MAX}
-        return [finding("SPF_RECORD_TOO_LONG", "info", params)]
     return []
 
 
