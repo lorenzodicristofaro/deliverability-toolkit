@@ -1,0 +1,68 @@
+# DNSBL/URIBL seed (M7-04). Every value below was taken on 2026-11-14 from the list operator's
+# own pages named in `sources`; nothing comes from memory or third parties. See docs/DNSBL.md.
+# Not shipped (see docs/DNSBL.md): Spamhaus ZEN/DBL (query key required), Barracuda (page 403).
+lists:
+  - id: spamcop-bl
+    name: SpamCop Blocking List
+    zone: bl.spamcop.net
+    kind: ip
+    ipv4: true
+    ipv6: false
+    return_codes:
+      - {code: 127.0.0.2, meaning: listed, category: spam_source}
+    usage_policy: >-
+      The source pages state no free-use limit, commercial-use term, query limit or resolver
+      restriction. bl.shtml: "There is no warranty associated with using this system. It is
+      provided as is." FAQ 297: "THE SCBL IS PROVIDED "AS IS"" and "SCBL users query the SCBL
+      servers during every SMTP transaction". Its "Policies and Disclaimers" page was not read.
+    verified_on: 2026-11-14
+    sources:
+      - https://www.spamcop.net/bl.shtml
+      - https://www.spamcop.net/fom-serve/cache/291.html
+      - https://www.spamcop.net/fom-serve/cache/297.html
+    status: unverified
+    unverified_fields: [ipv6, usage_policy]
+  - id: surbl-multi
+    name: SURBL multi (public free query service)
+    zone: multi.surbl.org
+    kind: domain
+    return_codes:
+      - {code: 127.0.0.4, meaning: listed, category: disposable_email}
+      - {code: 127.0.0.8, meaning: listed, category: phishing}
+      - {code: 127.0.0.16, meaning: listed, category: malware}
+      - {code: 127.0.0.32, meaning: listed, category: click_tracker}
+      - {code: 127.0.0.64, meaning: listed, category: abuse}
+      - {code: 127.0.0.128, meaning: listed, category: cracked_site}
+      - {code: 127.0.0.1, meaning: refused}
+    usage_policy: >-
+      Free Use: "For individual users, small charitable or non-profit organizations, small
+      businesses" and "any other organizations that have fewer than 1,000 users"; "Free use of
+      FQS is restricted and does not include embedding our data in any way". End-user
+      organizations of 1,000 or more users "MAY NOT use the SURBL free queuery service (FQS)".
+      Free servers are "monitored against abuse by heavy users". Open or public resolver
+      handling is not stated on the page.
+    verified_on: 2026-11-14
+    sources:
+      - https://www.surbl.org/lists
+      - https://www.surbl.org/usage-policy
+    status: unverified
+    unverified_fields: [return_codes]
+  - id: uribl-multi
+    name: URIBL multi (public mirrors)
+    zone: multi.uribl.com
+    kind: domain
+    return_codes:
+      - {code: 127.0.0.2, meaning: listed, category: spam_domain}
+      - {code: 127.0.0.4, meaning: listed, category: grey}
+      - {code: 127.0.0.8, meaning: listed, category: red}
+      - {code: 127.0.0.1, meaning: refused}
+    usage_policy: >-
+      Public DNS mirrors are for "low volume end users"; mirrors run on donated hardware and
+      bandwidth; abusers have the IP or the nameserver IP blocked. The lists are meant to tag
+      mail as spam, not block it, and are free for public DNS use; no explicit query limit is
+      stated. A Commercial Data Feed Service exists for high-volume users.
+    verified_on: 2026-11-14
+    sources:
+      - https://uribl.com/about.shtml
+    status: unverified
+    unverified_fields: [return_codes]

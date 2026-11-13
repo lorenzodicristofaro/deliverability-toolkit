@@ -15,4 +15,4 @@ Acceptance criteria:
 - No network in tests.
 Open for the maintainer (to be listed in the PR): every `unverified` entry; any list whose terms forbid use through the shipped default resolvers; whether to ship lists that require registration or a paid data feed (default: no).
 New i18n keys: none
-Status: todo
+Status: done
