@@ -13,8 +13,8 @@ Dev CI green on dcca37e (CI, CI infra, Secret scan). Next: **M7 — Monitoring**
   (e.g. Postfix + separate OpenDKIM/OpenDMARC) get MSG_DKIM_NOT_PASS low "not stated" when dkim passed in a lower
   field. Pinned in tests (R122_FINDINGS row 2, TOPMOST_ONLY). Revisit only on maintainer request.
 - Local test PostgreSQL `dt-test-pg` was running this session (used by QA).
-- The F-01-03 coder worktree `.claude/worktrees/agent-a2d5618e47f9aa814` (branch worktree-agent-a2d5618e47f9aa814)
-  may still exist: remove it with `git worktree remove` once you confirm it is clean; the feature branch is merged.
+- About 25 old agent worktrees remain under .claude/worktrees/ (R1 and F-01 branches, all merged; one locked).
+  Optional cleanup: check `git -C <wt> status` is clean, then `git worktree remove`; leave the locked one.
 
 ## Open maintainer actions
 1. QA checklist line for .claude/agents/qa-reviewer.md ("Review steps", new step 5 after
