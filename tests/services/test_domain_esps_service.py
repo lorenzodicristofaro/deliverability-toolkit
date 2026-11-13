@@ -672,7 +672,7 @@ def _set_hosts(world: World, domain: str, esp: str, rp: str | None, tr: str | No
 
 
 RENAMED = "renamed.example"
-# 247 characters: a valid name, but any host label prefixed to it exceeds 253.
+# 247 characters: a valid name, but a 14-character prefix label pushes it past 253.
 LONG_NEW = ".".join(["b" * 63] * 3 + ["c" * 50, "test"])
 
 REWRITE_CASES = [
@@ -697,7 +697,14 @@ REWRITE_CASES = [
         1,
         RENAMED,
     ),  # shares a suffix, not a label boundary
-    ("em1.a.example", None, ("em1.a.example", None), 0, 1, LONG_NEW),  # invalid rewrite
+    (
+        "mail-tracking.a.example",
+        None,
+        ("mail-tracking.a.example", None),
+        0,
+        1,
+        LONG_NEW,
+    ),  # invalid rewrite
     ("a.example.evil.example", None, ("a.example.evil.example", None), 0, 1, RENAMED),
 ]
 
