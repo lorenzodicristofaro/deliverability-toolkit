@@ -65,6 +65,8 @@ MSG_NO_TEXT_PART                         low      no text/plain part
 MSG_PARSER_LIMIT                         medium   input rejected or capped (error-class)
 MSG_AUTHRES_UNPARSED                     medium   Authentication-Results unusable (error-class)
 MSG_ALIGNMENT_NOT_EVALUATED              medium   no identifier to align (error-class)
+MSG_ALIGNMENT_LOWER_FIELD_NOT_USED       low      an aligned pass from a lower
+                                                  Authentication-Results field was not used
 ======================================== ======== =========================================
 
 ``MSG_DUPLICATE_SINGLETON_HEADER`` is reported for Subject, Date and Message-ID; a repeated
@@ -106,7 +108,7 @@ from app.parsers.message import (
 )
 from app.parsers.mime import MimeSummary
 from app.parsers.received import ReceivedChain, parse_received_values
-from app.services.message_alignment import AlignmentReport
+from app.services.message_alignment import LOWER_AUTHRES_FIELD, AlignmentReport
 
 MAX_EXCERPT = 200
 MAX_DATE_SKEW = timedelta(hours=24)
@@ -154,6 +156,7 @@ CODES: tuple[str, ...] = (
     "MSG_PARSER_LIMIT",
     "MSG_AUTHRES_UNPARSED",
     "MSG_ALIGNMENT_NOT_EVALUATED",
+    "MSG_ALIGNMENT_LOWER_FIELD_NOT_USED",
 )
 
 
@@ -430,6 +433,17 @@ def _alignment_part(alignment: AlignmentReport, have_authres: bool, acc: _Acc) -
             {
                 "stated": excerpt(alignment.stated_dmarc),
                 "computed": alignment.computed_dmarc,
+            },
+        )
+    # R1-22: say why a pair shown as aligned did not make the computed result pass.
+    lower = [p for p in alignment.pairs if p.state == "aligned" and p.reason == LOWER_AUTHRES_FIELD]
+    if lower and alignment.computed_dmarc != "pass":
+        acc.add(
+            "MSG_ALIGNMENT_LOWER_FIELD_NOT_USED",
+            "low",
+            {
+                "methods": _joined(list(dict.fromkeys(p.kind for p in lower))),
+                "domains": _joined(list(dict.fromkeys(p.identifier_domain or "" for p in lower))),
             },
         )
     unverified = [p.identifier_domain or "" for p in alignment.pairs if p.unverified_signature]

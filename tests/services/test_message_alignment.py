@@ -1,7 +1,12 @@
 import pytest
 
 from app.parsers.message import parse_header_block
-from app.services.message_alignment import MAX_DKIM_PAIRS, AlignmentPair, analyze_alignment
+from app.services.message_alignment import (
+    LOWER_AUTHRES_FIELD,
+    MAX_DKIM_PAIRS,
+    AlignmentPair,
+    analyze_alignment,
+)
 
 
 def _report(*headers: str):
@@ -523,3 +528,95 @@ def test_malformed_authres_with_dkim_none_does_not_crash(body):
     )
     assert r.computed_dmarc in ("pass", "fail", "not_evaluated")
     assert _pair(r, "spf").state != "aligned"
+
+
+# --- R1-22: a result from a lower Authentication-Results field never makes computed pass -------
+
+_TOP_FAIL = (
+    "Authentication-Results: mx.example.org; spf=fail smtp.mailfrom=evil.example;"
+    " dmarc=fail header.from=example.com"
+)
+_LOWER_DKIM_PASS = "Authentication-Results: mx.example.org; dkim=pass header.d=example.com"
+
+
+def test_forged_lower_field_dkim_pass_does_not_make_computed_pass():
+    r = _report("From: a@example.com", _TOP_FAIL, _LOWER_DKIM_PASS)
+    spf, dkim = _pair(r, "spf"), _pair(r, "dkim")
+    assert spf.state == "misaligned" and spf.authres_index == 0
+    # The pair stays visible and is flagged as coming from a lower field.
+    assert (dkim.state, dkim.authres_index, dkim.reason) == ("aligned", 1, LOWER_AUTHRES_FIELD)
+    assert r.computed_dmarc == "fail"
+    assert r.stated_dmarc == "fail" and not r.dmarc_mismatch
+
+
+# (fields top first, computed, spf (state, index, reason), dkim (state, index, reason), mismatch)
+R122_CASES = [
+    # Legitimate receiver, one authserv-id, spf on top and dkim in the second field: under the
+    # minimal rule the dkim pass is not used, so an ESP bounce domain leaves computed fail.
+    (
+        (
+            "Authentication-Results: mx.example.org; spf=pass smtp.mailfrom=b@bounce.example.net;"
+            " dmarc=pass header.from=example.com",
+            _LOWER_DKIM_PASS,
+        ),
+        "fail",
+        ("misaligned", 0, None),
+        ("aligned", 1, LOWER_AUTHRES_FIELD),
+        True,
+    ),
+    # Same receiver, dkim on top and an aligned spf below: the top dkim pass alone decides.
+    (
+        (
+            "Authentication-Results: mx.example.org; dkim=pass header.d=example.com;"
+            " dmarc=pass header.from=example.com",
+            "Authentication-Results: mx.example.org; spf=pass smtp.mailfrom=b@example.com",
+        ),
+        "pass",
+        ("aligned", 1, LOWER_AUTHRES_FIELD),
+        ("aligned", 0, None),
+        False,
+    ),
+    # A lower aligned spf pass does not rescue a failing top dkim.
+    (
+        (
+            "Authentication-Results: mx.example.org; dkim=fail header.d=example.com",
+            "Authentication-Results: mx.example.org; spf=pass smtp.mailfrom=b@example.com",
+        ),
+        "fail",
+        ("aligned", 1, LOWER_AUTHRES_FIELD),
+        ("aligned_but_not_passed", 0, None),
+        False,
+    ),
+    # Lower misaligned or not-pass results are flagged too, without changing the state.
+    (
+        (
+            "Authentication-Results: mx.example.org; dmarc=fail header.from=example.com",
+            "Authentication-Results: mx.example.org; spf=fail smtp.mailfrom=b@example.com;"
+            " dkim=pass header.d=other.example",
+        ),
+        "fail",
+        ("aligned_but_not_passed", 1, LOWER_AUTHRES_FIELD),
+        ("misaligned", 1, LOWER_AUTHRES_FIELD),
+        False,
+    ),
+    # Every result in one field: nothing flagged (baseline).
+    ((AR_PASS,), "pass", ("aligned", 0, None), ("aligned", 0, None), False),
+    # Lower field without authserv-id (malformed) still never yields pass.
+    (
+        ("Authentication-Results: mx.example.org; spf=none", "Authentication-Results: dkim=pass"),
+        "not_evaluated",
+        ("not_evaluated", None, "no_identifier"),
+        ("unknown", 1, "missing_d"),
+        False,
+    ),
+]
+
+
+@pytest.mark.parametrize(("fields", "computed", "spf", "dkim", "mismatch"), R122_CASES)
+def test_lower_field_pairs_table(fields, computed, spf, dkim, mismatch):
+    r = _report("From: a@example.com", *fields)
+    s, d = _pair(r, "spf"), _pair(r, "dkim")
+    assert (s.state, s.authres_index, s.reason) == spf
+    assert (d.state, d.authres_index, d.reason) == dkim
+    assert r.computed_dmarc == computed
+    assert r.dmarc_mismatch is mismatch

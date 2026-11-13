@@ -9,6 +9,11 @@ checked. Results are what the receiver STATED in `Authentication-Results` (state
 is computed here (computed). Trust in the authserv-id is not decided (RFC 8601 section 5); for
 each method the topmost Authentication-Results field that carries that method is used.
 
+R1-22: a result taken from a field below the topmost one (`authres_index > 0`) may have been
+written by the sender, not by the receiver. Such a pair keeps its state but gets the reason
+`lower_authres_field` and never makes `computed_dmarc` `pass`. This is a minimal rule: it
+decides no trust and also hides a legitimate receiver that splits its results over fields.
+
 Pairs (From domain vs identifier):
 - `spf`: `smtp.mailfrom` of the first stated spf result that carries one (a result for
   `smtp.helo` listed before it is skipped), else the Return-Path header with no stated result.
@@ -23,8 +28,9 @@ unusable, see `reason`) and `not_evaluated` (no identifier at all). Never aligne
 data. Relaxed match = same organizational domain (`app.core.org_domain`); when either name is
 a public suffix (no organizational domain) only an exact match counts.
 
-`computed_dmarc` is `pass` when any pair is `aligned`, `fail` when no pair is aligned, none
-is `unknown` and some pair has a stated result other than `dkim=none`, else `not_evaluated`.
+`computed_dmarc` is `pass` when any pair is `aligned` without the `lower_authres_field` reason,
+`fail` when no such pair exists, none is `unknown` and some pair has a stated result other than
+`dkim=none`, else `not_evaluated`.
 So an unsigned message rests on SPF alone. `dmarc_mismatch` is set
 when the stated dmarc result (pass or fail) disagrees with the computed one; M4-09 turns it
 into a finding.
@@ -50,6 +56,7 @@ DmarcComputed = Literal["pass", "fail", "not_evaluated"]
 
 MAX_DKIM_PAIRS = 50
 NO_SIGNATURE = "no_signature"
+LOWER_AUTHRES_FIELD = "lower_authres_field"
 
 _D_TAG = re.compile(r"^\s*d\s*=(.*)$", re.IGNORECASE | re.DOTALL)
 
@@ -58,7 +65,9 @@ _D_TAG = re.compile(r"^\s*d\s*=(.*)$", re.IGNORECASE | re.DOTALL)
 class AlignmentPair:
     kind: PairKind
     state: AlignmentState
-    reason: str | None  # stable code when state is unknown / not_evaluated
+    # Stable code when state is unknown / not_evaluated, or LOWER_AUTHRES_FIELD when the stated
+    # result comes from a field below the topmost one (R1-22).
+    reason: str | None
     from_domain: str | None
     identifier_domain: str | None
     identifier_source: str | None  # smtp.mailfrom | return_path | authres_header_d | dkim_signature
@@ -180,6 +189,12 @@ def _pair(
     unverified: bool = False,
     src: AuthResHeader | None = None,
 ) -> AlignmentPair:
+    used = src if stated is not None else None
+    src_id = used.authserv_id if used is not None else None
+    src_index = used.index if used is not None else None
+    # R1-22: a result from a field below the topmost one is flagged and never computes pass.
+    lower = LOWER_AUTHRES_FIELD if src_index else None
+
     def make(
         state: AlignmentState,
         reason: str | None,
@@ -201,8 +216,8 @@ def _pair(
             strict_aligned=strict,
             stated_result=stated,
             unverified_signature=unverified,
-            authserv_id=src.authserv_id if src and stated is not None else None,
-            authres_index=src.index if src and stated is not None else None,
+            authserv_id=src_id,
+            authres_index=src_index,
         )
 
     if source is None:
@@ -219,12 +234,12 @@ def _pair(
     strict = from_id.domain == ident.domain
     relaxed = strict or (f_org is not None and f_org == i_org)
     if not relaxed:
-        return make("misaligned", None, f_org, i_org, relaxed, strict)
+        return make("misaligned", lower, f_org, i_org, relaxed, strict)
     if stated is None:
         # A domain match without a stated result proves nothing (no_stated_result).
         return make("unknown", "no_stated_result", f_org, i_org, relaxed, strict)
     state: AlignmentState = "aligned" if stated == "pass" else "aligned_but_not_passed"
-    return make(state, None, f_org, i_org, relaxed, strict)
+    return make(state, lower, f_org, i_org, relaxed, strict)
 
 
 def analyze_alignment(block: HeaderBlock) -> AlignmentReport:
@@ -281,7 +296,7 @@ def analyze_alignment(block: HeaderBlock) -> AlignmentReport:
     stated_dmarc = dmarc[0].result if dmarc else None
     states = {p.state for p in pairs}
     computed: DmarcComputed
-    if "aligned" in states:
+    if any(p.state == "aligned" and p.reason != LOWER_AUTHRES_FIELD for p in pairs):
         computed = "pass"
     elif "unknown" in states or not any(
         p.stated_result is not None and p.reason != NO_SIGNATURE for p in pairs
