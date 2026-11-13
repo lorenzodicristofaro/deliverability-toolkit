@@ -141,16 +141,26 @@ branch in the main working tree (a QA run once left the main tree on a detached 
   facts in the commit message. Maximum 90 days; remove the flag when it expires or the fix ships. No silent
   ignores.
 - Coder, PM and QA never push. `main`, tags, releases, force pushes and branch deletions stay with the human.
-- Enforced in two layers. Client side, `.claude/settings.json`: exact allow rules for `git push origin dev|qa`,
-  deny rules for `main`, tags, force, `--all`, `--mirror`, delete refspecs, and for `gh pr merge`, `gh release`,
-  `gh api`, `gh repo`, `gh secret`. Server side, repository rulesets: `protect-qa` (no deletion, no force push)
-  and `protect-main` (no deletion, no force push, pull request required with 0 approvals, merge commits only,
-  required checks `lint`, `test-sqlite`, `test-postgres`, `secret-scan`). See `docs/SETUP.md`.
+- Enforced in two layers. Client side, `.claude/settings.json`: exact allow rules for `git push origin dev|qa`
+  (and both together) and `gh run list|view|watch`; deny rules for pushes naming `main`, force (`--force`, `-f`,
+  `+`), `--tags`, `refs/tags`, `--all`, `--mirror`, `--delete`, `-d`, `:` refspecs, tag names `v*`, and any
+  `git ... push` with options before the verb; for `git tag`, `gh pr merge`, `gh release`, `gh api`, `gh repo`,
+  `gh secret`; and for Edit/Write of `.claude/settings*.json`, `.claude/agents/`, `.claude/commands/`,
+  `.claude/skills/`, `.claude/hooks/`. A form neither denied nor allowed asks for confirmation. Server side,
+  repository rulesets: `protect-main` (no deletion, no force push, pull request required with 0 approvals, merge
+  commits only, required checks `lint`, `test-sqlite`, `test-postgres`, `secret-scan`), `protect-qa` and
+  `protect-dev` (no deletion, no force push), `protect-tags` (tags `v*`: no creation, update or deletion, no
+  force push, empty bypass list). See `docs/SETUP.md` and `docs/RELEASE.md`.
+- Every change to `.github/**` or `.claude/**` is flagged in the merge report and goes to the maintainer before
+  the push. Commits touching `.github/workflows/` are pushed by the maintainer (the GM token has no Workflows
+  permission).
 - `qa` → `main` is a pull request opened and merged by the maintainer.
 
 ### Credentials and permissions
 - The machine where agents run has a fine-grained GitHub token scoped to this repository: Contents read/write,
-  Actions read, no pull-request rights. It has no production secrets.
+  Actions read, no pull-request rights, no Workflows permission. It has no production secrets.
+- Repository Actions settings: workflow permissions read-only; "Allow GitHub Actions to create and approve pull
+  requests" disabled. `tests/test_workflow_permissions.py` rejects any `write` grant in a workflow.
 - Production credentials, release tokens and the production encryption key are never present there.
 - QA and prod use separate databases and separate `SECRET_KEY` / `ENCRYPTION_KEY`. Never test on the production database.
 - Secret scanning runs on every commit (pre-commit hook) and in CI.

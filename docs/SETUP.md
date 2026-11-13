@@ -33,16 +33,33 @@ CI layout and which jobs run on which push: see "Push policy" in `docs/WORKFLOW.
 Decision 2026-11-04: the GM session may push `dev` and `qa`; everything else stays with you (see `docs/WORKFLOW.md`).
 1. **Scoped credentials**: authenticate `gh` with a fine-grained token limited to this repository
    (Contents: read/write, Actions: read, no pull-request rights). Do not use a token with access to other repositories.
-2. **Permission rules** in `.claude/settings.json` (checked in): exact allow rules for `git push origin dev`,
-   `git push origin qa` (and both together), `gh run list|view|watch`; deny rules for `main`, tags, force
-   pushes, `--all`, `--mirror` and delete refspecs; also deny `gh pr merge`, `gh release`, `gh api`, `gh repo`,
-   `gh secret`. Any other push form is not allowed and prompts.
-3. **Rulesets** (server side, repository Settings -> Rules): `protect-qa` (no deletion, no force push) and
-   `protect-main` (no deletion, no force push, pull request required with 0 approvals, merge commits only,
-   required checks `lint`, `test-sqlite`, `test-postgres`, `secret-scan`).
+2. **Permission rules** in `.claude/settings.json` (checked in).
+   - Allow, exact forms only: `git push origin dev`, `git push origin qa`, `git push origin dev qa`,
+     `git push origin qa dev`, `gh run list|view|watch *`.
+   - Deny, push: `git push *main*`, `*--force*`, `*-f*`, `*+*`, `*--tags*`, `*refs/tags*`, `*--all*`,
+     `*--mirror*`, `*--delete*`, `* -d *`, `* :*`, `git push -d*`, `git push * v*`, and `git * push*` (a push with
+     options before the verb, such as `git -C . push`).
+   - Deny, other: `git tag *`, `gh pr merge *`, `gh release *`, `gh api *`, `gh repo *`, `gh secret *`.
+   - Deny, edits (Edit and Write): `**/.claude/settings*.json`, `**/.claude/agents/**`, `**/.claude/commands/**`,
+     `**/.claude/skills/**`, `**/.claude/hooks/**`.
+   - A form that is neither denied nor allowed asks for confirmation.
+3. **Rulesets** (server side, repository Settings -> Rules): `protect-qa` (no deletion, no force push),
+   `protect-dev` (no deletion, no force push), `protect-main` (no deletion, no force push, pull request required
+   with 0 approvals, merge commits only, required checks `lint`, `test-sqlite`, `test-postgres`, `secret-scan`),
+   `protect-tags` (tags `v*`: restrict creations, updates and deletions, block force pushes, empty bypass list;
+   disabled only while you release, see `docs/RELEASE.md`).
+   **Workflow permissions** (Settings -> Actions -> General): read-only; "Allow GitHub Actions to create and approve
+   pull requests" disabled. The GM token has no Workflows permission, so a push touching `.github/workflows/` is
+   refused; the maintainer pushes those commits.
+   **Rule**: every change to `.github/**` or `.claude/**` is flagged in the merge report and goes to the maintainer
+   before the push. `tests/test_workflow_permissions.py` fails if a workflow grants itself a `write` permission
+   (only exception: `security-events: write` in `codeql.yml`).
 4. **Private vulnerability reporting**: enable it in Settings -> Advanced Security, so `SECURITY.md` is accurate.
 The permission-rule syntax can change between Claude Code versions: after changes, **test it** by asking
-Claude Code to run `git push origin main` and `git push --force origin dev`, and confirm both are refused.
+Claude Code to run each of these and confirm they are refused: `git push origin main`,
+`git push --force origin dev`, `git push origin v0.0.0-test`, `git push -d origin dev`,
+`git -C . push origin dev`. Edit probes: an edit in a worktree is allowed; an edit of `.claude/agents/pm.md`, of a
+worktree's `.claude/settings.json` and of a worktree's `.claude/agents/coder.md` is refused.
 
 ## 4. Environments in the home lab
 - `compose.dev.yaml`, `compose.qa.yaml`, `compose.prod.yaml`: different ports, volumes and `.env` files.

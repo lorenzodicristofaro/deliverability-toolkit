@@ -219,6 +219,7 @@ Tickets (docs/tickets/):
 - [ ] R1-30 AUTH-04 TRUSTED_PROXIES setting: client IP from X-Forwarded-For/Forwarded only for a trusted peer; login throttle, setup wizard, .env.example, compose (opus; depends R1-03, R1-04); covers the item "Trusted-proxy setting for the client IP"
 - [ ] R1-31 AUTH-05 domain rename rewrites the ESP host suffixes in the same transaction, user notice en+it (sonnet)
 - [ ] R1-32 AUTH-11 follow-up: Cache-Control no-store on every response except /static/ and exactly /healthz, regardless of the cookie (sonnet; depends R1-16)
+- [ ] R1-33 INFRA-01/02 push policy docs as enforced, workflow permissions test, settings.json deny rules (sonnet; in-review; settings.json and any .github/.claude change pushed only after maintainer approval)
 Follow-ups:
 - R1-12 follow-up: comment at app/web/templating.py:37 and test docstring tests/web/test_default_error_bodies.py:210 miscompute the 4-byte worst case (8192 fits the browser 3-byte maxlength case, ~6.6 KB); test_framework_validation_error_has_no_input_for_api_clients (line 67) already passed before the fix.
 - R1-13 follow-up: AST guard tests/web/test_async_handlers_guard.py:22-37 only knows listed method names and 5 modules; glob app/web and flag db/service/repo_for receivers. Nit: stray comment app/web/rules.py:744-746. Also app/api/v1/content.py:170 sync db.rollback() (existing item below, one line).
@@ -233,7 +234,7 @@ Follow-ups:
 - R1-09 follow-up: a stated dkim=none header.d=X still adds X to stated_ds, so a DKIM-Signature d=X is not reported as unverified (message_alignment.py:260-262); two spf resinfos with smtp.mailfrom: first wins (RFC 8601 silent).
 - R1-10 follow-up: MSG_AUTHRES_UNPARSED detail says the issue codes are 'listed in the finding data', but CLI/web do not show params unused by the text — add an {issues} placeholder (safe codes) or reword, en+it; property test could map each skipped area to its required code.
 Not ticketed — maintainer:
-- INFRA-01 (push-policy deny rules, no server-side ruleset for tags and dev) and INFRA-02 (workflow file can raise its own token rights): touch `.claude/settings.json`, push and permission policy; maintainer decision pending (maintainer is reviewing them; no ticket).
+- INFRA-01 and INFRA-02: covered by R1-33 (maintainer set the rulesets and token rights; settings.json deny rules, docs and a workflow permissions test).
 Decided 2026-11-13 (maintainer):
 - AUTH-04: ticket R1-30. AUTH-05: ticket R1-31 (rewrite). AUTH-11 follow-up: ticket R1-32.
 - PARSE-03 leniency: STRICT. An Authentication-Results field without authserv-id is not counted as evaluated (RFC 8601 section 2.2 ABNF; sections 2.5 and 4.1). No code change; MSG_AUTHRES_UNPARSED (R1-10) explains it; sentence added to docs/HEADERS.md.
