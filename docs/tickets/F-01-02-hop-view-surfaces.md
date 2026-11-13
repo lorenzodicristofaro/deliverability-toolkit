@@ -20,4 +20,4 @@ Acceptance criteria (no network, ruff and mypy green):
 - i18n: every new key exists in en and it (the repo's locale-parity test is green).
 - Existing API/web/CLI message tests stay green.
 New i18n keys (en + it; final names set by the coder): hop view title and column labels (position, kind, authserv-id, instance, spf, dkim, dmarc, arc), kind names, "stated by {authserv_id}, not verifiable", "unparsed", empty-state text for a message with no hop data.
-Status: todo
+Status: done (QA APPROVE, merged d2d5f40; branch 3b2c0db)

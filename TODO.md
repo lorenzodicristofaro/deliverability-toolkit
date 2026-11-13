@@ -225,7 +225,11 @@ Follow-ups:
 - R1-25 follow-up (QA nit): ci-infra.yml postgres smoke relies on the CMD `alembic && uvicorn` chain to prove the app uses PostgreSQL; optionally query alembic_version in the postgres container. The comment at ci-infra.yml:116 ("Default profiles only") now describes only the first smoke.
 - R1-26 follow-up (QA nit): docs/DOCKER-PINS.md:16 names only the OCI index media type (say "image index or manifest list"); rebuild.yml:5-6 "Rule and cadence: docs/UNBOUND.md" should also cite docs/DOCKER-PINS.md.
 - R1-30 follow-up (QA nits): resolve_client_ip (app/web/auth.py:148-154) falls back to the peer silently; add a rate-limited WARNING so a proxy sending ip:port hops is noticed (otherwise all users share one throttle key again). docs/SETUP.md section 7: use a /32 example instead of 172.16.0.0/12. Dev run command in CLAUDE.md lacks --no-proxy-headers (dev-only, loopback; maintainer's file).
-- R1-22 follow-up (for F-01): MSG_ALIGNMENT_FAIL text says "Neither the SPF nor a DKIM identifier is aligned" while a lower-field dkim pair shows aligned (message_findings.py:404-415); `_topmost_results` (message_findings.py:325) still reads MSG_DKIM_NOT_PASS/MSG_SPF_NOT_PASS results from lower fields (consistent with option (c), can only add a warning).
+- R1-22 follow-up: addressed in F-01-01 (MSG_ALIGNMENT_FAIL reworded; `_topmost_results` documented and pinned).
+- F-01 follow-up (low, behaviour): `_topmost_results` lets a lower Authentication-Results `dkim=pass` suppress MSG_DKIM_NOT_PASS (verdict and computed_dmarc unaffected; pinned by a test in F-01-01). Decide whether per-method findings should read the topmost field only.
+- F-01 follow-up (low, UX): hop numbering differs on one page: Received table shows the 0-based index, the hop view and MSG_HOP_DELAY_HIGH / MSG_AUTH_BROKE_AFTER_HOP show 1-based. Unify to 1-based in the Received table display.
+- F-01-01 QA nits: detail_no_hop text says "below every Received field" even when the Received list was truncated at 100 (message_hops.py:317, locales :535): use the no_hop variant only when received_truncated is false or reword; docs/HEADERS.md:209 add "and signing algorithm" to the RFC 8617 4.2.1 uniqueness rule.
+- F-01-02 QA nits: shared HOP_SCENARIOS chain test modules (tests/api, tests/web import tests/cli/test_analyze.py, which imports tests/services): move to tests/support/; _result.html:144 `kind_text[e.kind]` fails on an unknown kind: use the i18n key pattern as the CLI does.
 - R1-12 follow-up: comment at app/web/templating.py:37 and test docstring tests/web/test_default_error_bodies.py:210 miscompute the 4-byte worst case (8192 fits the browser 3-byte maxlength case, ~6.6 KB); test_framework_validation_error_has_no_input_for_api_clients (line 67) already passed before the fix.
 - R1-13 follow-up: AST guard tests/web/test_async_handlers_guard.py:22-37 only knows listed method names and 5 modules; glob app/web and flag db/service/repo_for receivers. Nit: stray comment app/web/rules.py:744-746. Also app/api/v1/content.py:170 sync db.rollback() (existing item below, one line).
 - R1-14 follow-up: the purge runs only at startup; a long-running process accumulates rows until the M7 scheduler calls purge_sessions with a policy; no test sends a purged cookie.
@@ -251,9 +255,9 @@ Decided 2026-11-13 (maintainer):
 - docs/CHECKS.md vs app/checks/dmarc.py: the doc was aligned to the code (failed external-authorization lookup gives `error` only when no critical/high finding is present; always reported as DMARC_EXTERNAL_AUTH_UNVERIFIED).
 
 ## Backlog (maintainer request 2026-11-13)
-- [ ] F-01 message analysis: authentication per hop view (Authentication-Results and ARC sets ordered among Received fields, info finding where pass turns to fail; display only, never feeds computed_dmarc) (opus; depends R1-22; ticket docs/tickets/F-01-auth-per-hop-view.md; analyzer extension, no SPEC scope change); split into:
-  - [ ] F-01-01 hop view service, MSG_AUTH_BROKE_AFTER_HOP info finding, R1-22 QA inputs, docs/HEADERS.md (opus; docs/tickets/F-01-01-hop-view-service.md)
-  - [ ] F-01-02 hop view in API JSON, web and CLI, i18n en+it, permission tests (opus; depends F-01-01; docs/tickets/F-01-02-hop-view-surfaces.md)
+- [x] F-01 message analysis: authentication per hop view (Authentication-Results and ARC sets ordered among Received fields, info finding where pass turns to fail; display only, never feeds computed_dmarc) (opus; depends R1-22; ticket docs/tickets/F-01-auth-per-hop-view.md; analyzer extension, no SPEC scope change); split into:
+  - [x] F-01-01 hop view service, MSG_AUTH_BROKE_AFTER_HOP info finding, R1-22 QA inputs, docs/HEADERS.md (opus; docs/tickets/F-01-01-hop-view-service.md)
+  - [x] F-01-02 hop view in API JSON, web and CLI, i18n en+it, permission tests (opus; depends F-01-01; docs/tickets/F-01-02-hop-view-surfaces.md)
 
 ## M7 — Monitoring
 - [ ] Guarded outbound client (SSRF protection) + tests

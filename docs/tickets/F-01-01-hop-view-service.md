@@ -25,4 +25,4 @@ Acceptance criteria (table-driven, no network, ruff and mypy green):
 - MSG_ALIGNMENT_FAIL wording test for the lower-field-dkim-aligned case; `_topmost_results` behavior pinned by a test.
 - Existing message tests stay green (golden or schema updates only for the new section).
 New i18n keys (en + it; final names set by the coder): MSG_AUTH_BROKE_AFTER_HOP.title/detail/remediation; changed text of MSG_ALIGNMENT_FAIL.
-Status: todo
+Status: done (QA APPROVE, merged 6d3bf59; branch 49bb294+b2d1b28)
