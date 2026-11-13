@@ -26,8 +26,9 @@ name: CI infra
 #   .github/workflows/ci-infra.yml     this workflow itself
 # app/ and locales/ are listed (R1-27): the image COPYs them, and a change that only breaks inside
 # the container must show on `dev` and on the release PR, not first on `main`. M6-00 had left them
-# out to save billed minutes; that reason no longer holds (repository public, unlimited minutes
-# since 2026-11-11, see TODO.md and docs/HANDOFF.md).
+# out to save billed minutes; that reason no longer holds (maintainer decision 2026-11-11: the
+# repository is public and GitHub-hosted Actions minutes are free and unlimited, see
+# docs/tickets/M6-14-public-repository-docs.md).
 # tests/conftest.py is listed because the integration tests load it.
 # A new file the Docker jobs depend on must be added here.
 on:
