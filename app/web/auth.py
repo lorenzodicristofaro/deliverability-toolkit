@@ -2,6 +2,7 @@
 
 - GET/POST /login: email + password. One generic failure message whatever the reason (unknown
   user, wrong password, inactive user, no password set). Throttled per (IP, account) and per IP
+  (the client IP of `resolve_client_ip`: the direct peer unless it is in TRUSTED_PROXIES, R1-30)
   by `app.services.login_throttle` (in-process: single web process only, see that module), and
   at most `MAX_CONCURRENT_VERIFICATIONS` password verifications run at once in the process
   (`VERIFICATION_SLOTS`). A throttled request gets the localized 429 "too many attempts" page
@@ -21,8 +22,10 @@ token or cookie value: only an event name and, after authentication, the user id
 
 from __future__ import annotations
 
+import ipaddress
 import logging
 import math
+from collections.abc import Sequence
 from datetime import UTC, datetime
 
 import anyio
@@ -33,7 +36,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 
-from app.core.config import Settings
+from app.core.config import IPNetwork, Settings
 from app.core.i18n import t
 from app.core.security import (
     DEFAULT_HASHER,
@@ -57,6 +60,7 @@ from app.services.auth import (
 from app.services.login_throttle import MAX_CONCURRENT_VERIFICATIONS, LoginThrottle
 from app.web.deps import LOGIN_PATH, CurrentSession, DbDep, SettingsDep
 from app.web.templating import (
+    app_settings,
     form_value,
     payload_too_large,
     read_form,
@@ -78,6 +82,10 @@ VERIFICATION_SLOTS = anyio.Semaphore(
 )
 # Longest wait for a free slot (seconds) before answering 429 "busy"; tests replace it.
 VERIFICATION_WAIT = 2.5
+# Client IP (R1-30): bounds on the X-Forwarded-For work per request. Only the rightmost
+# `_MAX_HOPS` entries are read; longer text than any IP literal is not an IP.
+_MAX_HOPS = 32
+_MAX_IP_TEXT = 64
 
 router = APIRouter()
 
@@ -92,10 +100,58 @@ def login_throttle(request: Request) -> LoginThrottle:
     return throttle
 
 
+def _as_ip(text: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
+    """A bare IP literal (IPv4-mapped IPv6 unmapped to IPv4), or None if `text` is not one.
+
+    Ports, brackets, zone ids, hostnames and "unknown"/obfuscated tokens are not IP literals."""
+    if len(text) > _MAX_IP_TEXT or "%" in text:
+        return None
+    try:
+        ip = ipaddress.ip_address(text)
+    except ValueError:
+        return None
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+        return ip.ipv4_mapped
+    return ip
+
+
+def resolve_client_ip(peer: str, forwarded_for: Sequence[str], trusted: Sequence[IPNetwork]) -> str:
+    """The client address used as the throttle IP (R1-30; one rule for login and setup).
+
+    - `peer` is the direct peer address; `forwarded_for` the values of every X-Forwarded-For
+      header line, in order (joined like one comma-separated list); `trusted` TRUSTED_PROXIES.
+    - If `peer` is not an IP literal inside a trusted network, the result is `peer` unchanged
+      and the header is ignored (the default, with TRUSTED_PROXIES empty).
+    - Otherwise the hops are read right to left, skipping each hop that is itself a trusted
+      proxy; the first hop that is not trusted is the client, returned in normalised form.
+      Entries left of it (which the client can forge) are never read.
+    - Fallback to `peer`: no header, an empty header, every hop trusted, or the first
+      untrusted hop is not a bare IP literal (empty item, port, brackets, zone id, "unknown",
+      hostname). The client then shares the proxy's throttle budget: a misconfigured proxy is
+      visible as one key, never as an attacker-chosen one.
+    - The RFC 7239 `Forwarded` header is NOT read (proxies must set X-Forwarded-For); it is
+      ignored whatever its content.
+    """
+    peer_ip = _as_ip(peer)
+    if peer_ip is None or not any(peer_ip in net for net in trusted):
+        return peer
+    hops = ",".join(forwarded_for).split(",")
+    for raw in reversed(hops[-_MAX_HOPS:]):
+        hop = _as_ip(raw.strip())
+        if hop is None:
+            return peer
+        if not any(hop in net for net in trusted):
+            return str(hop)
+    return peer
+
+
 def _client_ip(request: Request) -> str:
-    # The direct peer. Proxy headers (X-Forwarded-For) are not trusted until a trusted-proxy
-    # setting exists; behind a reverse proxy every client shares the proxy's address.
-    return request.client.host if request.client is not None else ""
+    """The client IP of `request` for the throttle: see `resolve_client_ip` (TRUSTED_PROXIES)."""
+    peer = request.client.host if request.client is not None else ""
+    trusted = app_settings(request).trusted_proxy_networks()
+    if not trusted:
+        return peer
+    return resolve_client_ip(peer, request.headers.getlist("x-forwarded-for"), trusted)
 
 
 def _set_session_cookie(

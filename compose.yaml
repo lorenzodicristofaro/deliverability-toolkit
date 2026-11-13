@@ -36,6 +36,9 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       SESSION_IDLE_TIMEOUT_MINUTES: ${SESSION_IDLE_TIMEOUT_MINUTES:-30}
       SESSION_ABSOLUTE_TIMEOUT_MINUTES: ${SESSION_ABSOLUTE_TIMEOUT_MINUTES:-720}
+      # Reverse proxies trusted for X-Forwarded-For (R1-30, docs/SETUP.md section 7). Empty:
+      # the client IP is the direct peer (behind a proxy every user shares one throttle IP).
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES:-}
     networks:
       - default  # internet access
       - dns      # reach the unbound profile at 172.28.53.2; internal, no outside access

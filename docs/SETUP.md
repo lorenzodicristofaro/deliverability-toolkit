@@ -89,8 +89,51 @@ claude            # in the repo root
 serves plain HTTP there: no TLS. Put it behind a TLS-terminating reverse proxy for anything
 beyond a trusted local machine. If a proxy on the same host fronts the app, you can publish
 the port on loopback only by changing the mapping to `127.0.0.1:8000:8000` (an option, not
-the default). Trusted-proxy handling is not implemented yet (TODO.md); do not rely on any
-particular proxy header behaviour.
+the default).
+
+### Behind a reverse proxy: `TRUSTED_PROXIES`
+
+The login throttle and the setup wizard count failed attempts per client IP (and per account).
+Behind a reverse proxy the app's direct peer is the proxy, for every user. Set
+`TRUSTED_PROXIES` (in `.env`; `compose.yaml` forwards it) to the address or network of the
+proxy as the app sees it, for example `TRUSTED_PROXIES=172.16.0.0/12` or
+`TRUSTED_PROXIES=10.0.0.5,2001:db8::5`. Comma-separated IPv4/IPv6 addresses or CIDR networks;
+hostnames, `*`, ports and networks with host bits set (`10.0.0.1/8`) are refused and the app
+does not start.
+
+Which address that is depends on your setup: a proxy container on the same Compose network
+is seen with its container address; a proxy on the host reaching the published port is
+typically seen as the Docker network gateway (unverified for every Docker engine and network
+mode: check what your proxy's connections come from before choosing the value). Keep the list
+as narrow as possible: any peer inside it can choose the client IP the app sees.
+
+Rule (`app/web/auth.py`, `resolve_client_ip`):
+- The proxy must send `X-Forwarded-For` (nginx: `proxy_set_header X-Forwarded-For
+  $proxy_add_x_forwarded_for;`, which appends the connecting address). The RFC 7239
+  `Forwarded` header is not read.
+- Only when the direct peer is inside `TRUSTED_PROXIES` is the header used. The entries are read
+  from the right; entries that are themselves trusted proxies are skipped; the first one that is
+  not is the client IP. Entries to its left (which a client can write itself) are never used.
+- The direct peer is used instead when the header is missing or empty, when every entry is a
+  trusted proxy, or when that first untrusted entry is not a bare IP address (a port, brackets,
+  `unknown`, a hostname). A peer outside `TRUSTED_PROXIES` is always used as is, whatever
+  headers it sends.
+
+Lockout consequence of leaving it empty (the default) behind a proxy: every user shares the
+proxy's address, so the throttle key (IP, account) becomes just the account. Anyone who knows an
+email address can lock that account for everyone with ten wrong passwords every 15 minutes,
+and five wrong setup tokens delay (ten lock) the first-run wizard for the operator too. All
+users also share one per-IP budget (100 attempts per 15 minutes). Without a proxy, leave it
+empty: then forwarding headers are ignored, which is what you want when clients connect
+directly.
+
+uvicorn's own proxy-header handling is switched off in the image (`--no-proxy-headers` in the
+Dockerfile `CMD`), so `FORWARDED_ALLOW_IPS` has no effect and only `TRUSTED_PROXIES` decides.
+If you run uvicorn yourself behind a proxy (outside the image), pass `--no-proxy-headers` too:
+uvicorn's documented default (https://uvicorn.dev/settings/, checked 2026-11-13) enables proxy
+headers and trusts `127.0.0.1` and `::1` unless `FORWARDED_ALLOW_IPS` /
+`--forwarded-allow-ips` says otherwise, and it would then replace the peer address before the
+app sees it.
 
 ## 8. PostgreSQL instead of SQLite (Docker Compose)
 

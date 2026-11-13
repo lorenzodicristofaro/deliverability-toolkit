@@ -261,6 +261,11 @@ IP literals, IPv6 as `[::1]:5353`, default port 53),
 `BASE_URL`, `SMTP_*` for notifications, `LOG_LEVEL`,
 `SESSION_IDLE_TIMEOUT_MINUTES` (default 30) and `SESSION_ABSOLUTE_TIMEOUT_MINUTES`
 (default 720 = 12 h): both must be > 0 and idle <= absolute, otherwise startup fails.
+`TRUSTED_PROXIES` (R1-30; comma-separated IPv4/IPv6 addresses or CIDR networks, default empty):
+only a direct peer inside it may set the client IP via `X-Forwarded-For` (rightmost hop that is
+not a trusted proxy; `Forwarded` is not read); empty means the direct peer is the client IP.
+An invalid entry fails startup. uvicorn's own proxy-header rewriting is off in the image
+(`--no-proxy-headers`). Deployment details: docs/SETUP.md section 7.
 
 ## 12. Observability
 
