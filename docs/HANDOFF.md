@@ -33,7 +33,7 @@ F-01 is on `dev` only, not yet in `qa`. Next in TODO.md: **M7**.
 R1-21 helo= with a space; R1-22 for F-01; R1-25 CI alembic_version check + comment; R1-26 doc wording; R1-30
 fallback warning log, /32 example. All low.
 
-F-01 follow-ups (TODO.md): lower dkim=pass suppresses MSG_DKIM_NOT_PASS (behaviour decision); hop numbering 0- vs
+F-01 follow-ups (TODO.md): lower dkim=pass suppresses MSG_DKIM_NOT_PASS (decided: F-01-03); hop numbering 0- vs
 1-based on one page; detail_no_hop wording when Received is truncated; RFC 8617 4.2.1 qualifier; test fixture
 chaining; template kind label. All low.
 
@@ -52,4 +52,6 @@ chaining; template kind label. All low.
 ## Next 3 steps
 1. R1-25b: fix the postgres-profile startup race (above), QA, merge; confirm CI infra green; then merge `dev` into `qa`.
 2. M7: read TODO.md, restate its acceptance criteria, `pm` splits it into tickets.
-3. Optionally a small ticket batch for the F-01 follow-ups (decision on MSG_DKIM_NOT_PASS first).
+3. F-01-03 (maintainer decision 2026-11-13, see TODO.md): per-method findings read only the topmost
+   Authentication-Results field; lower fields never suppress MSG_DKIM_NOT_PASS. pm writes the ticket, opus coder.
+   Order: R1-25b, F-01-03, then M7.
