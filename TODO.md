@@ -281,7 +281,9 @@ Tickets (docs/tickets/M7-*.md, split 2026-11-13; model in brackets):
   - [ ] Follow-up (low): move the private loader helpers (_StrictLoader, _list, _text, ...) imported by app/checks/dnsbl_schema.py from app/esp/profile.py and app/dns/knowledge.py into a shared public module
 - [x] M7-04 seeds/dnsbl.yaml + docs/DNSBL.md, unverified entries to the maintainer (sonnet; depends M7-03)
   - Status: done (4287d2a, QA APPROVE round 1): spamcop-bl, surbl-multi, uribl-multi, all unverified; Spamhaus and Barracuda excluded.
-  - Note: awaiting maintainer data (2026-11-14): SpamCop IPv6 and terms, Barracuda.
+  - [ ] Follow-up (low; maintainer decision 2026-11-14: keep disabled, investigate later):
+    - SpamCop: pages 297, 290, 400 (spamcop.net/fom-serve/cache/) checked 2026-11-14; none states IPv6 support, query/volume limits, commercial terms or a refusal code; stays default_enabled false with ipv6/usage_policy unverified.
+    - Barracuda BRBL: not in the seed. Candidate zone b.barracudacentral.org, listed code 127.0.0.2 from secondary sources only (maintainer screenshot of a search summary citing hostek.com); barracudacentral.org returned 403 to us; access rules (resolver registration), refusal code and IPv6 unknown. Add only as unverified + disabled once the official page text is available.
 - [ ] M7-03b DNSBL bitmask return codes + `default_enabled` schema field (opus; depends M7-03)
 - [ ] M7-05 dnsbl check registration, API, CLI, web; disabled-by-default lists enabled by instance admin (sonnet; depends M7-03, M7-03b, M7-04)
 - [ ] M7-05b Spamhaus via DQS key, key via secret service (opus; depends M7-03b, M7-05, M7-14b; schedule after M7-14b)
