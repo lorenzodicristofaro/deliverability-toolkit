@@ -7,8 +7,8 @@ the hop view unchanged. QA APPROVE first round, no findings; full suite green (S
 Dev CI green on dcca37e (CI, CI infra, Secret scan). Next: **M7 — Monitoring**.
 
 ## State
-- `dev` at the commit carrying this file (974c785 + this handoff). `qa` at e140ea1 (R1 + F-01-01/02 + R1-25b);
-  F-01-03 is not in `qa` yet. `main` unchanged.
+- `dev` at the commit carrying this file (974c785 + this handoff). `qa` at 55bc152 (dev promoted
+  2026-11-13, includes F-01-03). `main` unchanged.
 - Known cost of F-01-03, told to the maintainer: receivers that write one Authentication-Results field per milter
   (e.g. Postfix + separate OpenDKIM/OpenDMARC) get MSG_DKIM_NOT_PASS low "not stated" when dkim passed in a lower
   field. Pinned in tests (R122_FINDINGS row 2, TOPMOST_ONLY). Revisit only on maintainer request.
@@ -17,11 +17,7 @@ Dev CI green on dcca37e (CI, CI infra, Secret scan). Next: **M7 — Monitoring**
   Optional cleanup: check `git -C <wt> status` is clean, then `git worktree remove`; leave the locked one.
 
 ## Open maintainer actions
-1. QA checklist line for .claude/agents/qa-reviewer.md ("Review steps", new step 5 after
-   `   - changes stay inside "Files in scope"`): `5. Flag every change to .github/** or .claude/** in the report
-   (including the diff of .claude/settings.json) and require the maintainer's approval before it is pushed; this is a
-   blocker until approved.`
-2. Optional (R1-30 QA nit): CLAUDE.md dev run command lacks `--no-proxy-headers` (dev-only, loopback).
+1. Optional (R1-30 QA nit): CLAUDE.md dev run command lacks `--no-proxy-headers` (dev-only, loopback).
 
 ## M7 notes for the next session (from TODO.md)
 - Items: guarded outbound HTTP client (SSRF protection), custom check kind http_fetch via that client (SPEC §5
@@ -40,6 +36,5 @@ log, /32 example. F-01: hop numbering 0- vs 1-based on one page; detail_no_hop w
 RFC 8617 4.2.1 "and signing algorithm"; shared HOP_SCENARIOS fixtures to tests/support/; `_result.html` kind label.
 
 ## Next 3 steps
-1. Optional: promote `dev` → `qa` (CI green on dcca37e; the later commits are docs-only).
-2. M7: restate its acceptance criteria, `pm` splits it into tickets (guarded client first, opus), GM reviews them.
-3. Low follow-ups batch when convenient.
+1. M7: restate its acceptance criteria, `pm` splits it into tickets (guarded client first, opus), GM reviews them.
+2. Low follow-ups batch when convenient.
