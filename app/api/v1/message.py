@@ -28,7 +28,7 @@ from app.core.i18n import t
 from app.core.permissions import Action, TenantResource, can
 from app.core.tenancy import TenantContext
 from app.parsers.message import MAX_RAW_BYTES
-from app.services.message_analysis import analyze_message
+from app.services.message_analysis import MessageAnalysis, analyze_message
 from app.web.deps import CurrentSession, tenant_ctx
 from app.web.templating import request_language
 
@@ -83,7 +83,7 @@ async def _read_capped(request: Request) -> bytes:
     return b"".join(chunks)
 
 
-@router.post("/analyze")
+@router.post("/analyze", responses={200: {"model": MessageAnalysis}})
 async def message_analyze(request: Request, _ctx: Access) -> Response:
     content_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
     if content_type not in _ALLOWED_TYPES:

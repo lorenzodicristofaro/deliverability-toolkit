@@ -226,6 +226,21 @@ chain validation status of section 4.4). The likely causes named in the text (fo
 modification) are a hint, not a diagnosis; a lower field written by the sender produces the
 same pattern.
 
+Surfaces (F-01-02). The REST body of `POST /api/v1/message/analyze` and CLI `--format json`
+carry `hops` as above: the same bytes as `MessageAnalysis.model_dump_json()` (the CLI adds one
+trailing newline), and the OpenAPI schema documents the 200 body as `MessageAnalysis`. The web
+UI (section "Authentication per hop") and the CLI text output list the entries oldest first with
+position (`order` + 1), hop (1-based, as in `MSG_HOP_DELAY_HIGH`; `-` or omitted when `null`),
+kind, authserv-id (for an ARC set: AS `d=`, instance, `cv` and the AAR authserv-id) and the
+stated spf, dkim, dmarc and arc results. Unparsed entries are labelled "unparsed" with their
+issue codes; entries with `stated_not_verifiable` are labelled "stated by {authserv_id}, not
+verifiable". `received_truncated` and `arc_truncated` add a note; `hops` null shows "This
+section could not be produced"; no entries shows an empty state. Strings are the bounded
+excerpts of the view model (control characters dropped); the web output is autoescaped and
+goes through `visible`. Labels are i18n keys `message.section.hop_view` and
+`message.hop_view.*` (en, it; the CLI honours `--lang`). Display only: the section does not
+change the status or the CLI exit code.
+
 ## Permission `message.analyze`
 
 A dedicated, tenant-level action. It is separate from `dns.tools` and `check.run` because those

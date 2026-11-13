@@ -21,7 +21,13 @@ from app.cli.check import EXIT_ERROR, EXIT_OK, EXIT_USAGE, EXIT_WARN, FORMATS, _
 from app.core import i18n
 from app.core.i18n import t
 from app.parsers.message import MAX_RAW_BYTES
-from app.services.message_analysis import MessageAnalysis, analyze_message
+from app.services.message_analysis import (
+    HopEntryView,
+    HopsView,
+    MessageAnalysis,
+    analyze_message,
+)
+from app.services.message_hops import HOP_METHODS
 
 CHUNK = 64 * 1024
 
@@ -82,6 +88,50 @@ def _val(v: object, lang: str) -> str:
     if isinstance(v, bool):
         return t("message.bool.yes" if v else "message.bool.no", lang)
     return str(v)
+
+
+def _hop_entry_line(e: HopEntryView, lang: str) -> str:
+    """One hop-view entry. Strings come from the service already bounded and stripped of
+    control characters (``excerpt``); no raw input is printed."""
+    parts = [f"{e.order + 1}.", t(f"message.hop_view.kind.{e.kind}", lang)]
+    if e.hop is not None:  # 1-based, as in MSG_HOP_DELAY_HIGH
+        parts.append(f"({t('message.hop_view.col.hop', lang)} {e.hop + 1})")
+    # Only an ARC set has arc_* values; for it the AAR authserv-id follows in brackets.
+    if e.arc_domain is not None:
+        parts.append(e.arc_domain)
+    if e.arc_instance is not None:
+        parts.append(t("message.hop_view.instance", lang, instance=e.arc_instance))
+    if e.arc_cv is not None:
+        parts.append(t("message.hop_view.cv", lang, cv=e.arc_cv))
+    if e.authserv_id is not None:
+        arc = e.arc_domain is not None or e.arc_instance is not None
+        parts.append(f"[{e.authserv_id}]" if arc else e.authserv_id)
+    line = " ".join(parts)
+    results = [
+        f"{m}={'/'.join(r.result for r in e.results if r.method == m)}"
+        for m in HOP_METHODS
+        if any(r.method == m for r in e.results)
+    ]
+    if results:
+        line += ": " + " ".join(results)
+    if not e.parsed:
+        line += " -- " + t("message.hop_view.unparsed", lang)
+        if e.issues:
+            line += " (" + ", ".join(e.issues) + ")"
+    elif e.stated_not_verifiable:
+        line += " -- " + t("message.hop_view.stated", lang, authserv_id=_val(e.authserv_id, lang))
+    return line
+
+
+def _hop_view_lines(h: HopsView, lang: str) -> list[str]:
+    if not h.entries:
+        return [t("message.hop_view.empty", lang)]
+    lines = [_hop_entry_line(e, lang) for e in h.entries]
+    if h.received_truncated:
+        lines.append(t("message.hop_view.received_truncated", lang))
+    if h.arc_truncated:
+        lines.append(t("message.hop_view.arc_truncated", lang))
+    return lines
 
 
 def render_text(a: MessageAnalysis, lang: str) -> str:
@@ -152,6 +202,12 @@ def render_text(a: MessageAnalysis, lang: str) -> str:
     else:
         out.append(f"  {t('message.arc.status', lang)}: {a.arc.status}")
         out.append(f"  {t('message.arc.instances', lang)}: {a.arc.instance_count}")
+
+    section("message.section.hop_view")
+    if a.hops is None:
+        missing()
+    else:
+        out.extend("  " + line for line in _hop_view_lines(a.hops, lang))
 
     section("message.section.mime")
     if a.mime is None:
