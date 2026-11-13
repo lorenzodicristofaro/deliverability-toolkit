@@ -22,9 +22,13 @@ name: CI infra
 #   migrations/**                      compose smoke runs `alembic upgrade head` at container start
 #   seeds/**                           compose smoke runs the startup seed sync
 #   profiles/**                        COPYed into the image (ESP profiles, loaded at runtime from M6)
+#   app/**, locales/**                 COPYed into the image and run by the compose smoke
 #   .github/workflows/ci-infra.yml     this workflow itself
-# Deliberately NOT listed: app/, locales/ (the image COPYs them, but the test jobs cover their
-# behaviour and listing them would run these jobs on nearly every code push).
+# app/ and locales/ are listed (R1-27): the image COPYs them, and a change that only breaks inside
+# the container must show on `dev` and on the release PR, not first on `main`. M6-00 had left them
+# out to save billed minutes; that reason no longer holds (maintainer decision 2026-11-11: the
+# repository is public and GitHub-hosted Actions minutes are free and unlimited, see
+# docs/tickets/M6-14-public-repository-docs.md).
 # tests/conftest.py is listed because the integration tests load it.
 # A new file the Docker jobs depend on must be added here.
 on:
@@ -42,6 +46,8 @@ on:
       - "migrations/**"
       - "seeds/**"
       - "profiles/**"
+      - "app/**"
+      - "locales/**"
       - "tests/integration/**"
       - "tests/conftest.py"
       - "tests/support/**"
@@ -62,6 +68,8 @@ on:
       - "migrations/**"
       - "seeds/**"
       - "profiles/**"
+      - "app/**"
+      - "locales/**"
       - "tests/integration/**"
       - "tests/conftest.py"
       - "tests/support/**"
