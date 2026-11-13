@@ -405,6 +405,9 @@ async def _run(
             if previous.scheme == "https" and target.scheme == "http":
                 return FetchError(FetchErrorKind.scheme_not_allowed, "https_downgrade", hop)
             if target.origin != previous.origin:
+                if method == "POST":
+                    # 307/308 keep the body: it must never reach another origin.
+                    return FetchError(FetchErrorKind.blocked, "cross_origin_post", hop)
                 for name in _CROSS_ORIGIN_DROPPED:
                     headers.pop(name, None)
         if target.url in visited:

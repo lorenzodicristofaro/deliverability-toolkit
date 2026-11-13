@@ -89,6 +89,9 @@ def test_accepted_urls(url: str, host: str, port: int, path: str, is_ip: bool) -
         # IPv6 zone ids
         ("http://[fe80::1%25eth0]/", FetchErrorKind.blocked, "zone_id"),
         ("http://[fe80::1%eth0]/", FetchErrorKind.blocked, "zone_id"),
+        # percent-encoded host names
+        ("http://www%2eexample.com/", FetchErrorKind.blocked, "malformed"),
+        ("http://%31%32%37.0.0.1/", FetchErrorKind.blocked, "malformed"),
     ],
 )
 def test_rejected_urls(url: object, kind: FetchErrorKind, detail: str) -> None:

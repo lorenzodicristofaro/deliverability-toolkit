@@ -166,5 +166,4 @@ settings, both optional; an invalid value stops the app at startup:
 | `OUTBOUND_HTTP_ALLOWED_PORTS` | `80,443` | Comma-separated destination ports (1-65535) the client may connect to, for the first request and every redirect. |
 | `OUTBOUND_HTTP_MAX_REDIRECTS` | `3` | Redirects followed per request, 0 to 5 (5 is a hard maximum). |
 
-The defaults are project choices. `compose.yaml` does not forward these variables yet, so under
-Docker Compose the defaults apply.
+The defaults are project choices. `compose.yaml` forwards both variables (same defaults).

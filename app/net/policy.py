@@ -138,7 +138,8 @@ def parse_url(
     if not raw_host:
         return _blocked("malformed", hop)
     if "%" in raw_host:
-        return _blocked("zone_id", hop)
+        # In brackets it is an IPv6 zone id; elsewhere a percent-encoded host name.
+        return _blocked("zone_id" if parts.netloc.startswith("[") else "malformed", hop)
     port = parts.port if parts.port is not None else DEFAULT_PORTS[scheme]
     if port not in allowed_ports:
         return FetchError(FetchErrorKind.port_not_allowed, str(port), hop)

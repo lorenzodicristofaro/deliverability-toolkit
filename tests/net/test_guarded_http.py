@@ -376,6 +376,34 @@ async def test_post_redirect_method_when_following(status: int, method: str, bod
     assert (second.method, second.content) == (method, body)
 
 
+@pytest.mark.parametrize("status", [307, 308])
+@pytest.mark.parametrize(
+    "location",
+    [
+        "https://other.example.com/hook",
+        "https://www.example.com:8443/hook",
+        "http://other.example.com/",
+    ],
+)
+async def test_post_cross_origin_307_308_refused(status: int, location: str) -> None:
+    recorder = Recorder(redirects({f"{N}/hook": (status, location)}))
+    limits = FetchLimits(allowed_ports=(80, 443, 8443))
+    err = error(
+        await run(
+            f"http://{N}/hook",
+            hosts(**REDIRECT_RESOLVER),
+            recorder,
+            method="POST",
+            body=b"{}",
+            headers={"content-type": "application/json"},
+            follow_redirects=True,
+            limits=limits,
+        )
+    )
+    assert (err.kind, err.detail, err.hop) == (FetchErrorKind.blocked, "cross_origin_post", 1)
+    assert len(recorder.requests) == 1  # the body went to the original origin only
+
+
 async def test_post_body_is_size_capped() -> None:
     recorder = Recorder(ok())
     limits = FetchLimits(max_request_body_bytes=4)

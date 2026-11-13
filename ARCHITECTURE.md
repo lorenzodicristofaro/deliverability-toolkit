@@ -273,7 +273,9 @@ when a profile is older than 12 months.
     `trust_env=False` and no proxy, so `HTTP(S)_PROXY`, `ALL_PROXY`, `NO_PROXY`, netrc,
     `SSL_CERT_FILE`/`SSL_CERT_DIR` and cookie jars are never used. TLS verification is always on.
   - Redirects (301, 302, 303, 307, 308) are followed manually for GET/HEAD; POST (alert webhooks)
-    does not follow unless asked (then 307/308 keep POST and the body, 301/302/303 become GET).
+    does not follow unless asked (then 307/308 keep POST and the body, 301/302/303 become GET;
+    a 307/308 to another origin (scheme, host or port) is refused as `blocked`,
+    `cross_origin_post`, so the body and Content-Type never reach another origin).
     Relative `Location` is resolved against the current URL; a missing, oversize or unparsable
     `Location` is `protocol_error`; https -> http is refused (`scheme_not_allowed`,
     `https_downgrade`); a revisited URL is `too_many_redirects` (`loop`). `Authorization` is
