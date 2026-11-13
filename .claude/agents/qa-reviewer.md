@@ -21,6 +21,7 @@ Review steps:
    - outbound network only through the guarded client
    - no secrets in code; no invented vendor configuration
    - changes stay inside "Files in scope"
+5. Flag every change to .github/** or .claude/** in the report (including the diff of .claude/settings.json) and require the maintainer's approval before it is pushed; this is a blocker until approved.
 
 Report format (max 25 lines):
 - Verdict: APPROVE or CHANGES REQUESTED

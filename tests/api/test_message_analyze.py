@@ -11,15 +11,18 @@ from __future__ import annotations
 import logging
 import socket
 from collections.abc import AsyncIterator, Iterator
+from pathlib import Path
 from typing import Any
 
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select
+from typer.testing import CliRunner
 
 from app.api.v1 import message as message_api
 from app.api.v1.dns_tools import dns_backend
+from app.cli.main import app as cli_app
 from app.core import i18n
 from app.core.config import Settings
 from app.core.db import create_db_engine, create_session_factory
@@ -28,8 +31,9 @@ from app.main import create_app
 from app.models import Membership
 from app.models.base import Base
 from app.parsers.message import MAX_RAW_BYTES
-from app.services.message_analysis import analyze_message
+from app.services.message_analysis import MessageAnalysis, analyze_message
 from tests.api.test_domains import KEY, World, _cookie, _seed, call
+from tests.cli.test_analyze import HOP_SCENARIO_IDS, HOP_SCENARIOS
 from tests.support.dns_backend import fake_backend
 from tests.support.dns_zones import FakeServerSet
 
@@ -377,3 +381,79 @@ def test_offline_and_nothing_stored(
         "bob@example.net",
     ):
         assert secret not in logged
+
+
+# --- F-01-02: per-hop authentication view in the response ---------------------------------------
+
+HOP_RAW = dict(HOP_SCENARIOS)["forwarding"]
+
+
+@pytest.mark.parametrize("who", list(EXPECTED))
+def test_hop_section_only_for_allowed_roles(
+    world: tuple[World, Any], spy: list[bytes], who: str
+) -> None:
+    w, _ = world
+    r = post(w, who, HOP_RAW)
+    assert r.status_code == EXPECTED[who]
+    if r.status_code == 200:
+        hops = r.json()["hops"]
+        assert hops is not None and hops["entries"]
+        assert {"received_truncated", "arc_truncated"} <= set(hops)
+    else:
+        assert "hops" not in r.text and "entries" not in r.text
+        assert set(r.json()) == {"detail"}
+
+
+@pytest.mark.parametrize(
+    ("who", "tenant", "status"), [("analyst", "b", 404), ("viewer", "a", 403), ("anon", "a", 401)]
+)
+def test_hop_section_absent_when_refused(
+    world: tuple[World, Any], spy: list[bytes], who: str, tenant: str, status: int
+) -> None:
+    w, _ = world
+    r = post(w, who, HOP_RAW, tenant=tenant)
+    assert r.status_code == status
+    assert "hops" not in r.text
+    assert spy == []
+
+
+@pytest.mark.parametrize(("name", "raw"), HOP_SCENARIOS, ids=HOP_SCENARIO_IDS)
+def test_hop_scenarios_byte_equal_to_service_and_cli(
+    world: tuple[World, Any], tmp_path: Path, name: str, raw: bytes
+) -> None:
+    w, _ = world
+    r = post(w, "analyst", raw)
+    assert r.status_code == 200
+    expected = analyze_message(raw).model_dump_json()
+    assert r.content == expected.encode()
+    p = tmp_path / "m.eml"
+    p.write_bytes(raw)
+    c = CliRunner().invoke(cli_app, ["analyze", str(p), "--format", "json"])
+    assert c.stdout == expected + "\n"
+    body = r.json()["hops"]
+    assert body["entries"]
+    positions = [e["position"] for e in body["entries"]]
+    assert positions == sorted(positions, reverse=True)  # oldest (bottommost) first
+    assert [e["order"] for e in body["entries"]] == list(range(len(positions)))
+    for e in body["entries"]:  # bounded, control characters dropped (as elsewhere)
+        for v in (e["authserv_id"], e["arc_domain"], e["arc_cv"]):
+            assert v is None or (len(v) <= 200 and v.isprintable())
+
+
+def test_hop_section_is_in_the_openapi_schema(world: tuple[World, Any]) -> None:
+    w, _ = world
+    spec = w.client.app.openapi()  # type: ignore[attr-defined]
+    op = spec["paths"][URL]["post"]
+    ref = op["responses"]["200"]["content"]["application/json"]["schema"]["$ref"]
+    assert ref.endswith("/MessageAnalysis")
+    schemas = spec["components"]["schemas"]
+    assert "hops" in schemas["MessageAnalysis"]["properties"]
+    entry = schemas["HopEntryView"]["properties"]
+    for field in ("kind", "position", "hop", "authserv_id", "stated_not_verifiable", "issues"):
+        assert field in entry
+    assert {"entries", "received_truncated", "arc_truncated"} <= set(
+        schemas["HopsView"]["properties"]
+    )
+    # The documented model parses the real body.
+    body = post(w, "analyst", HOP_RAW).content
+    assert MessageAnalysis.model_validate_json(body).model_dump_json().encode() == body

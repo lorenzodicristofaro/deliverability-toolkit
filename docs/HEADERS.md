@@ -105,7 +105,14 @@ size check happens while streaming, so an oversized body is never buffered.
   several fields (for example spf in one field and dkim in the next) is treated the same way:
   its dkim pass from the second field is not used, which can give a computed `fail`,
   `MSG_ALIGNMENT_FAIL` and `MSG_ALIGNMENT_STATED_MISMATCH` although the receiver stated
-  `dmarc=pass`. A per-hop view is not part of this rule.
+  `dmarc=pass`. The per-hop view (section "Per-hop authentication view") is display only and
+  does not change this rule.
+- `MSG_SPF_NOT_PASS` and `MSG_DKIM_NOT_PASS` (F-01-01, GM decision 2026-11-13, R1-22 QA input):
+  they read the results of the topmost field that states the method, which can be a lower
+  field. This is display only and unchanged: it selects these warnings and their wording, never
+  `computed_dmarc` or the alignment pairs. A lower field can therefore add `MSG_DKIM_NOT_PASS`
+  (for example a lower `dkim=fail` when the topmost field states only spf) or leave it out (a
+  lower `dkim=pass`); both cases are pinned by a test.
 
 ## Findings
 
@@ -133,7 +140,7 @@ taken from the docstring of `app/services/message_findings.py`.
 | MSG_SPF_NOT_PASS | high / medium / low | stated spf: fail gives high; other results medium; not stated low |
 | MSG_DKIM_NOT_PASS | high / medium / low | same rule; no stated dkim pass |
 | MSG_DMARC_NOT_PASS | high / medium / low | same rule; stated dmarc is not pass |
-| MSG_ALIGNMENT_FAIL | high | computed: no identifier aligned |
+| MSG_ALIGNMENT_FAIL | high | computed: no SPF or DKIM result used for the verdict is both stated as pass and aligned (a lower-field pair shown as aligned does not count) |
 | MSG_ALIGNMENT_STATED_MISMATCH | medium | stated dmarc disagrees with computed |
 | MSG_UNVERIFIED_DKIM_SIGNATURE | low | DKIM-Signature with no stated result |
 | MSG_ARC_INVALID | low | ARC chain structurally invalid |
@@ -150,6 +157,89 @@ taken from the docstring of `app/services/message_findings.py`.
 | MSG_AUTHRES_UNPARSED | medium | an Authentication-Results field has no authserv-id or an error-severity parse issue; parameters are issue codes only (error-class) |
 | MSG_ALIGNMENT_NOT_EVALUATED | medium | computed DMARC alignment is not evaluated although a field is present; parameters are pair reason codes only (error-class) |
 | MSG_ALIGNMENT_LOWER_FIELD_NOT_USED | low | an aligned pass stated in a lower Authentication-Results field was not used and the computed DMARC result is not pass; parameters are the methods and identifier domains |
+| MSG_AUTH_BROKE_AFTER_HOP | info | per-hop view: a method stated pass in an older field and a failure-class result in the next newer field that states it; parameters are `method=result` pairs, the newer field's authserv-id and `hop`, the 1-based hop number (Received `index` + 1, as in `MSG_HOP_DELAY_HIGH`) (detail variant `no_hop` when the older field is below every Received field); display only |
+
+## Per-hop authentication view
+
+Section `hops` of the analysis (F-01-01; the API, UI and CLI rendering is F-01-02). Built by
+`app/services/message_hops.py` from the already parsed Received, Authentication-Results and
+ARC fields; offline, deterministic, no clock. Nothing is verified cryptographically: DKIM and
+ARC signatures are not checked, ARC stays structural (`verified` is `None`, `crypto_checked`
+is false) and `MSG_ARC_INVALID` / `MSG_ARC_CV_FAIL` are unchanged.
+
+Ordering. Entries are ordered by header position only, never by field type, oldest first
+(`order` 0 is the bottommost field; `position` is the byte offset of the field in the message).
+
+- Authentication-Results is added at the top of the message as it transits MTAs that do
+  checks, and is a trace field (RFC 8601 section 2.1); it MUST be prepended and MUST NOT be
+  reordered (RFC 8601 section 4.1). Received is prepended by each relay (RFC 5321 section 4.4).
+  So position indicates where in the handling chain a field was added.
+- It is an indication, not proof: RFC 8601 section 4.1 notes that some handlers can only
+  append fields (the position signal is then lost) and section 7.3 that fields are sometimes
+  reordered en route.
+- ARC: an ARC set is the AAR, AMS and AS fields sharing one instance value (RFC 8617 sections
+  3.1 and 4.2); instance values start at 1, each new set adds 1, and they give the order in
+  which sets were added (RFC 8617 sections 4.2.1 and 5.1), range 1 to 50 (section 4.2.1).
+  RFC 8617 does not say where ARC fields are placed in the header. Placing a set among the
+  Received fields by the position of its topmost member is a convention of this tool; the
+  instance number is shown next to it and decides nothing here.
+
+Each entry has `kind` (`received`, `authres`, `arc_set`), `order`, `position`, `hop`,
+`parsed`, `authserv_id`, `authres_index` (0 = topmost Authentication-Results field),
+`arc_instance`, `arc_domain` (AS `d=`), `arc_cv`, `results` (the `spf`, `dkim`, `dmarc` and
+`arc` method/result pairs stated there), `stated_not_verifiable` and `issues` (codes only).
+`hop` of a Received entry is its Received `index` (0 = oldest); for the other kinds it is the
+index of the nearest Received field below it, or `null` when there is none. `hops` also carries
+`received_truncated` and `arc_truncated`.
+
+- Authentication-Results fields below the topmost one, and every ARC set, have
+  `stated_not_verifiable` true: they are shown as stated by their authserv-id, not verifiable.
+  The authserv-id identifies the authentication service within the ADMD that did the checks
+  (RFC 8601 section 2.5) and consumers SHOULD NOT interpret the field unless that identifier is
+  in use within their ADMD (sections 2.5 and 4.1); this tool knows no trusted authserv-id and
+  decides no trust. The AAR has the Authentication-Results payload syntax plus the instance tag
+  (RFC 8617 section 4.1.1).
+- Display only: nothing in this section feeds `computed_dmarc`, the alignment pairs or any
+  other finding (R1-22 rule: the verdict uses the topmost field).
+- Unparsed entries (`parsed` false): an Authentication-Results field without an authserv-id
+  (mandatory in the RFC 8601 section 2.2 ABNF) or with an error-severity parse issue (same rule
+  as `MSG_AUTHRES_UNPARSED`), a field the parser rejects (oversized, NUL), an ARC set with a
+  missing member or an error, an AAR payload without an authserv-id, and ARC fields that could
+  not be grouped (`ungrouped_field`, invalid instance) or repeat an instance
+  (`duplicate_instance`; RFC 8617 section 4.2.1 requires exactly one of each field per
+  instance). They keep issue codes only: no results, authserv-id or domain. If the
+  Authentication-Results section fails, its fields are read one by one here so one bad field
+  stays local. A failure of the hop view itself gives `hops` null, `MSG_PARSER_LIMIT` with
+  `hops_failed` and status `error`; only `MSG_AUTH_BROKE_AFTER_HOP` is dropped.
+
+`MSG_AUTH_BROKE_AFTER_HOP` (info). Parsed entries that state a method are compared oldest to
+newest; when one states `pass` and the next newer one stating the same method states `fail`,
+`softfail`, `temperror` or `permerror`, the finding names the hop of the older entry ("broke
+after hop N"). N is 1-based, the same number `MSG_HOP_DELAY_HIGH` shows for that hop
+(Received `index` + 1); the `hop` field of the entries stays the 0-based `index`. At most one break per method; methods breaking between the same two entries are
+reported together. A method counts as pass when any of its results in the entry is `pass`
+(several DKIM signatures). `none`, `neutral` and `policy` are not a failure class and reset the
+comparison. Result names: dkim RFC 8601 section 2.7.1 (none, pass, fail, policy, neutral,
+temperror, permerror), spf RFC 8601 section 2.7.2 (adds softfail), dmarc RFC 7489 section 11.2
+(none, pass, fail, temperror, permerror), arc RFC 8617 section 10.1 (none, pass, fail; the
+chain validation status of section 4.4). The likely causes named in the text (forwarding, list
+modification) are a hint, not a diagnosis; a lower field written by the sender produces the
+same pattern.
+
+Surfaces (F-01-02). The REST body of `POST /api/v1/message/analyze` and CLI `--format json`
+carry `hops` as above: the same bytes as `MessageAnalysis.model_dump_json()` (the CLI adds one
+trailing newline), and the OpenAPI schema documents the 200 body as `MessageAnalysis`. The web
+UI (section "Authentication per hop") and the CLI text output list the entries oldest first with
+position (`order` + 1), hop (1-based, as in `MSG_HOP_DELAY_HIGH`; `-` or omitted when `null`),
+kind, authserv-id (for an ARC set: AS `d=`, instance, `cv` and the AAR authserv-id) and the
+stated spf, dkim, dmarc and arc results. Unparsed entries are labelled "unparsed" with their
+issue codes; entries with `stated_not_verifiable` are labelled "stated by {authserv_id}, not
+verifiable". `received_truncated` and `arc_truncated` add a note; `hops` null shows "This
+section could not be produced"; no entries shows an empty state. Strings are the bounded
+excerpts of the view model (control characters dropped); the web output is autoescaped and
+goes through `visible`. Labels are i18n keys `message.section.hop_view` and
+`message.hop_view.*` (en, it; the CLI honours `--lang`). Display only: the section does not
+change the status or the CLI exit code.
 
 ## Permission `message.analyze`
 

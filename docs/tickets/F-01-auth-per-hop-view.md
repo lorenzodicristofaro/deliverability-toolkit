@@ -23,7 +23,7 @@ Acceptance criteria:
 - Output in web UI, API JSON and CLI text; no input echo beyond the existing bounded excerpts; control characters escaped as elsewhere.
 - No network in tests. ruff, mypy, relevant tests green; API endpoint tenancy/permission test if the schema touches an endpoint with auth.
 New i18n keys (en + it): hop view title and column labels, "stated by {authserv_id}, not verifiable", finding MSG_AUTH_BROKE_AFTER_HOP title/detail (final key names set by the coder)
-Status: todo
+Status: done (F-01-01 6d3bf59, F-01-02 d2d5f40). Split (2026-11-13) into F-01-01 (docs/tickets/F-01-01-hop-view-service.md: service, info finding, R1-22 QA inputs, docs/HEADERS.md) and F-01-02 (docs/tickets/F-01-02-hop-view-surfaces.md: API JSON, web, CLI, i18n, permission tests; depends F-01-01). This file stays as the parent spec; its acceptance criteria are distributed over the children.
 Inputs from R1-22 QA (address in this ticket):
 - MSG_ALIGNMENT_FAIL text says "Neither the SPF nor a DKIM identifier is aligned" while a lower-field dkim pair shows aligned (app/services/message_findings.py:404-415).
 - `_topmost_results` (app/services/message_findings.py:325) still reads per-method results (MSG_DKIM_NOT_PASS / MSG_SPF_NOT_PASS) from lower fields; consistent with option (c), it can only add a warning.

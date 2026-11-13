@@ -158,6 +158,13 @@ and DNS snapshots are kept longer.
   (`MIGRATION_LOCK_KEY`) for the whole upgrade, so the first replica migrates and
   the others wait (no lock timeout) and then find the schema already at head.
   SQLite takes no lock (single container).
+- Startup ordering (PostgreSQL profile): before taking the migration advisory lock,
+  `migrations/env.py` waits for the database for at most 60 s (backoff 0.5 s doubling
+  to a 4 s cap). It retries only connection refused and the server's starting-up
+  rejection (57P03, matched on the libpq message because psycopg reports connect
+  errors without a SQLSTATE). Authentication, unknown-database and DNS errors fail at
+  once; after the bound the original error ends the process and
+  `restart: unless-stopped` applies. SQLite and injected connections skip the wait.
 
 ## 7. DNS layer
 

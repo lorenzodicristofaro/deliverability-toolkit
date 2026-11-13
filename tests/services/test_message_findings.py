@@ -10,6 +10,7 @@ import pytest
 from app.checks.models import CODE_RE
 from app.core import i18n
 from app.parsers.arc import parse_arc_chain
+from app.parsers.authres import AuthResParseError, parse_all_authentication_results
 from app.parsers.message import (
     MAX_HEADER_COUNT,
     MAX_RAW_BYTES,
@@ -29,6 +30,7 @@ from app.services.message_findings import (
     excerpt,
     rejected_input_findings,
 )
+from app.services.message_hops import build_hop_view
 
 LOCALES = Path(__file__).resolve().parents[2] / "locales"
 EN = json.loads((LOCALES / "en.json").read_text(encoding="utf-8"))
@@ -65,12 +67,18 @@ def analyze_message(raw: bytes) -> MessageFindings:
         mime = parse_mime(raw)
     except MessageParseError as exc:
         return rejected_input_findings(exc.code)
+    try:
+        headers = parse_all_authentication_results(block)
+    except AuthResParseError:
+        headers = None
+    received, arc = parse_received_chain(block), parse_arc_chain(block)
     return build_message_findings(
         block,
-        received=parse_received_chain(block),
+        received=received,
         mime=mime,
-        arc=parse_arc_chain(block),
+        arc=arc,
         alignment=analyze_alignment(block),
+        hops=build_hop_view(block, received, headers, arc),
     )
 
 
@@ -270,6 +278,17 @@ POSITIVE = [
         ),
         "x",
     ),
+    (
+        "MSG_AUTH_BROKE_AFTER_HOP",
+        ("Received", "Authentication-Results"),
+        (
+            "Authentication-Results: mx.example.org; spf=fail smtp.mailfrom=b@example.com",
+            "Received: from fwd.example.net by mx.example.org; Tue, 03 Nov 2026 10:00:09 +0000",
+            AR,
+            RECEIVED,
+        ),
+        "x",
+    ),
 ]
 
 
@@ -347,6 +366,18 @@ NEGATIVE = [
     ("MSG_ENCODED_HEADER_BROKEN", (), ("X-Note: =?utf-8?B?aGVsbG8=?=",)),
     ("MSG_MIME_TRUNCATED", (), ()),
     ("MSG_NO_TEXT_PART", ("Content-Type",), ('Content-Type: multipart/alternative; boundary="b"',)),
+    ("MSG_AUTH_BROKE_AFTER_HOP", (), ()),
+    # fail in the older field, pass in the newer one: not a break
+    (
+        "MSG_AUTH_BROKE_AFTER_HOP",
+        ("Received", "Authentication-Results"),
+        (
+            AR,
+            "Received: from fwd.example.net by mx.example.org; Tue, 03 Nov 2026 10:00:09 +0000",
+            "Authentication-Results: mx.example.org; spf=fail smtp.mailfrom=b@example.com",
+            RECEIVED,
+        ),
+    ),
 ]
 
 
@@ -615,7 +646,7 @@ def test_long_header_derived_params_are_bounded() -> None:
 
 
 def test_codes_are_valid_unique_and_prefixed() -> None:
-    assert len(set(CODES)) == len(CODES) == 35
+    assert len(set(CODES)) == len(CODES) == 36
     assert all(CODE_RE.fullmatch(c) and c.startswith("MSG_") for c in CODES)
 
 
@@ -1049,3 +1080,88 @@ def test_lower_field_pass_is_not_used(
     f = _find(r, "MSG_ALIGNMENT_LOWER_FIELD_NOT_USED")
     assert f.severity == "low"
     assert f.params == {"methods": "dkim", "domains": "example.com"}
+
+
+# --- F-01-01: R1-22 QA inputs and MSG_AUTH_BROKE_AFTER_HOP ---------------------------------------
+
+
+def test_alignment_fail_text_holds_when_only_a_lower_field_pair_is_aligned() -> None:
+    # The dkim pair is shown as aligned (lower field) while the verdict is fail: the text must
+    # not claim that no identifier is aligned, and must say why the lower field is not used.
+    r = run(("Authentication-Results",), (_R122_TOP_FAIL, _R122_LOWER_DKIM))
+    assert {"MSG_ALIGNMENT_FAIL", "MSG_ALIGNMENT_LOWER_FIELD_NOT_USED"} <= codes(r)
+    for cat in (EN, IT):
+        assert i18n.placeholders(cat["finding.MSG_ALIGNMENT_FAIL.detail"]) == {
+            "from_domain",
+            "identifiers",
+        }
+    detail = EN["finding.MSG_ALIGNMENT_FAIL.detail"]
+    assert "Neither" not in detail and "No identifier is aligned" not in detail
+    assert "below the topmost one are not used" in detail
+    assert "No identifier" not in EN["finding.MSG_ALIGNMENT_FAIL.title"]
+    assert "sotto quello più in alto non vengono usati" in IT["finding.MSG_ALIGNMENT_FAIL.detail"]
+
+
+_TOP_SPF_ONLY = "Authentication-Results: mx.example.org; spf=pass smtp.mailfrom=b@example.com"
+_LOWER_DKIM_FAIL = "Authentication-Results: mx.example.org; dkim=fail header.d=x.example"
+
+# _topmost_results is display only (GM decision): it reads the topmost field that states the
+# method, which may be a lower one. (fields top first, dkim finding present?, severity)
+TOPMOST_RESULTS_PIN = [
+    ((_TOP_SPF_ONLY, _LOWER_DKIM_FAIL), True, "high"),
+    ((_TOP_SPF_ONLY, _R122_LOWER_DKIM), False, None),
+    ((_TOP_SPF_ONLY,), True, "low"),
+]
+
+
+@pytest.mark.parametrize(("fields", "present", "severity"), TOPMOST_RESULTS_PIN)
+def test_topmost_results_reads_lower_fields_for_not_pass_only(
+    fields: tuple[str, ...], present: bool, severity: str | None
+) -> None:
+    raw = msg(("Authentication-Results",), fields)
+    r = analyze_message(raw)
+    assert ("MSG_DKIM_NOT_PASS" in codes(r)) is present
+    if present:
+        assert _find(r, "MSG_DKIM_NOT_PASS").severity == severity
+    # The verdict never takes the lower field: spf on top is aligned, so computed is pass.
+    assert analyze_alignment(parse_header_block(raw)).computed_dmarc == "pass"
+    assert "MSG_ALIGNMENT_FAIL" not in codes(r)
+
+
+def test_auth_broke_after_hop_params_and_severity() -> None:
+    r = run(POSITIVE[-1][1], POSITIVE[-1][2])
+    f = _find(r, "MSG_AUTH_BROKE_AFTER_HOP")
+    assert f.severity == "info"
+    # The older pass sits above Received index 0: shown as hop 1, like MSG_HOP_DELAY_HIGH.
+    assert f.params == {"results": "spf=fail", "authserv_id": "mx.example.org", "hop": 1}
+    assert f.detail_key == "finding.MSG_AUTH_BROKE_AFTER_HOP.detail"
+
+
+def test_auth_broke_after_hop_without_received_uses_no_hop_variant() -> None:
+    fields = (
+        "Authentication-Results: mx.example.org; dkim=fail header.d=example.com",
+        "Authentication-Results: mx.example.net; dkim=pass header.d=example.com",
+    )
+    r = run(("Received", "Authentication-Results"), fields)
+    f = _find(r, "MSG_AUTH_BROKE_AFTER_HOP")
+    key = "finding.MSG_AUTH_BROKE_AFTER_HOP.detail_no_hop"
+    assert f.detail_key == key
+    assert f.params == {"results": "dkim=fail", "authserv_id": "mx.example.org"}
+    assert EN[key] != IT[key]
+    assert i18n.placeholders(EN[key]) == i18n.placeholders(IT[key]) == {"results", "authserv_id"}
+
+
+def test_findings_without_hop_view_never_emit_the_hop_finding() -> None:
+    raw = msg(POSITIVE[-1][1], POSITIVE[-1][2], "x")
+    block = parse_header_block(raw)
+    r = build_message_findings(
+        block,
+        received=parse_received_chain(block),
+        mime=parse_mime(raw),
+        arc=parse_arc_chain(block),
+        alignment=analyze_alignment(block),
+    )
+    assert "MSG_AUTH_BROKE_AFTER_HOP" not in codes(r)
+    # Every other finding is identical with and without the hop view.
+    with_hops = [f for f in analyze_message(raw).findings if f.code != "MSG_AUTH_BROKE_AFTER_HOP"]
+    assert with_hops == list(r.findings)
