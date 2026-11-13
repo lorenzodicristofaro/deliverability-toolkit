@@ -13,7 +13,7 @@ Acceptance criteria:
 - docs/SETUP.md §3 and docs/WORKFLOW.md describe the real client-side deny list, the server-side rulesets (protect-main, protect-qa, protect-dev, protect-tags), read-only workflow permissions, the token without Workflows, and the rule that `.github/**` and `.claude/**` changes go to the maintainer before the push.
 - tests/test_workflow_permissions.py fails on any `write` or `write-all` in a workflow or job `permissions` block (only exception: `security-events: write` at job level in codeql.yml); real files pass.
 New i18n keys: none
-Status: in-review
+Status: done (merge cad5215)
 
 ## Notes
 - GitHub settings (rulesets protect-dev, protect-tags; read-only workflow permissions; pull request approval by Actions disabled; token without Workflows) were done by the maintainer.

@@ -13,7 +13,7 @@ Acceptance criteria:
 - Tests (table-driven): authenticated and unauthenticated HTML and JSON responses, 401/403/404/422 error responses, redirects, login and setup pages carry `no-store`; `/static/...` and `/healthz` do not; `/healthzfoo`, `/healthz/` and `/static` (no trailing slash, state the chosen rule) behave as specified. Existing no-store tests stay green.
 - ruff, mypy, relevant tests green.
 New i18n keys: none
-Status: todo
+Status: done (merge ebdede2)
 
 ## Review details (copied from R1-16 / code review of 2026-11-12, dev 06869fb)
 - Source: AUTH-11 (low), `app/web/landing.py:45-53`, `app/web/domains.py:184,247,307`, `app/web/authentication.py:65-72`, `app/web/dns_tools.py:94-108,226`, JSON API responses; per-module `_NO_STORE` in `app/web/rules.py:65`, `message.py:50`, `content.py:48`, `custom_checks.py:71`, `dkim_selectors.py:58`, `domain_esps.py:59`.

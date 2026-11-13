@@ -204,11 +204,11 @@ Tickets (docs/tickets/):
 - [ ] R1-15 AUTH-10 `__Host-` cookies on https, CSRF token expiry (opus; depends R1-04)
 - [x] R1-16 AUTH-11 Cache-Control no-store centrally (sonnet); keyed on the session cookie, see R1-32
 - [ ] R1-17 DNS-05 SPF terms after `all` not counted (opus)
-- [ ] R1-18 DNS-06 drop the 255-octet SPF_RECORD_TOO_LONG info branch (opus)
+- [ ] R1-18 DNS-06 drop the 255-octet SPF_RECORD_TOO_LONG info branch (opus; in-review)
 - [x] R1-19 DNS-07 empty reply without RA is an error (sonnet; confidence low) — maintainer 2026-11-12: precautionary rule (a)
 - [x] R1-20 PARSE-04 `dtk check` escapes control characters (sonnet)
 - [ ] R1-21 PARSE-05 Received from_ip prefers the TCP-info comment (opus)
-- [ ] R1-22 PARSE-06 forged lower Authentication-Results field (opus; depends R1-09; design decision first)
+- [ ] R1-22 PARSE-06 forged lower Authentication-Results field (opus; depends R1-09; in-progress; decision: option (c), maintainer agreed 2026-11-13)
 - [x] R1-23 PARSE-07 message analyzer One-Click via the List-Unsubscribe parser (sonnet)
 - [x] R1-24 PARSE-08 To/Cc counts from raw values (sonnet)
 - [ ] R1-25 INFRA-03 postgres compose profile: URL, retry, CI smoke (sonnet; depends R1-04)
@@ -217,9 +217,9 @@ Tickets (docs/tickets/):
 - [ ] R1-28 INFRA-06 migration race between replicas (sonnet)
 - [ ] R1-29 INFRA-07 app container hardening (sonnet; related to the safe_regex orphan item below; depends R1-04)
 - [ ] R1-30 AUTH-04 TRUSTED_PROXIES setting: client IP from X-Forwarded-For/Forwarded only for a trusted peer; login throttle, setup wizard, .env.example, compose (opus; depends R1-03, R1-04); covers the item "Trusted-proxy setting for the client IP"
-- [ ] R1-31 AUTH-05 domain rename rewrites the ESP host suffixes in the same transaction, user notice en+it (sonnet)
-- [ ] R1-32 AUTH-11 follow-up: Cache-Control no-store on every response except /static/ and exactly /healthz, regardless of the cookie (sonnet; depends R1-16)
-- [ ] R1-33 INFRA-01/02 push policy docs as enforced, workflow permissions test, settings.json deny rules (sonnet; in-review; settings.json and any .github/.claude change pushed only after maintainer approval)
+- [x] R1-31 AUTH-05 domain rename rewrites the ESP host suffixes in the same transaction, user notice en+it (sonnet)
+- [x] R1-32 AUTH-11 follow-up: Cache-Control no-store on every response except /static/ and exactly /healthz, regardless of the cookie (sonnet; depends R1-16)
+- [x] R1-33 INFRA-01/02 push policy docs as enforced, workflow permissions test, settings.json deny rules (sonnet; in-review; settings.json and any .github/.claude change pushed only after maintainer approval)
 Follow-ups:
 - R1-12 follow-up: comment at app/web/templating.py:37 and test docstring tests/web/test_default_error_bodies.py:210 miscompute the 4-byte worst case (8192 fits the browser 3-byte maxlength case, ~6.6 KB); test_framework_validation_error_has_no_input_for_api_clients (line 67) already passed before the fix.
 - R1-13 follow-up: AST guard tests/web/test_async_handlers_guard.py:22-37 only knows listed method names and 5 modules; glob app/web and flag db/service/repo_for receivers. Nit: stray comment app/web/rules.py:744-746. Also app/api/v1/content.py:170 sync db.rollback() (existing item below, one line).
@@ -233,12 +233,20 @@ Follow-ups:
 - R1-07 follow-up: follow the CNAME target in the trace (restart from the root within budgets); a CNAME from a non-AA server ends the trace instead of trying the next server; trace.py:556 uses getattr where ServerReply has the fields.
 - R1-09 follow-up: a stated dkim=none header.d=X still adds X to stated_ds, so a DKIM-Signature d=X is not reported as unverified (message_alignment.py:260-262); two spf resinfos with smtp.mailfrom: first wins (RFC 8601 silent).
 - R1-10 follow-up: MSG_AUTHRES_UNPARSED detail says the issue codes are 'listed in the finding data', but CLI/web do not show params unused by the text — add an {issues} placeholder (safe codes) or reword, en+it; property test could map each skipped area to its required code.
+- R1-17 follow-up: no test pins error-over-AFTER_ALL precedence (tests/checks/test_esp_profile.py).
+- R1-15 follow-up: remove the legacy dt_session fallback next release (app/core/security.py session_cookie_value, auth._clear_legacy_session_cookie); dt_lang needs no `__Host-` prefix (not security relevant).
+- R1-31 follow-up: the docstring at app/repositories/domain_esps.py:263 should mention the invalid-rewrite case.
+- R1-32 follow-up: SESSION_COOKIE_NAMES in app/core/security.py:47 is now unused.
+- R1-33 follow-up: tests/test_workflow_permissions.py globs only *.yml (a future .yaml workflow is not checked).
 Not ticketed — maintainer:
 - INFRA-01 and INFRA-02: covered by R1-33 (maintainer set the rulesets and token rights; settings.json deny rules, docs and a workflow permissions test).
 Decided 2026-11-13 (maintainer):
 - AUTH-04: ticket R1-30. AUTH-05: ticket R1-31 (rewrite). AUTH-11 follow-up: ticket R1-32.
 - PARSE-03 leniency: STRICT. An Authentication-Results field without authserv-id is not counted as evaluated (RFC 8601 section 2.2 ABNF; sections 2.5 and 4.1). No code change; MSG_AUTHRES_UNPARSED (R1-10) explains it; sentence added to docs/HEADERS.md.
 - docs/CHECKS.md vs app/checks/dmarc.py: the doc was aligned to the code (failed external-authorization lookup gives `error` only when no critical/high finding is present; always reported as DMARC_EXTERNAL_AUTH_UNVERIFIED).
+
+## Backlog (maintainer request 2026-11-13)
+- [ ] F-01 message analysis: authentication per hop view (Authentication-Results and ARC sets ordered among Received fields, info finding where pass turns to fail; display only, never feeds computed_dmarc) (opus; depends R1-22; ticket docs/tickets/F-01-auth-per-hop-view.md; analyzer extension, no SPEC scope change)
 
 ## M7 — Monitoring
 - [ ] Guarded outbound client (SSRF protection) + tests

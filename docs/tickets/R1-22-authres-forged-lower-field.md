@@ -15,7 +15,7 @@ Acceptance criteria:
 - docs/HEADERS.md states the rule and the limit (trust is not decided; the tool does not verify signatures).
 - No network. ruff, mypy, relevant tests green.
 New i18n keys: none expected (en + it if a "result not used" finding or note is added)
-Status: todo
+Status: in-progress (decision: option (c), maintainer agreed 2026-11-13)
 
 ## Review details (copied from the code review of 2026-11-12, dev 06869fb)
 - Location: `app/services/message_alignment.py:159-166` (`_topmost`: first field that carries the method), `:253` (dkim), `app/services/message_findings.py:316-321` (same rule for findings).

@@ -15,7 +15,7 @@ Acceptance criteria:
 - Tests: rename with assigned hosts (API and UI) leaves no host outside the new name, including apex and subdomain hosts, both host columns, and several ESPs on one domain; the `esp` check after a rename never queries a name under the old domain (fake resolver records the queries); rollback leaves hosts unchanged; notice present only when rewritten (en and it). Existing tenancy/permission tests unchanged and green; a rename of another tenant's domain still gives the existing 404.
 - ruff, mypy, en/it completeness, relevant tests green. No network.
 New i18n keys: rename notice for rewritten ESP hosts (en + it); the coder lists exact names.
-Status: todo
+Status: done (merge 4f3a6d7)
 
 ## Review details (copied from the code review of 2026-11-12, dev 06869fb; maintainer decision 2026-11-13: rewrite)
 - Location: `app/services/domains.py:185-197` (`rename`), `app/repositories/domain.py` `rename`, `app/repositories/domain_esps.py:28-29` and `app/services/domain_esps.py:34-35` (both say "the renaming ticket decides"), `app/api/v1/domains.py` PATCH, `app/web/domains.py:268-290`.

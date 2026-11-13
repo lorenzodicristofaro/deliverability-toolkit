@@ -38,7 +38,9 @@ Decision 2026-11-04: the GM session may push `dev` and `qa`; everything else sta
      `git push origin qa dev`, `gh run list|view|watch *`.
    - Deny, push: `git push *main*`, `*--force*`, `*-f*`, `*+*`, `*--tags*`, `*refs/tags*`, `*--all*`,
      `*--mirror*`, `*--delete*`, `* -d *`, `* :*`, `git push -d*`, `git push * v*`, and `git * push*` (a push with
-     options before the verb, such as `git -C . push`).
+     options before the verb, such as `git -C . push`). `git * push*` also denies any git command that contains
+     " push" after the verb (a commit message, `git log --grep push`, a branch name), so agents keep the word
+     "push" out of commit messages.
    - Deny, other: `git tag *`, `gh pr merge *`, `gh release *`, `gh api *`, `gh repo *`, `gh secret *`.
    - Deny, edits (Edit and Write): `**/.claude/settings*.json`, `**/.claude/agents/**`, `**/.claude/commands/**`,
      `**/.claude/skills/**`, `**/.claude/hooks/**`.
@@ -51,7 +53,7 @@ Decision 2026-11-04: the GM session may push `dev` and `qa`; everything else sta
    **Workflow permissions** (Settings -> Actions -> General): read-only; "Allow GitHub Actions to create and approve
    pull requests" disabled. The GM token has no Workflows permission, so a push touching `.github/workflows/` is
    refused; the maintainer pushes those commits.
-   **Rule**: every change to `.github/**` or `.claude/**` is flagged in the merge report and goes to the maintainer
+   **Rule**: every change to `.github/**` or `.claude/**` is flagged in the merge report and is approved by the maintainer
    before the push. `tests/test_workflow_permissions.py` fails if a workflow grants itself a `write` permission
    (only exception: `security-events: write` in `codeql.yml`).
 4. **Private vulnerability reporting**: enable it in Settings -> Advanced Security, so `SECURITY.md` is accurate.
