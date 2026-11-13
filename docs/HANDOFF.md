@@ -17,7 +17,7 @@ Dev CI green on dcca37e (CI, CI infra, Secret scan). Next: **M7 — Monitoring**
   Optional cleanup: check `git -C <wt> status` is clean, then `git worktree remove`; leave the locked one.
 
 ## Open maintainer actions
-1. Optional (R1-30 QA nit): CLAUDE.md dev run command lacks `--no-proxy-headers` (dev-only, loopback).
+None.
 
 ## M7 notes for the next session (from TODO.md)
 - Items: guarded outbound HTTP client (SSRF protection), custom check kind http_fetch via that client (SPEC §5

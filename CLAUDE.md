@@ -26,7 +26,7 @@ Read `SPEC.md`, `ARCHITECTURE.md` and `TODO.md` at the start of every session.
 
 ## Commands
 - install: `uv sync`
-- run: `uv run uvicorn app.main:app --reload` (`app.main:app` is the contract with M0-03)
+- run: `uv run uvicorn app.main:app --reload --no-proxy-headers` (`app.main:app` is the contract with M0-03; `--no-proxy-headers` as in the Dockerfile, R1-30)
 - test: `uv run pytest -q --tb=short`
 - lint: `uv run ruff check . && uv run ruff format --check . && uv run mypy app`
 - pre-commit install: `uv run pre-commit install`
