@@ -155,3 +155,15 @@ password). A wrong password, an unknown database or an unresolvable host fail at
 60 s the original error is raised and the container exits non-zero (then
 `restart: unless-stopped` applies). Check with
 `docker compose exec postgres psql -U deliverability -c '\dt'` that tables exist.
+
+## 9. Outbound HTTP settings
+
+Every outbound HTTP request goes through the guarded client (ARCHITECTURE section 9). Two
+settings, both optional; an invalid value stops the app at startup:
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `OUTBOUND_HTTP_ALLOWED_PORTS` | `80,443` | Comma-separated destination ports (1-65535) the client may connect to, for the first request and every redirect. |
+| `OUTBOUND_HTTP_MAX_REDIRECTS` | `3` | Redirects followed per request, 0 to 5 (5 is a hard maximum). |
+
+The defaults are project choices. `compose.yaml` forwards both variables (same defaults).

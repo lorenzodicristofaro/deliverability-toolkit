@@ -40,6 +40,9 @@ services:
       # Reverse proxies trusted for X-Forwarded-For (R1-30, docs/SETUP.md section 7). Empty:
       # the client IP is the direct peer (behind a proxy every user shares one throttle IP).
       TRUSTED_PROXIES: ${TRUSTED_PROXIES:-}
+      # Guarded outbound HTTP client (M7-01, docs/SETUP.md section 9).
+      OUTBOUND_HTTP_ALLOWED_PORTS: ${OUTBOUND_HTTP_ALLOWED_PORTS:-80,443}
+      OUTBOUND_HTTP_MAX_REDIRECTS: ${OUTBOUND_HTTP_MAX_REDIRECTS:-3}
     networks:
       - default  # internet access
       - dns      # reach the unbound profile at 172.28.53.2; internal, no outside access

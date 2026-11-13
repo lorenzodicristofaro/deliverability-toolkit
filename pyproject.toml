@@ -18,6 +18,7 @@ dependencies = [
     "uvicorn>=0.54.0",
     "publicsuffixlist>=1.1.2.20261106",
     "typer>=0.28.0",
+    "httpx2>=2.16.0",
 ]
 
 [project.scripts]
