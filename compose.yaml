@@ -1,5 +1,12 @@
 # Default `docker compose up` starts only the app (SQLite, zero config).
-#   docker compose --profile postgres up   adds PostgreSQL
+#   docker compose --profile postgres up   adds PostgreSQL (the app only uses it if DATABASE_URL says so)
+#     DATABASE_URL=postgresql://deliverability:<password>@postgres:5432/deliverability
+#     <password> = POSTGRES_PASSWORD, percent-encoded if it has special characters (@ : / % ? #).
+#     User and database are the POSTGRES_USER / POSTGRES_DB defaults below. Without that
+#     DATABASE_URL the app keeps writing to the SQLite volume and PostgreSQL stays empty.
+#     Startup order: depends_on cannot be conditional on a profile, so the app may start before
+#     PostgreSQL accepts connections; `alembic upgrade head` then fails, the container exits and
+#     `restart: unless-stopped` retries it until PostgreSQL is ready (no wait loop).
 #   docker compose --profile unbound up    adds a local validating resolver (own image)
 # Rule: no bind mounts of folders outside the project into containers.
 # Secrets come from the environment or a gitignored .env (see .env.example).
