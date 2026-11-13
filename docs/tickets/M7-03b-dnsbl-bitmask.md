@@ -16,4 +16,5 @@ Acceptance criteria:
 - Table-driven tests: single bit, summed bits, unmapped bit, refusal plus bits, zero/out-of-range octet, non-127 answer, exact-mode regression, loader rejection of bad mode. No network.
 - docs/DNSBL.md documents both fields and the maintainer decision.
 New i18n keys: none
-Status: todo
+Status: done (merged into dev, commit 450b50e, QA APPROVE first round)
+Outcome: bitmask mode for surbl-multi and uribl-multi; all lists default_enabled false. Unmapped bit -> unmapped_code, refusal plus bits -> conflicting_codes (both `error`; accepted deviation from the single "conflicting" reason). QA checked surbl.org/lists and uribl.com/about.shtml on 2026-11-14: no bit missing for the multi zones (URIBL bits 16-128 are df.uribl.com only).
