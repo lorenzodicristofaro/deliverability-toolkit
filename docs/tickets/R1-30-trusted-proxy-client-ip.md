@@ -1,0 +1,30 @@
+# R1-30 TRUSTED_PROXIES setting: client IP from the forwarding header only for a trusted peer
+Milestone: R1
+Branch: feature/r1-30-trusted-proxy-client-ip
+Findings: AUTH-04 (medium); covers the TODO item "Trusted-proxy setting for the client IP"
+Files in scope: app/core/config.py (`TRUSTED_PROXIES`), app/web/auth.py (`_client_ip`), app/web/setup.py (client IP at ~202-205), app/services/login_throttle.py (only if the per-IP budget from R1-03 needs the new IP; no policy change otherwise), .env.example, compose.yaml (forward the variable, as R1-04 did), tests/test_compose_config.py (parity), tests/web/ and tests/services/ (new rows), docs/SETUP.md and any doc describing the throttle or deployment behind a proxy, Dockerfile only if the uvicorn flag is changed (see below)
+Out of scope: DB-backed throttle (TODO), changing throttle limits or lockout durations, `__Host-` cookies (R1-15), the postgres profile (R1-25), container hardening (R1-29)
+Depends on: R1-03 (done), R1-04 (done)
+Parallel-safe: no with R1-15 (app/web/auth.py, config.py, .env.example) and R1-25/R1-29 (compose.yaml, tests/test_compose_config.py): serialize after them
+Model: opus (authentication and a trust decision about proxy headers)
+Acceptance criteria:
+- Reproduce first: before changing app code, add a test that reproduces the finding and fails on dev bcc231b. If it cannot be reproduced, stop without a fix and report "not reproduced" with what was tried. (Expected reproduction: two clients behind one peer address share a throttle key; ten failures from client A delay client B on the same account.)
+- New setting `TRUSTED_PROXIES`: a list of networks (IPs or CIDRs, IPv4 and IPv6). Default empty: the client IP is the direct peer and forwarding headers are ignored. An invalid entry fails at startup with a clear error.
+- Client IP: only when the direct peer is inside `TRUSTED_PROXIES`, read `X-Forwarded-For` (and `Forwarded` `for=`, if supported: state the choice); take the rightmost hop that is not itself a trusted proxy. Malformed values, an empty header, or all hops trusted fall back to the direct peer (state the rule). A header from an untrusted peer is ignored.
+- Used by the login throttle (`app/web/auth.py` `_client_ip`, per-IP budget from R1-03) and the setup wizard (`app/web/setup.py`); one shared helper, no second implementation.
+- Check the uvicorn `--forwarded-allow-ips` / `FORWARDED_ALLOW_IPS` / `--proxy-headers` defaults against the CURRENT official uvicorn documentation before relying on them (the review did not verify them). Either state the verified default in the summary and make sure uvicorn's own header rewriting cannot conflict with the app logic (for example by setting `--no-proxy-headers` in the Dockerfile CMD), or do not rely on uvicorn at all. Never claim the default from memory.
+- `.env.example` documents `TRUSTED_PROXIES`; `compose.yaml` forwards it with the same default as `Settings`; the compose parity test stays green.
+- Tests (table-driven, no network): with a trusted proxy two clients behind it get separate throttle keys; a forwarding header from an untrusted peer is ignored; ten failures from client A do not delay client B on the same account; same for the setup token attempts; malformed header and IPv6 rows; spoofed leftmost entries do not change the key. Existing tenancy/permission tests unchanged.
+- Docs: deployment behind a reverse proxy, the setting, and the lockout consequence of leaving it empty. Mark the TODO line as covered by R1-30.
+- ruff, mypy, relevant tests green.
+New i18n keys: none (log and config error text only; no user-facing string)
+Status: done (QA APPROVE, branch 2a5f4e8; uvicorn 0.54.0 defaults checked in installed source and https://uvicorn.dev/settings/ (official per package metadata); Dockerfile CMD --no-proxy-headers; Forwarded not supported)
+
+## Review details (copied from the code review of 2026-11-12, dev 06869fb; maintainer decision 2026-11-13: ticket created)
+- Location: `app/web/auth.py:70-73` (`_client_ip` is the direct peer), `app/web/auth.py:155`, `app/web/setup.py:202-205` (setup token attempts use the same IP with a fixed account key), `Dockerfile` CMD (`uvicorn ... --host 0.0.0.0`, no `--forwarded-allow-ips`), `app/services/login_throttle.py:10-14` (lockout at 10 failures for 15 minutes).
+- Problem: An HTTPS deployment needs a TLS-terminating proxy, because the image serves plain HTTP. Then `request.client.host` is the proxy for every user, so the key (IP, account) is effectively (account). Anyone who knows an email address can keep that account locked with ten wrong passwords every 15 minutes, and the legitimate user cannot log in from anywhere. During first-run setup the same holds for the setup token: five wrong tokens from anyone delay the operator, ten lock the wizard for 15 minutes.
+- Evidence: the code comment at `app/web/auth.py:71-72` states "behind a reverse proxy every client shares the proxy's address". uvicorn trusts `X-Forwarded-For` only from `127.0.0.1` unless `--forwarded-allow-ips` or `FORWARDED_ALLOW_IPS` is set (NOT verified against the uvicorn documentation in the review; check before relying on it), and in a container the proxy is never 127.0.0.1.
+- Suggested fix: Implement the tracked trusted-proxy setting (a list of proxy networks; take the client address from the forwarding header only when the peer is trusted). With a correct client IP the lockout is per attacker, which removes the remote lockout. Document the setting in `.env.example` and forward it in `compose.yaml` (see AUTH-03). Files: `app/core/config.py`, `app/web/auth.py`, `app/web/setup.py`, docs.
+- Tests to add: with a trusted proxy configured, two clients behind it get separate throttle keys; a forwarding header from an untrusted peer is ignored; ten failures from client A do not delay client B on the same account.
+- Confidence: high for the shared key; medium for the uvicorn default (from memory, not re-read).
+- Already tracked: TODO.md "Trusted-proxy setting for the client IP", now folded into this ticket.

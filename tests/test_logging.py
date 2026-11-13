@@ -253,3 +253,39 @@ def test_short_secrets_not_value_masked(short: str) -> None:
     fmt = JsonFormatter([short])
     record = logging.LogRecord("n", logging.INFO, "f", 1, "plain request info 1 a", None, None)
     assert json.loads(fmt.format(record))["message"] == "plain request info 1 a"
+
+
+def test_missing_i18n_key_warning_shows_the_key(capsys: pytest.CaptureFixture[str]) -> None:
+    from app.core import i18n
+
+    configure_logging("INFO", SECRETS)
+    missing = "some.missing.key.r1_11"
+    i18n._warned.discard(missing)
+    try:
+        assert i18n.t(missing, "it") == missing
+    finally:
+        i18n._warned.discard(missing)
+    recs = [r for r in _lines(capsys) if r["message"] == "i18n key missing"]
+    assert len(recs) == 1
+    assert missing in recs[0].values()
+    assert "[REDACTED]" not in recs[0].values()
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "secret_key",
+        "api_key",
+        "token",
+        "password",
+        "encryption_key",
+        "authorization",
+        "key",
+        "session_token",
+    ],
+)
+def test_secret_named_fields_still_redacted(capsys: pytest.CaptureFixture[str], field: str) -> None:
+    configure_logging("INFO", SECRETS)
+    logging.getLogger("k").info("k", extra={field: "plain-value"})
+    (rec,) = _lines(capsys)
+    assert rec[field] == "[REDACTED]"

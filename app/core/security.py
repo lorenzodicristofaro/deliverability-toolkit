@@ -22,6 +22,7 @@ import binascii
 import hashlib
 import hmac
 import secrets
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Literal
 
@@ -33,7 +34,17 @@ from app.core.config import Settings
 
 DEFAULT_HASHER = PasswordHasher()
 
+# Cookie names (R1-15, AUTH-10). With an https BASE_URL the session cookie is
+# `__Host-dt_session`: browsers accept a `__Host-` cookie only with Secure, Path=/ and no Domain,
+# so a sibling subdomain (or plain-HTTP traffic) cannot set it ("cookie tossing"). With an http
+# BASE_URL the prefix is impossible (it needs Secure), so the name stays `dt_session`.
+# MIGRATION (one release): on https the unprefixed `dt_session` is still READ when the prefixed
+# one is absent, so sessions issued before the upgrade keep working; it is never written there,
+# login replaces it and logout clears both. Remove the fallback (`session_cookie_value`) in the
+# release after R1-15.
 SESSION_COOKIE_NAME = "dt_session"
+HOST_SESSION_COOKIE_NAME = "__Host-dt_session"
+SESSION_COOKIE_NAMES = (HOST_SESSION_COOKIE_NAME, SESSION_COOKIE_NAME)
 # 32 random bytes (256 bits) -> 43 url-safe base64 characters.
 TOKEN_BYTES = 32
 _SIG_LEN = 43  # url-safe base64 of a 32-byte HMAC-SHA256, without padding
@@ -160,14 +171,34 @@ class CookieSettings:
     max_age: int | None
 
 
+def is_https(settings: Settings) -> bool:
+    """True when BASE_URL is https (Settings guarantees the scheme is http or https)."""
+    return settings.base_url.lower().startswith("https://")
+
+
+def session_cookie_name(https: bool) -> str:
+    """The name the session cookie is written under."""
+    return HOST_SESSION_COOKIE_NAME if https else SESSION_COOKIE_NAME
+
+
+def session_cookie_value(cookies: Mapping[str, str], https: bool) -> str | None:
+    """The presented session cookie. http: `dt_session` only. https: `__Host-dt_session`, else
+    (migration, one release) the unprefixed `dt_session`."""
+    if not https:
+        return cookies.get(SESSION_COOKIE_NAME)
+    value = cookies.get(HOST_SESSION_COOKIE_NAME)
+    return value if value is not None else cookies.get(SESSION_COOKIE_NAME)
+
+
 def session_cookie_settings(settings: Settings, max_age: int | None = None) -> CookieSettings:
-    """HttpOnly, SameSite=Lax, Path=/; Secure when BASE_URL is https (Settings guarantees the
-    scheme is http or https). `max_age` None makes a browser-session cookie."""
+    """HttpOnly, SameSite=Lax, Path=/ and no Domain; Secure and the `__Host-` name when BASE_URL
+    is https. `max_age` None makes a browser-session cookie."""
+    https = is_https(settings)
     return CookieSettings(
-        key=SESSION_COOKIE_NAME,
+        key=session_cookie_name(https),
         httponly=True,
         samesite="lax",
-        secure=settings.base_url.lower().startswith("https://"),
+        secure=https,
         path="/",
         max_age=max_age,
     )

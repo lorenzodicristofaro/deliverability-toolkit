@@ -12,6 +12,12 @@ Exact values (set unconditionally; a route cannot loosen them):
 - Permissions-Policy: `camera=(), microphone=(), geolocation=()`
 - Strict-Transport-Security: `max-age=31536000`, only when BASE_URL is https. No
   `includeSubDomains`/`preload`: the operator's other subdomains are not ours to commit.
+- Cache-Control: `no-store` on every response (R1-32, regardless of any cookie), except paths under
+  `/static/` and exactly `/healthz` (exact match: `/healthzfoo`, `/healthz/` and `/healthz/x`
+  get no-store; `/static` without the trailing slash is not under `/static/` and gets it too).
+  A route's own Cache-Control is kept when it already contains `no-store` (equal or stricter);
+  any other value (absent, `no-cache`, `public`, max-age) is replaced, since it is weaker for
+  private data.
 
 The tests assert that these exact values are sent; they make no claim about how a given browser
 enforces them. BASE_URL is read from `app.state.settings` (set by the lifespan); when settings are
@@ -43,6 +49,13 @@ SECURITY_HEADERS: Final[tuple[tuple[str, str], ...]] = (
     ("X-Frame-Options", "DENY"),
     ("Permissions-Policy", "camera=(), microphone=(), geolocation=()"),
 )
+_NO_STORE_EXEMPT_PREFIX: Final = "/static/"
+_NO_STORE_EXEMPT_PATH: Final = "/healthz"
+
+
+def _needs_no_store(scope: Scope) -> bool:
+    path = str(scope.get("path", ""))
+    return path != _NO_STORE_EXEMPT_PATH and not path.startswith(_NO_STORE_EXEMPT_PREFIX)
 
 
 def _https(scope: Scope) -> bool:
@@ -70,6 +83,7 @@ class SecurityHeadersMiddleware:
             await self.app(scope, receive, send)
             return
         hsts = _https(scope)
+        no_store = _needs_no_store(scope)
         started = False
 
         async def send_wrapper(message: Message) -> None:
@@ -79,6 +93,8 @@ class SecurityHeadersMiddleware:
                 headers = MutableHeaders(scope=message)
                 for name, value in SECURITY_HEADERS:
                     headers[name] = value
+                if no_store and "no-store" not in headers.get("Cache-Control", "").lower():
+                    headers["Cache-Control"] = "no-store"
                 if hsts:
                     headers["Strict-Transport-Security"] = HSTS_VALUE
             await send(message)

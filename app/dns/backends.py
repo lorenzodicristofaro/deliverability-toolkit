@@ -31,6 +31,8 @@ Mapping (never raises for network/DNS conditions):
 
 - NOERROR + records for the question (after the server-side CNAME chain) -> ok
 - NOERROR without them (incl. a CNAME chain ending nowhere)            -> nodata
+  (``query_server`` also carries such an unfinished chain in ``ServerReply.cname_chain`` /
+  ``cname_target``, so trace reports a CNAME instead of "no record"; ``resolve`` is unchanged)
 - NXDOMAIN -> nxdomain; SERVFAIL -> servfail; REFUSED -> refused
 - any other rcode (FORMERR, NOTIMP, YXDOMAIN, BADVERS, ...)            -> error (with ``rcode``)
 - timeout / total deadline exhausted                                    -> timeout
@@ -48,7 +50,8 @@ Callers MUST check ``reply.referral`` BEFORE ``reply.result.state``: a referral 
 placeholder state ``nodata`` and is never "missing". ``ServerReply.authoritative`` carries the AA
 flag (trace uses it to accept nxdomain/nodata as final only from an authoritative server).
 ``resolve`` is for recursive servers only; a referral there is a lame server and yields
-``error`` (detail ``unexpected_referral``).
+``error`` (detail ``unexpected_referral``). A NOERROR-without-answer or NXDOMAIN reply without the
+RA flag is ``error`` too (detail ``no_recursion``); answers with data stay valid (R1-19).
 """
 
 from __future__ import annotations
@@ -129,6 +132,12 @@ class ServerReply:
     result: DnsResult
     referral: Referral | None = None
     authoritative: bool = False
+    # RA flag of the parsed response (RFC 1035 section 4.1.1); False when none was parsed.
+    recursion_available: bool = False
+    # Unfinished CNAME chain at the query name (``result.state`` nodata, no records): the CNAME
+    # records and the last target, which this server did not answer for. Empty/None otherwise.
+    cname_chain: tuple[DnsRecord, ...] = ()
+    cname_target: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -239,37 +248,47 @@ def _check_counts(resp: dns.message.Message) -> None:
             raise _Bad(ResultState.malformed, "too_many_records")
 
 
-def _follow_chain(
-    resp: dns.message.Message, question: DnsQuestion
-) -> tuple[dns.rrset.RRset | None, list[int]]:
-    """Follow the CNAME chain the server put in the answer section. Returns the final RRset of
-    the question type (None if the chain ends without one) and the TTLs of the CNAME links."""
+@dataclass(frozen=True, slots=True)
+class _Chain:
+    """Result of following the server-side CNAME chain inside one response."""
+
+    final: dns.rrset.RRset | None  # RRset of the question type at the end of the chain
+    links: tuple[dns.rrset.RRset, ...] = ()  # the CNAME RRsets followed, in order
+
+    @property
+    def ttls(self) -> list[int]:
+        return [link.ttl for link in self.links]
+
+
+def _follow_chain(resp: dns.message.Message, question: DnsQuestion) -> _Chain:
+    """Follow the CNAME chain the server put in the answer section. ``final`` is None when the
+    chain ends without a record of the question type (e.g. its target is in another zone)."""
     rdtype = dns.rdatatype.from_text(question.rdtype)
     current = dns.name.from_text(question.name)
-    ttls: list[int] = []
+    links: list[dns.rrset.RRset] = []
     seen: set[dns.name.Name] = set()
     for _ in range(MAX_CNAME_CHAIN + 1):
         rrset = resp.get_rrset(resp.answer, current, dns.rdataclass.IN, rdtype)
         if rrset is not None and len(rrset) > 0:
-            return rrset, ttls
+            return _Chain(rrset, tuple(links))
         if rdtype == dns.rdatatype.CNAME:
-            return None, ttls
+            return _Chain(None, tuple(links))
         cname = resp.get_rrset(resp.answer, current, dns.rdataclass.IN, dns.rdatatype.CNAME)
         if cname is None or len(cname) == 0:
-            return None, ttls
+            return _Chain(None, tuple(links))
         if len(cname) != 1 or current in seen:
             raise _Bad(ResultState.malformed, "bad_cname_chain")
         seen.add(current)
-        ttls.append(cname.ttl)
+        links.append(cname)
         current = cname[0].target
     raise _Bad(ResultState.malformed, "cname_chain_too_long")
 
 
-def _records(question: DnsQuestion, rrset: dns.rrset.RRset) -> tuple[DnsRecord, ...]:
+def _records(rdtype: str, rrset: dns.rrset.RRset) -> tuple[DnsRecord, ...]:
     owner = _name_text(rrset.name)
     try:
-        texts = sorted(_rdata_text(question.rdtype, rd) for rd in rrset)  # deterministic order
-        return tuple(DnsRecord(owner, question.rdtype, rrset.ttl, text) for text in texts)
+        texts = sorted(_rdata_text(rdtype, rd) for rd in rrset)  # deterministic order
+        return tuple(DnsRecord(owner, rdtype, rrset.ttl, text) for text in texts)
     except ValueError:
         raise _Bad(ResultState.malformed, "bad_record") from None
 
@@ -312,6 +331,10 @@ class _Interpreted:
     rcode: int | None = None
     referral: Referral | None = None
     detail: str | None = None
+    # Unfinished CNAME chain (state nodata, no records): the CNAME records followed and the last
+    # target, which this response does not answer for (R1-07). Empty/None otherwise.
+    cname_chain: tuple[DnsRecord, ...] = ()
+    cname_target: str | None = None
 
 
 def interpret_response(resp: dns.message.Message, question: DnsQuestion) -> _Interpreted:
@@ -322,16 +345,27 @@ def interpret_response(resp: dns.message.Message, question: DnsQuestion) -> _Int
         state = rcode_state(rcode)
         detail = None if state is not ResultState.error else "unexpected_rcode"
         return _Interpreted(state, rcode=rcode, detail=detail)
-    final, ttls = _follow_chain(resp, question)
+    chain = _follow_chain(resp, question)
+    final = chain.final
     if final is not None:
-        records = _records(question, final)
+        records = _records(question.rdtype, final)
         return _Interpreted(
-            ResultState.ok, records=records, ttl_min=min([final.ttl, *ttls]), rcode=0
+            ResultState.ok, records=records, ttl_min=min([final.ttl, *chain.ttls]), rcode=0
         )
-    if not ttls:  # no CNAME link: a referral is only possible for the name itself
-        referral = _referral(resp, question)
-        if referral is not None:
-            return _Interpreted(ResultState.nodata, rcode=0, referral=referral)
+    if chain.links:
+        # The chain ends at a name this response holds no record for (typically a target in
+        # another zone). The state stays nodata (resolve() is unchanged), but the chain is kept so
+        # the trace can report it instead of "no record of that type".
+        links = tuple(r for link in chain.links for r in _records("CNAME", link))
+        return _Interpreted(
+            ResultState.nodata,
+            rcode=0,
+            cname_chain=links,
+            cname_target=links[-1].rdata_text,
+        )
+    referral = _referral(resp, question)  # no CNAME link: only possible for the name itself
+    if referral is not None:
+        return _Interpreted(ResultState.nodata, rcode=0, referral=referral)
     return _Interpreted(ResultState.nodata, rcode=0)
 
 
@@ -608,7 +642,14 @@ class DnsPythonResolver:
             authenticated_data=ad,
             detail_code=out.detail,
         )
-        return ServerReply(result, out.referral, authoritative=bool(resp.flags & dns.flags.AA))
+        return ServerReply(
+            result,
+            out.referral,
+            authoritative=bool(resp.flags & dns.flags.AA),
+            recursion_available=bool(resp.flags & dns.flags.RA),
+            cname_chain=out.cname_chain,
+            cname_target=out.cname_target,
+        )
 
     async def _run(
         self,
@@ -668,6 +709,19 @@ class DnsPythonResolver:
                 server=r.server,
                 elapsed_ms=r.elapsed_ms,
                 detail_code="unexpected_referral",
+            )
+        if reply.result.state in (ResultState.nodata, ResultState.nxdomain) and (
+            not reply.recursion_available
+        ):
+            # An empty answer from a server that does not offer recursion proves no absence (R1-19).
+            r = reply.result
+            return DnsResult(
+                question=question,
+                state=ResultState.error,
+                server=r.server,
+                rcode=r.rcode,
+                elapsed_ms=r.elapsed_ms,
+                detail_code="no_recursion",
             )
         return reply.result
 

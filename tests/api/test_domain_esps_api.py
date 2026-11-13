@@ -498,3 +498,75 @@ def test_broken_profiles_still_allow_delete(world: World) -> None:
     _break_profiles(world, BROKEN_SOURCES["malformed_files"])
     assert call(world, "owner", "DELETE", one(world)).status_code == 204
     assert rows(world.db) == []
+
+
+# --- R1-31: renaming the domain rewrites the ESP hosts -------------------------------------------
+
+
+def _hosts(db: Session) -> list[tuple[str | None, str | None]]:
+    return [(r[3], r[4]) for r in rows(db)]
+
+
+def _rename(w: World, name: str, who: str = "owner", domain: str = "assigned") -> Any:
+    path = f"/api/v1/domains/{w.domains[domain]}"
+    return call(w, who, "PATCH", path, json={"name": name})
+
+
+def test_rename_leaves_no_host_under_the_old_name(world: World) -> None:
+    assert assign(world, return_path_host="em1.assigned.example").status_code == 201
+    assert _rename(world, "renamed.example").status_code == 200
+    listed = call(world, "owner", "GET", esps(world)).json()
+    shown = [e["return_path_host"] for e in listed["items"] if e["esp_id"] == ESP]
+    assert shown == ["em1.renamed.example"]
+
+
+def test_rename_rewrites_both_columns_and_every_esp(world: World) -> None:
+    assert assign(
+        world, return_path_host="assigned.example", tracking_host="go.assigned.example"
+    ).status_code == 201  # fmt: skip
+    assert call(
+        world, "owner", "PUT", one(world, esp="other-esp"),
+        json={"return_path_host": "em2.assigned.example"},
+    ).status_code == 201  # fmt: skip
+    assert assign(world, domain="unassigned", return_path_host="em.unassigned.example")
+    response = _rename(world, "renamed.example")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["name"] == "renamed.example"
+    assert (body["esp_hosts_rewritten"], body["esp_hosts_unmatched"]) == (3, 0)
+    hosts = {h for pair in _hosts(world.db) for h in pair if h}
+    assert hosts == {
+        "renamed.example",
+        "go.renamed.example",
+        "em2.renamed.example",
+        "em.unassigned.example",
+    }
+
+
+def test_rename_without_hosts_reports_zero(world: World) -> None:
+    assert assign(world).status_code == 201
+    body = _rename(world, "renamed.example").json()
+    assert (body["esp_hosts_rewritten"], body["esp_hosts_unmatched"]) == (0, 0)
+    assert _hosts(world.db) == [(None, None)]
+
+
+def test_rename_conflict_leaves_hosts_unchanged(world: World) -> None:
+    assert assign(world, return_path_host="em1.assigned.example").status_code == 201
+    assert _rename(world, "unassigned.example").status_code == 409
+    assert _hosts(world.db) == [("em1.assigned.example", None)]
+
+
+@pytest.mark.parametrize("who", ["analyst", "viewer", "anon"])
+def test_rename_without_permission_leaves_hosts_unchanged(world: World, who: str) -> None:
+    assert assign(world, return_path_host="em1.assigned.example").status_code == 201
+    assert _rename(world, "renamed.example", who).status_code in (401, 403)
+    assert _hosts(world.db) == [("em1.assigned.example", None)]
+
+
+@pytest.mark.parametrize("who", ["owner", "admin"])
+def test_rename_of_a_foreign_domain_is_404_and_hosts_unchanged(world: World, who: str) -> None:
+    assert assign(world, "b_owner", "other", return_path_host=B_HOST).status_code == 201
+    response = _rename(world, "renamed.example", who, "other")
+    assert response.status_code == 404
+    assert B_SECRET_NAME not in response.text
+    assert _hosts(world.db) == [(B_HOST, None)]

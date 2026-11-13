@@ -244,11 +244,12 @@ def test_helper_reuses_valid_double_submit_cookie(client: TestClient) -> None:
     ("base_url", "secure"), [("http://localhost:8000", False), ("https://example.test", True)]
 )
 def test_helper_sets_double_submit_cookie_for_anonymous(base_url: str, secure: bool) -> None:
+    name = "__Host-dt_csrf" if secure else CSRF_COOKIE_NAME  # R1-15
     with TestClient(_app(_settings(base_url))) as c:
-        response = c.get("/ui/token", headers=_cookie_header({CSRF_COOKIE_NAME: "garbage"}))
+        response = c.get("/ui/token", headers=_cookie_header({name: "garbage"}))
         token = response.json()["token"]
         cookie = response.headers["set-cookie"]
-        assert cookie.startswith(f"{CSRF_COOKIE_NAME}={token};")
+        assert cookie.startswith(f"{name}={token};")
         lowered = cookie.lower()
         assert "httponly" in lowered and "samesite=lax" in lowered and "path=/" in lowered
         assert ("secure" in lowered.split("; ")) is secure
@@ -256,7 +257,7 @@ def test_helper_sets_double_submit_cookie_for_anonymous(base_url: str, secure: b
         # the issued pair is accepted on a pre-session form post
         post = c.post(
             "/ui/action",
-            headers={**_cookie_header({CSRF_COOKIE_NAME: token}), csrf.CSRF_HEADER: token},
+            headers={**_cookie_header({name: token}), csrf.CSRF_HEADER: token},
         )
         assert post.status_code == 200
 
@@ -565,3 +566,148 @@ def test_unregistered_paths_keep_default_cap() -> None:
     assert csrf.form_cap_for("/ui/action") == csrf.MAX_FORM_BYTES
     assert csrf.form_cap_for(BIG_PATH + "/") == csrf.MAX_FORM_BYTES  # exact match only
     assert csrf.form_cap_for(BIG_PATH) == BIG_CAP
+
+
+# --- R1-15 (AUTH-10): __Host- cookie names on https, issue time in the double-submit token -------
+
+HTTPS = "https://example.test"
+HOST_CSRF = "__Host-dt_csrf"
+HOST_SESSION = "__Host-dt_session"
+T0 = 1_800_000_000.0
+
+
+def _https_client() -> TestClient:
+    return TestClient(_app(_settings(HTTPS)), base_url="https://testserver")
+
+
+def _post(c: TestClient, cookies: dict[str, str], token: str | None) -> Any:
+    headers = _cookie_header(cookies)
+    if token is not None:
+        headers[csrf.CSRF_HEADER] = token
+    return c.post("/ui/action", headers=headers)
+
+
+def test_https_issues_host_prefixed_csrf_cookie() -> None:
+    with _https_client() as c:
+        response = c.get("/ui/token")
+        token = response.json()["token"]
+        cookie = response.headers["set-cookie"]
+        assert cookie.startswith(f"{HOST_CSRF}={token};")
+        parts = [p.strip().lower() for p in cookie.split(";")]
+        assert "secure" in parts and "path=/" in parts
+        assert not any(p.startswith("domain") for p in parts)
+        assert _post(c, {HOST_CSRF: token}, token).status_code == 200
+
+
+def test_https_ignores_unprefixed_csrf_cookie() -> None:
+    # A sibling subdomain can toss `dt_csrf` but never `__Host-dt_csrf`: on https only the
+    # prefixed name counts, so a tossed (even validly signed) pair is refused.
+    token = new_double_submit_token(SECRET)
+    with _https_client() as c:
+        assert _post(c, {CSRF_COOKIE_NAME: token}, token).status_code == 403
+
+
+def test_http_keeps_current_names() -> None:
+    with TestClient(_app(_settings())) as c:
+        response = c.get("/ui/token")
+        token = response.json()["token"]
+        assert response.headers["set-cookie"].startswith(f"{CSRF_COOKIE_NAME}={token};")
+        assert _post(c, {CSRF_COOKIE_NAME: token}, token).status_code == 200
+        # http: the prefixed names are not read
+        assert _post(c, {HOST_CSRF: token}, token).status_code == 403
+        assert _post(c, {HOST_SESSION: SESSION_COOKIE}, SESSION_CSRF).status_code == 403
+        assert _post(c, {SESSION_COOKIE_NAME: SESSION_COOKIE}, SESSION_CSRF).status_code == 200
+
+
+@pytest.mark.parametrize("name", [HOST_SESSION, SESSION_COOKIE_NAME])
+def test_https_session_cookie_new_and_old_name_accepted(name: str) -> None:
+    # The unprefixed session name is still read on https for one release (migration).
+    with _https_client() as c:
+        assert _post(c, {name: SESSION_COOKIE}, SESSION_CSRF).status_code == 200
+        token = c.get("/ui/token", headers=_cookie_header({name: SESSION_COOKIE})).json()
+        assert token == {"token": SESSION_CSRF}
+
+
+def test_https_prefixed_session_cookie_wins_over_old_name() -> None:
+    other = sign_session_token(new_session_token(), SECRET)
+    with _https_client() as c:
+        cookies = {SESSION_COOKIE_NAME: other, HOST_SESSION: SESSION_COOKIE}
+        assert _post(c, cookies, SESSION_CSRF).status_code == 200
+
+
+# (age as a function of (limit, skew), accepted)
+AGES: list[tuple[str, Any, bool]] = [
+    ("fresh", lambda limit, skew: 0, True),
+    ("one-minute", lambda limit, skew: 60, True),
+    ("at-limit", lambda limit, skew: limit, True),
+    ("past-limit", lambda limit, skew: limit + 1, False),
+    ("thirty-days", lambda limit, skew: 30 * 24 * 3600, False),
+    ("future-within-skew", lambda limit, skew: -skew, True),
+    ("future-past-skew", lambda limit, skew: -skew - 1, False),
+]
+
+
+@pytest.mark.parametrize(("age_of", "accepted"), [a[1:] for a in AGES], ids=[a[0] for a in AGES])
+def test_double_submit_token_age(age_of: Any, accepted: bool) -> None:
+    age = age_of(csrf.DOUBLE_SUBMIT_MAX_AGE_SECONDS, csrf.DOUBLE_SUBMIT_MAX_SKEW_SECONDS)
+    token = new_double_submit_token(SECRET, now=T0)
+    assert valid_double_submit_cookie(token, SECRET, now=T0 + age) is accepted
+
+
+@pytest.mark.parametrize("base_url", ["http://localhost:8000", HTTPS])
+def test_expired_double_submit_token_is_refused_403(
+    base_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    token = new_double_submit_token(SECRET, now=T0)
+    name = HOST_CSRF if base_url == HTTPS else CSRF_COOKIE_NAME
+    with TestClient(_app(_settings(base_url)), base_url=base_url) as c:
+        monkeypatch.setattr(csrf, "_clock", lambda: T0 + 60)
+        assert _post(c, {name: token}, token).status_code == 200
+        monkeypatch.setattr(csrf, "_clock", lambda: T0 + csrf.DOUBLE_SUBMIT_MAX_AGE_SECONDS + 1)
+        response = _post(c, {name: token}, token)
+        assert response.status_code == 403
+        assert response.json() == {"detail": t("csrf.invalid", "en")}
+        assert token not in response.text
+
+
+def test_helper_replaces_an_expiring_double_submit_cookie(monkeypatch: pytest.MonkeyPatch) -> None:
+    token = new_double_submit_token(SECRET, now=T0)
+    with TestClient(_app()) as c:
+        monkeypatch.setattr(csrf, "_clock", lambda: T0 + 60)
+        reused = c.get("/ui/token", headers=_cookie_header({CSRF_COOKIE_NAME: token})).json()
+        assert reused == {"token": token}
+        late = T0 + csrf.DOUBLE_SUBMIT_MAX_AGE_SECONDS - 1
+        monkeypatch.setattr(csrf, "_clock", lambda: late)
+        response = c.get("/ui/token", headers=_cookie_header({CSRF_COOKIE_NAME: token}))
+        fresh = response.json()["token"]
+        assert fresh != token
+        assert response.headers["set-cookie"].startswith(f"{CSRF_COOKIE_NAME}={fresh};")
+        # a freshly rendered form always has at least half the limit left
+        later = late + csrf.DOUBLE_SUBMIT_MAX_AGE_SECONDS // 2
+        assert valid_double_submit_cookie(fresh, SECRET, now=later)
+
+
+def _tampered_times(token: str) -> list[str]:
+    nonce, issued, mac = token.split(".")
+    return [
+        f"{nonce}.{int(issued) + 3600}.{mac}",
+        f"{nonce}.{int(issued) - 1}.{mac}",
+        f"{nonce}.0{issued}.{mac}",
+        f"{nonce}..{mac}",
+        f"{nonce}.{issued}x.{mac}",
+        f"{nonce}.-{issued}.{mac}",
+        f"{nonce}.+{issued}.{mac}",
+        f"{nonce}.{'1' * 40}.{mac}",
+        f"{nonce}.{chr(0x0661) * len(issued)}.{mac}",  # non-ASCII digits
+        f"{nonce}.{issued}.{mac}.{issued}",
+        f"{nonce}.{mac}",  # pre-R1-15 format (no issue time)
+    ]
+
+
+@pytest.mark.parametrize("index", range(11))
+def test_tampered_timestamp_refused(index: int) -> None:
+    token = new_double_submit_token(SECRET, now=T0)
+    assert valid_double_submit_cookie(token, SECRET, now=T0) is True
+    bad = _tampered_times(token)[index]
+    assert valid_double_submit_cookie(bad, SECRET, now=T0) is False
+    assert check_token(bad, {CSRF_COOKIE_NAME: bad}, SECRET, now=T0) is False

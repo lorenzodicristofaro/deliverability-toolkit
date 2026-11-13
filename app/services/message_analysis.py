@@ -539,7 +539,7 @@ def _mime_view(m: MimeSummary) -> MimeView:
 
 
 def _count_addresses(block: HeaderBlock, name: str) -> int:
-    values = [f.decoded_value for f in block.get_all(name)]
+    values = [f.raw_value for f in block.get_all(name)]
     return sum(1 for _, addr in getaddresses(values) if addr)
 
 

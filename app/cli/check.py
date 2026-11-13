@@ -21,6 +21,7 @@ from app.checks.dkim_selectors import list_selectors
 from app.checks.finding_text import display_params
 from app.checks.models import CheckContext, CheckResult
 from app.checks.registry import CheckRegistry
+from app.cli._text import visible
 from app.core import i18n
 from app.core.config import ConfigError, Settings
 from app.core.i18n import t
@@ -75,7 +76,10 @@ def render_text(results: Sequence[CheckResult], lang: str) -> str:
         if not r.findings:
             lines.append("  " + t("cli.check.no_findings", lang))
         for f in r.findings:
-            params = display_params(f.code, f.params, lang)
+            params = {
+                k: visible(v) if isinstance(v, str) else v
+                for k, v in display_params(f.code, f.params, lang).items()
+            }
             sev = t(f"cli.check.severity.{f.severity}", lang)
             lines.append(f"  [{sev}] {t(f.title_key, lang, **params)}")
             lines.append("    " + t(f.detail_key, lang, **params))
@@ -84,7 +88,10 @@ def render_text(results: Sequence[CheckResult], lang: str) -> str:
                     "    " + t("cli.check.fix", lang, text=t(f.remediation_key, lang, **params))
                 )
             if f.evidence:
-                lines.append("    " + t("cli.check.evidence", lang, text="; ".join(f.evidence)))
+                lines.append(
+                    "    "
+                    + t("cli.check.evidence", lang, text="; ".join(visible(e) for e in f.evidence))
+                )
         lines.append("")
     lines.append(t("cli.check.summary", lang, count=len(results), code=exit_code(results)))
     return "\n".join(lines)

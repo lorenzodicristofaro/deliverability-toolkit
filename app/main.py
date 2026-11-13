@@ -1,10 +1,12 @@
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from http import HTTPStatus
 
 from fastapi import FastAPI, Request
 from fastapi.exception_handlers import http_exception_handler
-from fastapi.responses import Response
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import ArgumentError
@@ -14,9 +16,10 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from app.api import api_router
 from app.core.config import Settings
 from app.core.csrf import CSRFMiddleware
-from app.core.i18n import validate_catalogues
+from app.core.i18n import t, validate_catalogues
 from app.core.logging import RequestLoggingMiddleware, configure_logging
 from app.core.security_headers import SecurityHeadersMiddleware
+from app.services.auth import SessionPolicy, purge_sessions
 from app.services.seed_sync import SeedSyncError, run_seed_sync
 from app.web.auth import router as auth_router
 from app.web.authentication import router as authentication_router
@@ -34,10 +37,11 @@ from app.web.message import router as message_router
 from app.web.rules import router as rules_router
 from app.web.setup import SetupGateMiddleware, prepare_setup
 from app.web.setup import router as setup_router
-from app.web.templating import STATIC_DIR, render
+from app.web.templating import STATIC_DIR, error_page, render, request_language
 from app.web.templating import router as language_router
 
 logger = logging.getLogger("app.seed_sync")
+purge_logger = logging.getLogger("app.session_purge")
 
 _MIN_MASKED_LEN = 8  # same threshold as app.core.logging: shorter values are not masked
 
@@ -76,6 +80,36 @@ def sync_seeds_at_startup(app: FastAPI) -> None:
     )
 
 
+# Bare 404/405 answers carry the framework's English phrase as detail; these keys replace it.
+_DEFAULT_DETAIL_KEYS = {404: "api.error.not_found", 405: "api.error.method_not_allowed"}
+
+
+def _default_phrase(status_code: int) -> str | None:
+    try:
+        return HTTPStatus(status_code).phrase
+    except ValueError:
+        return None
+
+
+def purge_sessions_at_startup(app: FastAPI) -> None:
+    """Startup hook: delete dead session rows (R1-14). Any failure is logged by exception type
+    (its text can carry query details) and startup goes on."""
+    try:
+        policy = SessionPolicy.from_settings(app.state.settings)
+        with _session_factory(Request({"type": "http", "app": app})).begin() as db:
+            removed = purge_sessions(db, policy=policy)
+    except Exception as exc:
+        purge_logger.error(
+            "session purge failed (%s)",
+            type(exc).__name__,
+            extra={"event": "session_purge.failed"},
+        )
+        return
+    purge_logger.info(
+        "session purge done (%d removed)", removed, extra={"event": "session_purge.done"}
+    )
+
+
 def create_app(settings: Settings | None = None) -> FastAPI:
     """Build the app. With explicit settings (tests) they are used as given; otherwise they are
     loaded from the environment at startup (lifespan), so a missing or invalid configuration
@@ -91,6 +125,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # First-run setup: logs the one-time setup token (WARNING) while no user exists.
         await run_in_threadpool(prepare_setup, app)
         await run_in_threadpool(sync_seeds_at_startup, app)
+        await run_in_threadpool(purge_sessions_at_startup, app)
         yield
 
     # Interactive docs and the OpenAPI schema are disabled: they would be served unauthenticated.
@@ -121,12 +156,34 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     web_app.include_router(api_router)
     web_app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
+    def wants_html(request: Request) -> bool:
+        return "text/html" in request.headers.get("accept", "")
+
     @web_app.exception_handler(StarletteHTTPException)
     async def http_error(request: Request, exc: StarletteHTTPException) -> Response:
-        # Browsers get the translated 404 page; API clients keep the JSON error body.
-        if exc.status_code == 404 and "text/html" in request.headers.get("accept", ""):
+        # Browsers get translated pages; API clients keep the `{"detail": ...}` JSON body, with the
+        # framework's English default text for a bare 404/405 replaced by a translated one.
+        default = exc.detail == _default_phrase(exc.status_code)
+        if exc.status_code == 404 and wants_html(request):
             return render(request, "errors/404.html", status_code=404)
+        if exc.status_code == 405 and default and wants_html(request):
+            return error_page(request, 405, "method_not_allowed", exc.headers)
+        if default and exc.status_code in _DEFAULT_DETAIL_KEYS:
+            lang = request_language(request.scope)
+            return JSONResponse(
+                {"detail": t(_DEFAULT_DETAIL_KEYS[exc.status_code], lang)},
+                status_code=exc.status_code,
+                headers=exc.headers,
+            )
         return await http_exception_handler(request, exc)
+
+    @web_app.exception_handler(RequestValidationError)
+    async def validation_error(request: Request, exc: RequestValidationError) -> Response:
+        # The default body lists every error with the submitted `input`: never echo it.
+        if wants_html(request):
+            return error_page(request, 422, "invalid_request")
+        lang = request_language(request.scope)
+        return JSONResponse({"detail": t("api.error.invalid_request", lang)}, status_code=422)
 
     return web_app
 

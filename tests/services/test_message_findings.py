@@ -94,9 +94,21 @@ def test_base_message_is_clean_and_ok() -> None:
     assert r.unevaluated == () and r.evaluated and r.status == "ok"
 
 
+_NO_AUTHSERV_AR = (
+    "Authentication-Results: spf=pass smtp.mailfrom=example.com; dkim=pass header.d=example.com;"
+    " dmarc=pass header.from=example.com"
+)
+
 # (code, drop, add, body)   -- each must contain the code
 POSITIVE = [
     ("MSG_MISSING_FROM", ("From",), (), "x"),
+    ("MSG_AUTHRES_UNPARSED", ("Authentication-Results",), (_NO_AUTHSERV_AR,), "x"),
+    (
+        "MSG_ALIGNMENT_NOT_EVALUATED",
+        ("Authentication-Results",),
+        ("Authentication-Results: dkim=fail",),
+        "x",
+    ),
     ("MSG_MISSING_FROM", ("From",), ("From:   ",), "x"),
     ("MSG_MULTIPLE_FROM", (), ("From: b@example.com",), "x"),
     ("MSG_MISSING_DATE", ("Date",), (), "x"),
@@ -248,6 +260,16 @@ POSITIVE = [
         "".join("--b\r\nContent-Type: text/plain\r\n\r\nx\r\n" for _ in range(250)) + "--b--\r\n",
     ),
     ("MSG_NO_TEXT_PART", ("Content-Type",), ("Content-Type: text/html",), "<p>x</p>"),
+    (
+        "MSG_ALIGNMENT_LOWER_FIELD_NOT_USED",
+        ("Authentication-Results",),
+        (
+            "Authentication-Results: mx.example.org; spf=fail smtp.mailfrom=evil.example;"
+            " dmarc=fail header.from=example.com",
+            "Authentication-Results: mx.example.org; dkim=pass header.d=example.com",
+        ),
+        "x",
+    ),
 ]
 
 
@@ -264,6 +286,8 @@ def test_positive(code: str, drop: tuple[str, ...], add: tuple[str, ...], body: 
 
 # (code that must NOT appear, drop, add)
 NEGATIVE = [
+    ("MSG_AUTHRES_UNPARSED", (), ()),
+    ("MSG_ALIGNMENT_NOT_EVALUATED", (), ()),
     ("MSG_MULTIPLE_FROM", (), ("To: y@example.net",)),
     ("MSG_DATE_NO_TIMEZONE", ("Date",), ("Date: Tue, 03 Nov 2026 10:00:00 GMT",)),
     ("MSG_DATE_NO_TIMEZONE", ("Date",), ("Date: Tue, 03 Nov 2026 10:00:00 -0000",)),
@@ -294,6 +318,16 @@ NEGATIVE = [
     ("MSG_DMARC_NOT_PASS", (), ()),
     ("MSG_ALIGNMENT_FAIL", (), ()),
     ("MSG_ALIGNMENT_STATED_MISMATCH", (), ()),
+    # R1-22: the dkim pass is in a lower field but the top spf pass is aligned (computed pass).
+    (
+        "MSG_ALIGNMENT_LOWER_FIELD_NOT_USED",
+        ("Authentication-Results",),
+        (
+            "Authentication-Results: mx.example.net; spf=pass smtp.mailfrom=b@example.com;"
+            " dmarc=pass header.from=example.com",
+            "Authentication-Results: mx.example.net; dkim=pass header.d=example.com",
+        ),
+    ),
     (
         "MSG_UNVERIFIED_DKIM_SIGNATURE",
         (),
@@ -581,7 +615,7 @@ def test_long_header_derived_params_are_bounded() -> None:
 
 
 def test_codes_are_valid_unique_and_prefixed() -> None:
-    assert len(set(CODES)) == len(CODES) == 32
+    assert len(set(CODES)) == len(CODES) == 35
     assert all(CODE_RE.fullmatch(c) and c.startswith("MSG_") for c in CODES)
 
 
@@ -744,3 +778,274 @@ def test_mime_cap_after_warning_list_is_full(body: str) -> None:
     r = run(("Content-Type",), _MIXED, body=body)
     assert r.status == "error"
     assert "MSG_PARSER_LIMIT" in codes(r)
+
+
+# --- R1-10: every error status carries a finding that says why ---------------------------------
+
+EXPLAINS_ERROR = frozenset(
+    {
+        "MSG_DATE_INVALID",
+        "MSG_DATE_NO_TIMEZONE",
+        "MSG_RECEIVED_UNPARSED",
+        "MSG_PARSER_LIMIT",
+        "MSG_AUTHRES_UNPARSED",
+        "MSG_ALIGNMENT_NOT_EVALUATED",
+    }
+)
+_AR_DROP = ("Authentication-Results",)
+
+# (add, expected code, text expected in the finding parameters)
+SILENT_PATHS = [
+    ((_NO_AUTHSERV_AR,), "MSG_AUTHRES_UNPARSED", "missing_authserv_id"),
+    (("Authentication-Results: mx.example.net; spf",), "MSG_AUTHRES_UNPARSED", ""),
+    (("Authentication-Results: dkim=fail",), "MSG_ALIGNMENT_NOT_EVALUATED", "missing_d"),
+    (("Authentication-Results: mx.example.net; dkim=fail",), "MSG_ALIGNMENT_NOT_EVALUATED", ""),
+]
+
+
+@pytest.mark.parametrize(
+    ("add", "code", "param"), SILENT_PATHS, ids=[f"{s[1]}-{i}" for i, s in enumerate(SILENT_PATHS)]
+)
+def test_silent_error_paths_are_explained(add: tuple[str, ...], code: str, param: str) -> None:
+    r = run(_AR_DROP, add)
+    assert r.status == "error" and not r.evaluated
+    assert code in codes(r)
+    f = _find(r, code)
+    assert f.severity == "medium"
+    assert param in str(f.params)
+
+
+def test_alignment_finding_lists_reasons_only() -> None:
+    r = run(_AR_DROP, ("Authentication-Results: dkim=fail",))
+    f = _find(r, "MSG_ALIGNMENT_NOT_EVALUATED")
+    assert "reasons" in f.params
+    assert "dkim=fail" not in str(f.params)
+
+
+HOSTILE: list[tuple[tuple[str, ...], tuple[str, ...]]] = [
+    ((), ()),
+    (("Date",), ("Date: ???",)),
+    (("Date",), ("Date: Tue, 03 Nov 2026 10:00:00",)),
+    (("Received",), ("Received: garbage",)),
+    (("Received",), ("Received: ",)),
+    (_AR_DROP, ("Authentication-Results: ;;;",)),
+    (_AR_DROP, ("Authentication-Results: (unterminated",)),
+    (_AR_DROP, ("Authentication-Results: mx.example.net; spf",)),
+    (_AR_DROP, (_NO_AUTHSERV_AR,)),
+    (_AR_DROP, ("Authentication-Results: dkim=fail",)),
+    (_AR_DROP, ("Authentication-Results: =; =",)),
+    (("From",), ("From: <<<>>>",)),
+    (("From",), ("From: nobody",)),
+    (("From",), ()),
+    (
+        ("Received",),
+        tuple(f"Received: from a{i}.example by b.example; {BASE['Date'][5:]}" for i in range(120)),
+    ),
+    # Over the List-Unsubscribe parser's value cap (folded under the header-line cap).
+    (
+        ("List-Unsubscribe", "List-Unsubscribe-Post"),
+        (
+            f"List-Unsubscribe: <https://example.com/{'a' * 5000}\r\n {'b' * 5000}>",
+            "List-Unsubscribe-Post: List-Unsubscribe=One-Click",
+        ),
+    ),
+]
+
+
+@pytest.mark.parametrize("case", range(len(HOSTILE)))
+def test_every_not_evaluated_result_has_an_explaining_finding(case: int) -> None:
+    drop, add = HOSTILE[case]
+    r = run(drop, add)
+    if r.evaluated:
+        return
+    assert codes(r) & EXPLAINS_ERROR, (r.unevaluated, codes(r))
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [b"\x00", b"From: a@example.com\x00\r\n\r\n", b"A: " + b"b" * (MAX_RAW_BYTES + 1)],
+    ids=["nul", "nul-header", "too-large"],
+)
+def test_rejected_input_is_explained(raw: bytes) -> None:
+    r = analyze_message(raw)
+    assert not r.evaluated
+    assert codes(r) & EXPLAINS_ERROR
+
+
+# --- R1-23: One-Click verdict comes from the RFC 8058 parser (PARSE-07) ------------------------
+
+_LU = "List-Unsubscribe"
+_POST = "List-Unsubscribe-Post"
+_OK_POST = "List-Unsubscribe=One-Click"
+_HTTPS = f"{_LU}: <https://example.com/u>"
+
+# (label, extra header lines, expect the message finding)
+ONECLICK_ROWS = [
+    ("mailto-only", (f"{_LU}: <mailto:u@example.com>", f"{_POST}: {_OK_POST}"), True),
+    ("post-with-extra-words", (_HTTPS, f"{_POST}: x {_OK_POST} y"), True),
+    ("post-prefix-junk", (_HTTPS, f"{_POST}: X {_OK_POST}"), True),
+    ("post-suffix-junk", (_HTTPS, f"{_POST}: List-Unsubscribe=One-Click-Not"), True),
+    ("post-extra-parameter", (_HTTPS, f"{_POST}: {_OK_POST}; x=1"), True),
+    ("http-only", (f"{_LU}: <http://example.com/u>", f"{_POST}: {_OK_POST}"), True),
+    (
+        "duplicated-list-unsubscribe",
+        (_HTTPS, f"{_LU}: <https://example.com/v>", f"{_POST}: {_OK_POST}"),
+        True,
+    ),
+    ("post-missing", (_HTTPS,), True),
+    ("valid", (_HTTPS, f"{_POST}: {_OK_POST}"), False),
+    ("valid-abnf-case", (_HTTPS, f"{_POST}: list-unsubscribe=one-click"), False),
+]
+_ONECLICK_IDS = [r[0] for r in ONECLICK_ROWS]
+
+
+def _oneclick_raw(lines: tuple[str, ...]) -> bytes:
+    return msg(drop=(_LU, _POST), add=lines)
+
+
+@pytest.mark.parametrize(("label", "lines", "expect"), ONECLICK_ROWS, ids=_ONECLICK_IDS)
+def test_oneclick_finding_follows_rfc8058_parser(
+    label: str, lines: tuple[str, ...], expect: bool
+) -> None:
+    r = analyze_message(_oneclick_raw(lines))
+    assert ("MSG_LIST_UNSUBSCRIBE_NO_ONECLICK" in codes(r)) is expect
+    assert r.unevaluated == ()
+
+
+# The content analyzer's verdict (CONTENT_NO_ONE_CLICK) uses the exact-case Post comparison while
+# the parser's one_click_eligible accepts the ABNF case-insensitively (RFC 5234 section 2.3); the
+# case-only row is therefore not cross-checked here.
+_CROSS_ROWS = [r for r in ONECLICK_ROWS if r[0] != "valid-abnf-case"]
+
+
+@pytest.mark.parametrize(("label", "lines", "expect"), _CROSS_ROWS, ids=[r[0] for r in _CROSS_ROWS])
+def test_oneclick_matches_content_analyzer(
+    label: str, lines: tuple[str, ...], expect: bool
+) -> None:
+    from app.parsers.list_unsubscribe import analyze_list_unsubscribe
+    from app.services.content_findings import unsubscribe_findings
+
+    raw = _oneclick_raw(lines)
+    content = unsubscribe_findings(analyze_list_unsubscribe(parse_header_block(raw)))
+    in_content = "CONTENT_NO_ONE_CLICK" in {f.code for f in content.findings}
+    in_message = "MSG_LIST_UNSUBSCRIBE_NO_ONECLICK" in codes(analyze_message(raw))
+    assert in_content == in_message == expect
+
+
+def test_oneclick_overlong_field_is_not_evaluated() -> None:
+    # Folded so each physical line stays under the header-line cap; the value exceeds the
+    # List-Unsubscribe parser's value cap.
+    long_field = f"{_LU}: <https://example.com/{'a' * 5000}\r\n {'b' * 5000}>"
+    r = analyze_message(_oneclick_raw((long_field, f"{_POST}: {_OK_POST}")))
+    assert "list_unsubscribe" in r.unevaluated
+    assert r.status == "error"
+    assert "MSG_LIST_UNSUBSCRIBE_NO_ONECLICK" not in codes(r)
+    f = _find(r, "MSG_PARSER_LIMIT")
+    assert f.severity == "medium"
+    assert "list_unsubscribe" in f.params["limits"]
+
+
+# A field that is capped or unreadable leaves One-Click unknown only when nothing else decides it.
+_OVERLONG = f"{_LU}: <https://example.com/{'a' * 5000}\r\n {'b' * 5000}>"
+# More bracketed URIs than the parser's MAX_URIS (32): the field is capped, the https URI is first.
+_CAPPED = f"{_LU}: <https://example.com/u>," + ",".join(
+    f"\r\n <mailto:u{i}@example.com>" for i in range(40)
+)
+
+# (label, extra header lines, expect the message finding)
+DECIDED_ROWS = [
+    ("duplicated-one-overlong-https", (_OVERLONG, _HTTPS, f"{_POST}: {_OK_POST}"), True),
+    ("capped-https-bad-post", (_CAPPED, f"{_POST}: x {_OK_POST}"), True),
+    ("capped-https-post-missing", (_CAPPED,), True),
+    ("capped-https-valid-post", (_CAPPED, f"{_POST}: {_OK_POST}"), False),
+]
+
+
+@pytest.mark.parametrize(
+    ("label", "lines", "expect"), DECIDED_ROWS, ids=[r[0] for r in DECIDED_ROWS]
+)
+def test_oneclick_decided_despite_capped_field(
+    label: str, lines: tuple[str, ...], expect: bool
+) -> None:
+    r = analyze_message(_oneclick_raw(lines))
+    assert ("MSG_LIST_UNSUBSCRIBE_NO_ONECLICK" in codes(r)) is expect
+    assert r.unevaluated == () and r.status != "error"
+    assert "MSG_PARSER_LIMIT" not in codes(r)
+
+
+@pytest.mark.parametrize(
+    ("label", "lines", "expect"), DECIDED_ROWS, ids=[r[0] for r in DECIDED_ROWS]
+)
+def test_oneclick_decided_matches_content_analyzer(
+    label: str, lines: tuple[str, ...], expect: bool
+) -> None:
+    test_oneclick_matches_content_analyzer(label, lines, expect)
+
+
+def test_oneclick_duplicated_with_unreadable_field_is_never_oneclick() -> None:
+    # RFC 8058 needs exactly one List-Unsubscribe field, so the over-long one cannot change the
+    # answer. The content analyzer stays silent on One-Click here (https unknown): see the report.
+    lines = (_OVERLONG, f"{_LU}: <mailto:u@example.com>", f"{_POST}: {_OK_POST}")
+    r = analyze_message(_oneclick_raw(lines))
+    assert "MSG_LIST_UNSUBSCRIBE_NO_ONECLICK" in codes(r)
+    assert r.unevaluated == () and r.status != "error"
+
+
+def test_oneclick_no_unsubscribe_header_unchanged() -> None:
+    r = analyze_message(_oneclick_raw(()))
+    assert codes(r) == {"MSG_LIST_UNSUBSCRIBE_MISSING"}
+    assert r.unevaluated == ()
+
+
+# --- R1-22: a pass from a lower Authentication-Results field is not used -----------------------
+
+_R122_TOP_FAIL = (
+    "Authentication-Results: mx.example.org; spf=fail smtp.mailfrom=evil.example;"
+    " dmarc=fail header.from=example.com"
+)
+_R122_LOWER_DKIM = "Authentication-Results: mx.example.org; dkim=pass header.d=example.com"
+_R122_TOP_SPF_ESP = (
+    "Authentication-Results: mx.example.org; spf=pass smtp.mailfrom=b@bounce.example.net;"
+    " dmarc=pass header.from=example.com"
+)
+
+# (fields top first, codes that must appear, codes that must not appear, status)
+R122_FINDINGS = [
+    # Forged lower field (review scenario): the dkim pass is not used, status stays fail.
+    (
+        (_R122_TOP_FAIL, _R122_LOWER_DKIM),
+        {
+            "MSG_DMARC_NOT_PASS",
+            "MSG_SPF_NOT_PASS",
+            "MSG_ALIGNMENT_FAIL",
+            "MSG_ALIGNMENT_LOWER_FIELD_NOT_USED",
+        },
+        {"MSG_ALIGNMENT_STATED_MISMATCH", "MSG_ALIGNMENT_NOT_EVALUATED"},
+        "fail",
+    ),
+    # Legitimate receiver splitting spf and dkim over two fields (pinned cost of the minimal
+    # rule): computed fail, the stated dmarc=pass disagrees, and the new finding says why.
+    (
+        (_R122_TOP_SPF_ESP, _R122_LOWER_DKIM),
+        {
+            "MSG_ALIGNMENT_FAIL",
+            "MSG_ALIGNMENT_STATED_MISMATCH",
+            "MSG_ALIGNMENT_LOWER_FIELD_NOT_USED",
+        },
+        {"MSG_ALIGNMENT_NOT_EVALUATED", "MSG_DKIM_NOT_PASS", "MSG_AUTHRES_AUTHSERV_MISMATCH"},
+        "fail",
+    ),
+]
+
+
+@pytest.mark.parametrize(("fields", "present", "absent", "status"), R122_FINDINGS)
+def test_lower_field_pass_is_not_used(
+    fields: tuple[str, ...], present: set[str], absent: set[str], status: str
+) -> None:
+    r = run(("Authentication-Results",), fields)
+    assert present <= codes(r)
+    assert not absent & codes(r)
+    assert r.status == status and r.evaluated
+    f = _find(r, "MSG_ALIGNMENT_LOWER_FIELD_NOT_USED")
+    assert f.severity == "low"
+    assert f.params == {"methods": "dkim", "domains": "example.com"}

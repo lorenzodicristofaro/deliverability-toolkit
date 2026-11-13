@@ -13,8 +13,8 @@ from app.checks.registry import load_builtin_checks
 from app.checks.spf import (
     CODES,
     DNS_ANSWER_GUIDELINE,
+    MAX_AFTER_ALL_EVIDENCE,
     NEAR_LOOKUP_THRESHOLD,
-    TXT_STRING_MAX,
     SpfCheck,
 )
 from app.checks.spf_tree import LOOKUP_LIMIT, MX_ADDRESS_LIMIT
@@ -167,8 +167,8 @@ INLINE_CASES: list[tuple[str, list[dict[str, Any]], str, set[str]]] = [
     (
         "first_all_wins",
         [_txt("x.test", "v=spf1 ip4:192.0.2.1 -all +all")],
-        "ok",
-        set(),
+        "warn",
+        {"SPF_TERMS_AFTER_ALL"},  # R1-17: the unreachable +all is advisory only, not PLUS_ALL
     ),
     (
         "redirect_target_softfail",
@@ -196,9 +196,33 @@ INLINE_CASES: list[tuple[str, list[dict[str, Any]], str, set[str]]] = [
     ),
     (
         "invalid_target_is_syntax_error",
-        [_txt("x.test", "v=spf1 include:bad_label.example.com -all")],
+        [_txt("x.test", "v=spf1 include:" + "x" * 64 + ".example.com -all")],
         "fail",
         {"SPF_SYNTAX_ERROR"},
+    ),
+    (
+        "empty_label_target_is_syntax_error",
+        [_txt("x.test", "v=spf1 a:a..example.com -all")],
+        "fail",
+        {"SPF_SYNTAX_ERROR"},
+    ),
+    (
+        "underscore_redirect_followed",
+        [_txt("x.test", "v=spf1 redirect=_x_.example.net"), _txt("_x_.example.net", "v=spf1 -all")],
+        "ok",
+        set(),
+    ),
+    (
+        "hyphen_edge_a_target_queried",
+        [_txt("x.test", "v=spf1 a:x-.example.net -all"), _a("x-.example.net")],
+        "ok",
+        set(),
+    ),
+    (
+        "missing_underscore_include_not_found",
+        [_txt("x.test", "v=spf1 include:a__b.example.net -all")],
+        "fail",
+        {"SPF_INCLUDE_NOT_FOUND"},
     ),
     ("empty_record", [_txt("x.test", "v=spf1")], "warn", {"SPF_NO_ALL"}),
     ("garbage_only", [_txt("x.test", "v=spf1 \x00 -all")], "fail", {"SPF_SYNTAX_ERROR"}),
@@ -227,27 +251,79 @@ def _ip4s(n: int) -> str:
     return " ".join(f"ip4:192.0.2.{i}" for i in range(n))
 
 
+# Body lengths 13..18 for one ip4 term in a documentation range (RFC 5737), by prefix and width.
+_IP4_BODY = {13: ("192.0.2.", 0), 14: ("192.0.2.", 10), 15: ("192.0.2.", 100)}
+_IP4_BODY |= {16: ("198.51.100.", 0), 17: ("198.51.100.", 10), 18: ("198.51.100.", 100)}
+
+
+def _spf_of_length(length: int, tail: str = "-all") -> str:
+    """A valid SPF record of exactly ``length`` octets made of distinct ip4 terms."""
+    head = "v=spf1"
+    rest = length - len(head) - len(tail) - 1  # each term adds " " + body
+    k = -(-rest // 19)
+    assert 14 * k <= rest, length
+    used: dict[int, int] = {}
+    terms = []
+    for i in range(k):
+        body = rest // k + (1 if i < rest % k else 0) - 1
+        prefix, first = _IP4_BODY[body]
+        terms.append(f"ip4:{prefix}{first + used.get(body, 0)}")
+        used[body] = used.get(body, 0) + 1
+    record = " ".join([head, *terms, tail])
+    assert len(record) == length
+    return record
+
+
+def _split_255(record: str) -> list[str]:
+    """RFC 7208 section 3.3: publish as strings of at most 255 octets, joined without spaces."""
+    return [record[i : i + 255] for i in range(0, len(record), 255)]
+
+
+_LEN_NAME = "x.test"
+
+
 @pytest.mark.parametrize(
-    ("record", "severity", "limit"),
+    ("answer", "severity"),
     [
-        (f"v=spf1 {_ip4s(10)} -all", None, None),
-        (f"v=spf1 {_ip4s(20)} -all", "info", TXT_STRING_MAX),  # 260 chars
-        (f"v=spf1 {_ip4s(36)} -all", "medium", DNS_ANSWER_GUIDELINE),  # 477 chars
+        # ``answer`` is what the 450 guideline measures (RFC 7208 section 3.4): name + record text.
+        (255, None),
+        (256, None),
+        (301, None),
+        (450, None),
+        (451, "medium"),
     ],
 )
-async def test_record_length(record: str, severity: str | None, limit: int | None) -> None:
-    r = await _check(_fake([_txt("x.test", record)]), "x.test")
+async def test_record_length(answer: int, severity: str | None) -> None:
+    record = _spf_of_length(answer - len(_LEN_NAME))
+    entry = {"name": _LEN_NAME, "type": "TXT", "ttl": 60, "rdata": [_split_255(record)]}
+    r = await _check(_fake([entry]), _LEN_NAME)
     found = [f for f in r.findings if f.code == "SPF_RECORD_TOO_LONG"]
     if severity is None:
-        assert found == []
+        assert found == [] and not r.findings
+        assert r.status == "ok"
         return
     (f,) = found
-    assert f.severity == severity and f.params["limit"] == limit
-    assert f.params["length"] > limit
+    assert f.severity == severity
+    assert f.params["limit"] == DNS_ANSWER_GUIDELINE and f.params["length"] == answer
+
+
+@pytest.mark.parametrize(
+    ("answer", "codes"),
+    [
+        (301, {"SPF_SYNTAX_ERROR"}),
+        (451, {"SPF_SYNTAX_ERROR", "SPF_RECORD_TOO_LONG"}),
+    ],
+)
+async def test_record_length_malformed(answer: int, codes: set[str]) -> None:
+    record = _spf_of_length(answer - len(_LEN_NAME), tail="ip4:bogus -all")
+    entry = {"name": _LEN_NAME, "type": "TXT", "ttl": 60, "rdata": [_split_255(record)]}
+    r = await _check(_fake([entry]), _LEN_NAME)
+    assert _codes(r) == codes
+    assert r.status == "fail"
 
 
 def test_length_thresholds_are_rfc_values() -> None:
-    assert (TXT_STRING_MAX, DNS_ANSWER_GUIDELINE) == (255, 450)
+    assert DNS_ANSWER_GUIDELINE == 450
     assert NEAR_LOOKUP_THRESHOLD < LOOKUP_LIMIT == 10
 
 
@@ -280,6 +356,21 @@ async def test_flattening_hint_ranks_includes_and_generates_no_addresses() -> No
     ip = re.compile(r"\b\d{1,3}(\.\d{1,3}){3}\b")
     for text in (EN[hint.remediation_key or ""], IT[hint.remediation_key or ""], *hint.evidence):
         assert not ip.search(text)
+
+
+async def test_include_with_inner_underscore_is_fetched() -> None:
+    """R1-06 (DNS-02): a domain-spec label with "_" is a queryable name, not a syntax error."""
+    resolver = _fake(
+        [
+            _txt("example.com", "v=spf1 include:spf_c.example.net -all"),
+            _txt("spf_c.example.net", "v=spf1 ip4:192.0.2.0/24 -all"),
+        ]
+    )
+    r = await _check(resolver, "example.com")
+    assert DnsQuestion("spf_c.example.net", "TXT") in resolver.questions
+    assert "SPF_SYNTAX_ERROR" not in _codes(r)
+    assert r.status != "fail"
+    assert [n["domain"] for n in r.data["nodes"]] == ["example.com", "spf_c.example.net"]
 
 
 async def test_syntax_error_evidence_and_children_not_evaluated() -> None:
@@ -409,6 +500,73 @@ async def test_every_failure_state_anywhere_is_error(
     assert _codes(r) == {"SPF_DNS_ERROR"}
     (f,) = r.findings
     assert (f.params["name"], f.params["rdtype"], f.params["state"]) == (name, rdtype, str(state))
+
+
+# --- R1-17: terms after the first all are never tested (RFC 7208 5.1) --------------------------
+
+_ELEVEN = " ".join(f"include:i{i}.test" for i in range(11))
+_INCLUDED = [_txt(f"i{i}.test", "v=spf1 ip4:192.0.2.1 -all") for i in range(11)]
+_SERVFAIL = {"name": "sf.example.net", "type": "TXT", "state": "servfail", "rcode": 2}
+
+
+@pytest.mark.parametrize(
+    ("record", "status", "codes", "lookups"),
+    [
+        (f"v=spf1 -all {_ELEVEN}", "warn", {"SPF_TERMS_AFTER_ALL"}, 0),
+        (
+            f"v=spf1 ~all {_ELEVEN}",
+            "warn",
+            {"SPF_TERMS_AFTER_ALL", "SPF_NEUTRAL_ALL_SOFTFAIL"},
+            0,
+        ),
+        (f"v=spf1 ?all {_ELEVEN}", "warn", {"SPF_TERMS_AFTER_ALL", "SPF_QUESTION_ALL"}, 0),
+        (f"v=spf1 +all {_ELEVEN}", "fail", {"SPF_TERMS_AFTER_ALL", "SPF_PLUS_ALL"}, 0),
+        # A SERVFAIL and a missing target behind all are not queried: no error, no permerror.
+        (
+            "v=spf1 -all include:sf.example.net include:nx.example.net",
+            "warn",
+            {"SPF_TERMS_AFTER_ALL"},
+            0,
+        ),
+        # The same terms before all keep today's results.
+        ("v=spf1 include:sf.example.net -all", "error", {"SPF_DNS_ERROR"}, None),
+        (f"v=spf1 {_ELEVEN} -all", "fail", {"SPF_TOO_MANY_LOOKUPS", "SPF_FLATTENING_HINT"}, 11),
+        # Modifiers after all are not unreachable mechanisms; redirect keeps its own finding.
+        ("v=spf1 -all exp=e.example.net", "ok", set(), 0),
+        ("v=spf1 -all redirect=i0.test", "warn", {"SPF_REDIRECT_WITH_ALL"}, 0),
+    ],
+)
+async def test_terms_after_all(
+    record: str, status: str, codes: set[str], lookups: int | None
+) -> None:
+    resolver = _fake([_txt("x.test", record), _SERVFAIL, *_INCLUDED])
+    r = await _check(resolver, "x.test")
+    assert (r.status, _codes(r)) == (status, codes)
+    if lookups is not None:
+        assert r.data["lookup_count"] == lookups
+    if record.startswith("v=spf1 -all"):
+        assert [q.name for q in resolver.questions] == ["x.test"]
+
+
+async def test_terms_after_all_aggregated_once_per_record_with_capped_evidence() -> None:
+    after = " ".join(f"ip4:192.0.2.{i}" for i in range(15))
+    resolver = _fake(
+        [
+            _txt("x.test", f"v=spf1 include:i0.test -all {after} -all"),
+            _txt("i0.test", "v=spf1 -all include:sf.example.net a"),
+            _SERVFAIL,
+        ]
+    )
+    r = await _check(resolver, "x.test")
+    found = [f for f in r.findings if f.code == "SPF_TERMS_AFTER_ALL"]
+    assert [(f.severity, f.params["name"], f.params["count"]) for f in found] == [
+        ("low", "x.test", 16),
+        ("low", "i0.test", 2),
+    ]
+    assert len(found[0].evidence) == MAX_AFTER_ALL_EVIDENCE
+    assert found[0].evidence[0] == "ip4:192.0.2.0"
+    assert found[1].evidence == ("include:sf.example.net", "a")
+    assert r.status == "warn" and r.data["lookup_count"] == 1
 
 
 @pytest.mark.parametrize("domain", ["a b.example.com", "a..b", "192.0.2.1", "x\x00.test"])

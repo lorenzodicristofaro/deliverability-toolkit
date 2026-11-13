@@ -63,6 +63,10 @@ MSG_ENCODED_HEADER_BROKEN                low      undecodable RFC 2047 encoded-w
 MSG_MIME_TRUNCATED                       low      MIME walk stopped at a cap (detail)
 MSG_NO_TEXT_PART                         low      no text/plain part
 MSG_PARSER_LIMIT                         medium   input rejected or capped (error-class)
+MSG_AUTHRES_UNPARSED                     medium   Authentication-Results unusable (error-class)
+MSG_ALIGNMENT_NOT_EVALUATED              medium   no identifier to align (error-class)
+MSG_ALIGNMENT_LOWER_FIELD_NOT_USED       low      an aligned pass from a lower
+                                                  Authentication-Results field was not used
 ======================================== ======== =========================================
 
 ``MSG_DUPLICATE_SINGLETON_HEADER`` is reported for Subject, Date and Message-ID; a repeated
@@ -71,6 +75,8 @@ From is reported as ``MSG_MULTIPLE_FROM`` only (one finding per problem).
 Error-class conditions (``unevaluated``): ``date`` (invalid, or without a zone), ``received``
 (any unparsed hop), ``authres`` (an Authentication-Results field that could not be parsed),
 ``alignment`` (alignment not computable although Authentication-Results exist),
+``list_unsubscribe`` (a List-Unsubscribe field capped or unreadable, so One-Click is unknown;
+explained by ``MSG_PARSER_LIMIT`` with the ``list_unsubscribe`` limit),
 and ``parser`` (input rejected
 or capped).
 """
@@ -92,6 +98,7 @@ from app.parsers.authres import (
     AuthResParseError,
     parse_all_authentication_results,
 )
+from app.parsers.list_unsubscribe import analyze_list_unsubscribe
 from app.parsers.message import (
     ENCODED_WORD_INVALID,
     ENCODED_WORD_MALFORMED,
@@ -101,7 +108,7 @@ from app.parsers.message import (
 )
 from app.parsers.mime import MimeSummary
 from app.parsers.received import ReceivedChain, parse_received_values
-from app.services.message_alignment import AlignmentReport
+from app.services.message_alignment import LOWER_AUTHRES_FIELD, AlignmentReport
 
 MAX_EXCERPT = 200
 MAX_DATE_SKEW = timedelta(hours=24)
@@ -147,6 +154,9 @@ CODES: tuple[str, ...] = (
     "MSG_MIME_TRUNCATED",
     "MSG_NO_TEXT_PART",
     "MSG_PARSER_LIMIT",
+    "MSG_AUTHRES_UNPARSED",
+    "MSG_ALIGNMENT_NOT_EVALUATED",
+    "MSG_ALIGNMENT_LOWER_FIELD_NOT_USED",
 )
 
 
@@ -337,7 +347,18 @@ def _auth_part(alignment: AlignmentReport, headers: tuple[AuthResHeader, ...], a
     if not headers:
         acc.add("MSG_AUTHRES_MISSING", "medium")
         return
-    if any(h.authserv_id is None or any(i.severity == "error" for i in h.issues) for h in headers):
+    unusable = [
+        h for h in headers if h.authserv_id is None or any(i.severity == "error" for i in h.issues)
+    ]
+    if unusable:
+        issue_codes = [i.code for h in unusable for i in h.issues if i.severity == "error"]
+        if any(h.authserv_id is None for h in unusable):
+            issue_codes.append("missing_authserv_id")
+        acc.add(
+            "MSG_AUTHRES_UNPARSED",
+            "medium",
+            {"issues": _joined(list(dict.fromkeys(issue_codes))), "count": len(unusable)},
+        )
         acc.skip("authres")
 
     ids: dict[str, str] = {}
@@ -394,6 +415,16 @@ def _alignment_part(alignment: AlignmentReport, have_authres: bool, acc: _Acc) -
             },
         )
     elif alignment.computed_dmarc == "not_evaluated" and have_authres:
+        reasons = [
+            p.reason
+            for p in alignment.pairs
+            if p.state in ("unknown", "not_evaluated") and p.reason
+        ]
+        acc.add(
+            "MSG_ALIGNMENT_NOT_EVALUATED",
+            "medium",
+            {"reasons": _joined(list(dict.fromkeys(reasons)))},
+        )
         acc.skip("alignment")
     if alignment.dmarc_mismatch:
         acc.add(
@@ -402,6 +433,17 @@ def _alignment_part(alignment: AlignmentReport, have_authres: bool, acc: _Acc) -
             {
                 "stated": excerpt(alignment.stated_dmarc),
                 "computed": alignment.computed_dmarc,
+            },
+        )
+    # R1-22: say why a pair shown as aligned did not make the computed result pass.
+    lower = [p for p in alignment.pairs if p.state == "aligned" and p.reason == LOWER_AUTHRES_FIELD]
+    if lower and alignment.computed_dmarc != "pass":
+        acc.add(
+            "MSG_ALIGNMENT_LOWER_FIELD_NOT_USED",
+            "low",
+            {
+                "methods": _joined(list(dict.fromkeys(p.kind for p in lower))),
+                "domains": _joined(list(dict.fromkeys(p.identifier_domain or "" for p in lower))),
             },
         )
     unverified = [p.identifier_domain or "" for p in alignment.pairs if p.unverified_signature]
@@ -469,9 +511,14 @@ def _other_part(block: HeaderBlock, alignment: AlignmentReport, acc: _Acc) -> No
     if not unsub:
         acc.add("MSG_LIST_UNSUBSCRIBE_MISSING", "info")
     else:
-        # RFC 8058 section 3.1: the one-click post header carries "List-Unsubscribe=One-Click".
-        posts = block.get_all("List-Unsubscribe-Post")
-        if not any("list-unsubscribe=one-click" in p.raw_value.lower() for p in posts):
+        # RFC 8058 section 3.1 / 5 verdict from the shared parser (same as the content analyzer).
+        # A capped or unreadable field only leaves One-Click unknown when the https answer is
+        # unknown (the parser stops at the first good https URI, as the content analyzer relies
+        # on) and the field is not duplicated (RFC 8058 needs exactly one, so never One-Click).
+        facts = analyze_list_unsubscribe(block)
+        if facts.https_uri_present is None and not facts.duplicated:
+            acc.skip("list_unsubscribe")
+        elif not facts.one_click_eligible:
             acc.add("MSG_LIST_UNSUBSCRIBE_NO_ONECLICK", "info")
     broken = [w for w in block.warnings if w.code in _ENCODED_WORD_CODES]
     if broken:
@@ -519,6 +566,8 @@ def build_message_findings(
     _alignment_part(alignment, bool(headers), acc)
     _arc_part(arc, acc)
     _other_part(block, alignment, acc)
+    if "list_unsubscribe" in acc.unevaluated:
+        limits.append("list_unsubscribe")
     if mime is not None:
         _mime_part(mime, acc)
 

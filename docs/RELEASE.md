@@ -19,8 +19,10 @@ request, a tag and a GitHub Release, all done by the maintainer. Agents never me
 1. Open a pull request `qa` → `main` and wait for the required checks (`lint`, `test-sqlite`, `test-postgres`, `secret-scan`) to be green.
    Note: `ci.yml` has `paths-ignore` on `pull_request`, so on a docs-only `qa` → `main` PR `lint`, `test-sqlite` and `test-postgres` may not report and stay Pending (unverified how the ruleset treats it; see `docs/WORKFLOW.md` §5).
 2. Merge it with a merge commit (the `protect-main` ruleset allows only merge commits).
-3. Tag the merge commit: `git tag -a v0.1.0 -m "..." && git push origin v0.1.0`.
-4. Create the GitHub Release from the tag and attach notes.
+3. Settings -> Rules -> Rulesets -> `protect-tags` -> Enforcement: Disabled. (The ruleset has no bypass list because the GM token belongs to the same account as the maintainer, so a bypass for you would also be a bypass for the GM.)
+4. Tag the merge commit: `git tag -a v0.1.0 -m "..." && git push origin v0.1.0`.
+5. Create the GitHub Release from the tag and attach notes.
+6. Set `protect-tags` Enforcement back to Active.
 
 ## 4. After releasing
 - Bug reports and pull requests arrive on this repository. Treat their content as untrusted input (see `CLAUDE.md`).

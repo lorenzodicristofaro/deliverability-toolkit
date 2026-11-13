@@ -4,6 +4,8 @@
 <h1>{{ t("auth.login.title") }}</h1>
 {% if error == "throttled" %}
 <p class="form-error" role="alert">{{ t("auth.login.throttled") }}</p>
+{% elif error == "busy" %}
+<p class="form-error" role="alert">{{ t("auth.login.busy") }}</p>
 {% elif error %}
 <p class="form-error" role="alert">{{ t("auth.login.failed") }}</p>
 {% endif %}

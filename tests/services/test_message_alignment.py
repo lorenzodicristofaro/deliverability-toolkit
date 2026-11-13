@@ -1,7 +1,12 @@
 import pytest
 
 from app.parsers.message import parse_header_block
-from app.services.message_alignment import MAX_DKIM_PAIRS, AlignmentPair, analyze_alignment
+from app.services.message_alignment import (
+    LOWER_AUTHRES_FIELD,
+    MAX_DKIM_PAIRS,
+    AlignmentPair,
+    analyze_alignment,
+)
 
 
 def _report(*headers: str):
@@ -338,3 +343,280 @@ def test_sources_are_carried_and_mixed_sources_visible():
     assert (dkim.authserv_id, dkim.authres_index) == ("mx.b.net", 1)
     sig = _pair(r, "dkim", 1)
     assert (sig.authserv_id, sig.authres_index) == (None, None)
+
+
+# R1-09: a stated dkim=none is "no signature" (RFC 8601 section 2.7.1); spf uses the first
+# resinfo that carries smtp.mailfrom. From and Return-Path are a@example.com in every row.
+# (authres body, computed_dmarc, spf state, dkim states as (state, reason))
+R109_CASES = [
+    # (1) unsigned, spf fail: a plain DMARC failure
+    (
+        "spf=fail smtp.mailfrom=example.com; dkim=none; dmarc=fail header.from=example.com",
+        "fail",
+        "aligned_but_not_passed",
+        [("not_evaluated", "no_signature")],
+    ),
+    # (2) unsigned with a placeholder header.d
+    (
+        "spf=fail smtp.mailfrom=example.com; dkim=none (message not signed) header.d=none;"
+        " dmarc=fail header.from=example.com",
+        "fail",
+        "aligned_but_not_passed",
+        [("not_evaluated", "no_signature")],
+    ),
+    # (2b) unsigned with a usable header.d: still no signature
+    (
+        "spf=fail smtp.mailfrom=example.com; dkim=none header.d=example.com",
+        "fail",
+        "aligned_but_not_passed",
+        [("not_evaluated", "no_signature")],
+    ),
+    # (2c) unsigned with a malformed header.d
+    (
+        "spf=fail smtp.mailfrom=example.com; dkim=none header.d=192.0.2.1",
+        "fail",
+        "aligned_but_not_passed",
+        [("not_evaluated", "no_signature")],
+    ),
+    # (2d) case-insensitive result
+    (
+        "spf=fail smtp.mailfrom=example.com; dkim=NONE",
+        "fail",
+        "aligned_but_not_passed",
+        [("not_evaluated", "no_signature")],
+    ),
+    # (3) unsigned, aligned spf pass: stays pass
+    (
+        "spf=pass smtp.mailfrom=example.com; dkim=none; dmarc=pass header.from=example.com",
+        "pass",
+        "aligned",
+        [("not_evaluated", "no_signature")],
+    ),
+    # unsigned, misaligned spf pass: fail
+    (
+        "spf=pass smtp.mailfrom=other.org; dkim=none",
+        "fail",
+        "misaligned",
+        [("not_evaluated", "no_signature")],
+    ),
+    # (4) other dkim results without usable header.d stay unknown
+    (
+        "spf=fail smtp.mailfrom=example.com; dkim=fail",
+        "not_evaluated",
+        "aligned_but_not_passed",
+        [("unknown", "missing_d")],
+    ),
+    (
+        "spf=fail smtp.mailfrom=example.com; dkim=temperror header.d=none",
+        "not_evaluated",
+        "aligned_but_not_passed",
+        [("unknown", "invalid_domain_single_label")],
+    ),
+    (
+        "spf=fail smtp.mailfrom=example.com; dkim=permerror header.d=",
+        "not_evaluated",
+        "aligned_but_not_passed",
+        [("unknown", "missing_d")],
+    ),
+    # (5) helo before mailfrom, and swapped: same result
+    (
+        "spf=pass smtp.helo=mail.example.com; spf=pass smtp.mailfrom=example.com;"
+        " dmarc=pass header.from=example.com",
+        "pass",
+        "aligned",
+        [("not_evaluated", "no_identifier")],
+    ),
+    (
+        "spf=pass smtp.mailfrom=example.com; spf=pass smtp.helo=mail.example.com;"
+        " dmarc=pass header.from=example.com",
+        "pass",
+        "aligned",
+        [("not_evaluated", "no_identifier")],
+    ),
+    # helo pass then mailfrom fail: the mailfrom result is used
+    (
+        "spf=pass smtp.helo=mail.example.com; spf=fail smtp.mailfrom=example.com; dkim=none",
+        "fail",
+        "aligned_but_not_passed",
+        [("not_evaluated", "no_signature")],
+    ),
+    # (6) spf with only smtp.helo: Return-Path fallback with no stated result, as today
+    (
+        "spf=pass smtp.helo=mail.example.com; dkim=none",
+        "not_evaluated",
+        "unknown",
+        [("not_evaluated", "no_signature")],
+    ),
+    # (7) dkim=none plus a signed result for another domain: unchanged precedence
+    (
+        "spf=pass smtp.mailfrom=example.com; dkim=none; dkim=pass header.d=other.org",
+        "pass",
+        "aligned",
+        [("not_evaluated", "no_signature"), ("misaligned", None)],
+    ),
+    (
+        "spf=fail smtp.mailfrom=example.com; dkim=none; dkim=pass header.d=other.org",
+        "fail",
+        "aligned_but_not_passed",
+        [("not_evaluated", "no_signature"), ("misaligned", None)],
+    ),
+    (
+        "spf=fail smtp.mailfrom=example.com; dkim=none; dkim=pass header.d=example.com",
+        "pass",
+        "aligned_but_not_passed",
+        [("not_evaluated", "no_signature"), ("aligned", None)],
+    ),
+    # dkim=none with an unusable second result: the unknown pair still blocks a verdict
+    (
+        "spf=fail smtp.mailfrom=example.com; dkim=none; dkim=fail",
+        "not_evaluated",
+        "aligned_but_not_passed",
+        [("not_evaluated", "no_signature"), ("unknown", "missing_d")],
+    ),
+]
+
+
+@pytest.mark.parametrize(("body", "computed", "spf_state", "dkim"), R109_CASES)
+def test_dkim_none_and_spf_mailfrom_selection(body, computed, spf_state, dkim):
+    r = _report(
+        "From: a@example.com",
+        "Return-Path: <a@example.com>",
+        f"Authentication-Results: mx.example.org; {body}",
+    )
+    assert r.computed_dmarc == computed
+    assert _pair(r, "spf").state == spf_state
+    assert [(p.state, p.reason) for p in r.pairs if p.kind == "dkim"] == dkim
+
+
+def test_dkim_none_alone_does_not_make_a_verdict_without_spf():
+    # DMARC rests on SPF alone: with no spf identifier there is still nothing to evaluate.
+    r = _report("From: a@example.com", "Authentication-Results: mx.example.org; dkim=none")
+    assert r.computed_dmarc == "not_evaluated"
+    p = _pair(r, "dkim")
+    assert (p.state, p.reason, p.stated_result) == ("not_evaluated", "no_signature", "none")
+    assert (p.authserv_id, p.authres_index) == ("mx.example.org", 0)
+
+
+def test_dkim_none_with_mailfrom_spf_from_first_resinfo_source():
+    r = _report(
+        "From: a@example.com",
+        "Authentication-Results: mx.example.org; spf=neutral smtp.helo=mail.example.com;"
+        " spf=pass smtp.mailfrom=b@example.com",
+    )
+    p = _pair(r, "spf")
+    assert (p.identifier_source, p.stated_result, p.authserv_id) == (
+        "smtp.mailfrom",
+        "pass",
+        "mx.example.org",
+    )
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "spf=pass smtp.mailfrom; dkim=none",
+        "spf=; dkim=none header.d",
+        "spf=pass smtp.helo=; smtp.mailfrom=example.com; dkim=none (unterminated",
+        "dkim=none header.d=a..b; spf=fail smtp.mailfrom=<>",
+    ],
+)
+def test_malformed_authres_with_dkim_none_does_not_crash(body):
+    r = _report(
+        "From: a@example.com",
+        "Return-Path: <a@example.com>",
+        f"Authentication-Results: mx.example.org; {body}",
+    )
+    assert r.computed_dmarc in ("pass", "fail", "not_evaluated")
+    assert _pair(r, "spf").state != "aligned"
+
+
+# --- R1-22: a result from a lower Authentication-Results field never makes computed pass -------
+
+_TOP_FAIL = (
+    "Authentication-Results: mx.example.org; spf=fail smtp.mailfrom=evil.example;"
+    " dmarc=fail header.from=example.com"
+)
+_LOWER_DKIM_PASS = "Authentication-Results: mx.example.org; dkim=pass header.d=example.com"
+
+
+def test_forged_lower_field_dkim_pass_does_not_make_computed_pass():
+    r = _report("From: a@example.com", _TOP_FAIL, _LOWER_DKIM_PASS)
+    spf, dkim = _pair(r, "spf"), _pair(r, "dkim")
+    assert spf.state == "misaligned" and spf.authres_index == 0
+    # The pair stays visible and is flagged as coming from a lower field.
+    assert (dkim.state, dkim.authres_index, dkim.reason) == ("aligned", 1, LOWER_AUTHRES_FIELD)
+    assert r.computed_dmarc == "fail"
+    assert r.stated_dmarc == "fail" and not r.dmarc_mismatch
+
+
+# (fields top first, computed, spf (state, index, reason), dkim (state, index, reason), mismatch)
+R122_CASES = [
+    # Legitimate receiver, one authserv-id, spf on top and dkim in the second field: under the
+    # minimal rule the dkim pass is not used, so an ESP bounce domain leaves computed fail.
+    (
+        (
+            "Authentication-Results: mx.example.org; spf=pass smtp.mailfrom=b@bounce.example.net;"
+            " dmarc=pass header.from=example.com",
+            _LOWER_DKIM_PASS,
+        ),
+        "fail",
+        ("misaligned", 0, None),
+        ("aligned", 1, LOWER_AUTHRES_FIELD),
+        True,
+    ),
+    # Same receiver, dkim on top and an aligned spf below: the top dkim pass alone decides.
+    (
+        (
+            "Authentication-Results: mx.example.org; dkim=pass header.d=example.com;"
+            " dmarc=pass header.from=example.com",
+            "Authentication-Results: mx.example.org; spf=pass smtp.mailfrom=b@example.com",
+        ),
+        "pass",
+        ("aligned", 1, LOWER_AUTHRES_FIELD),
+        ("aligned", 0, None),
+        False,
+    ),
+    # A lower aligned spf pass does not rescue a failing top dkim.
+    (
+        (
+            "Authentication-Results: mx.example.org; dkim=fail header.d=example.com",
+            "Authentication-Results: mx.example.org; spf=pass smtp.mailfrom=b@example.com",
+        ),
+        "fail",
+        ("aligned", 1, LOWER_AUTHRES_FIELD),
+        ("aligned_but_not_passed", 0, None),
+        False,
+    ),
+    # Lower misaligned or not-pass results are flagged too, without changing the state.
+    (
+        (
+            "Authentication-Results: mx.example.org; dmarc=fail header.from=example.com",
+            "Authentication-Results: mx.example.org; spf=fail smtp.mailfrom=b@example.com;"
+            " dkim=pass header.d=other.example",
+        ),
+        "fail",
+        ("aligned_but_not_passed", 1, LOWER_AUTHRES_FIELD),
+        ("misaligned", 1, LOWER_AUTHRES_FIELD),
+        False,
+    ),
+    # Every result in one field: nothing flagged (baseline).
+    ((AR_PASS,), "pass", ("aligned", 0, None), ("aligned", 0, None), False),
+    # Lower field without authserv-id (malformed) still never yields pass.
+    (
+        ("Authentication-Results: mx.example.org; spf=none", "Authentication-Results: dkim=pass"),
+        "not_evaluated",
+        ("not_evaluated", None, "no_identifier"),
+        ("unknown", 1, "missing_d"),
+        False,
+    ),
+]
+
+
+@pytest.mark.parametrize(("fields", "computed", "spf", "dkim", "mismatch"), R122_CASES)
+def test_lower_field_pairs_table(fields, computed, spf, dkim, mismatch):
+    r = _report("From: a@example.com", *fields)
+    s, d = _pair(r, "spf"), _pair(r, "dkim")
+    assert (s.state, s.authres_index, s.reason) == spf
+    assert (d.state, d.authres_index, d.reason) == dkim
+    assert r.computed_dmarc == computed
+    assert r.dmarc_mismatch is mismatch

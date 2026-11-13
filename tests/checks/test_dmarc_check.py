@@ -46,6 +46,37 @@ CASES: list[tuple[str, str, set[str], dict[str, object]]] = [
         },
         {"pct": 50},
     ),
+    # R1-05: inherited record, the applied policy is sp (RFC 7489 section 6.3).
+    (
+        "mail.sp-strict.test",
+        "info",
+        {"DMARC_INHERITED_FROM_ORG"},
+        {"effective_policy": "reject", "p": "none", "sp": "reject", "inherited": True},
+    ),
+    (
+        "mail.sp-weak.test",
+        "warn",
+        {"DMARC_INHERITED_FROM_ORG", "DMARC_POLICY_NONE"},
+        {"effective_policy": "none", "p": "reject", "sp": "none"},
+    ),
+    (
+        "mail.sp-absent.test",
+        "warn",
+        {"DMARC_INHERITED_FROM_ORG", "DMARC_POLICY_NONE"},
+        {"effective_policy": "none", "sp": None},
+    ),
+    (
+        "mail.sp-invalid.test",
+        "warn",
+        {"DMARC_INHERITED_FROM_ORG", "DMARC_SYNTAX_ERROR", "DMARC_P_ASSUMED_NONE"},
+        {"effective_policy": "none"},
+    ),
+    (
+        "mail.sp-pct.test",
+        "warn",
+        {"DMARC_INHERITED_FROM_ORG", "DMARC_POLICY_QUARANTINE", "DMARC_PCT_PARTIAL"},
+        {"effective_policy": "quarantine", "pct": 50},
+    ),
     ("weaksp.example.com", "warn", {"DMARC_SUBDOMAIN_POLICY_WEAKER"}, {}),
     ("norua.example.com", "warn", {"DMARC_NO_RUA"}, {}),
     ("multi.example.com", "warn", {"DMARC_MULTIPLE_RECORDS"}, {"record_count": 2}),

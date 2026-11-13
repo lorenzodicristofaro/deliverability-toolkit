@@ -477,7 +477,7 @@ def test_repeated_field_is_422(world: World) -> None:
 
 
 def test_oversized_body_is_413(world: World) -> None:
-    r = post_as(world, "owner", path(world), {"esp_id": ESP, "return_path_host": "a" * 6000})
+    r = post_as(world, "owner", path(world), {"esp_id": ESP, "return_path_host": "a" * 9000})
     assert r.status_code == 413
     assert stored(world) == []
 
@@ -498,3 +498,88 @@ def test_profiles_unavailable_is_shown_not_a_500(
         assert r.status_code == 503
     finally:
         gen.close()
+
+
+# --- R1-31: renaming the domain rewrites the ESP hosts -------------------------------------------
+
+
+def _stored_hosts(w: World) -> list[tuple[str | None, str | None]]:
+    w.db.expire_all()
+    w.db.rollback()
+    found = w.db.execute(
+        select(DomainEsp.return_path_host, DomainEsp.tracking_host).order_by(DomainEsp.id)
+    ).all()
+    w.db.rollback()
+    return [tuple(r) for r in found]  # type: ignore[misc]
+
+
+def _attach_hosts(w: World, rp: str | None, tr: str | None) -> None:
+    repo = repo_for(TenantContext(w.tenant_a, w.users["owner"]), w.db).domain_esps
+    repo.add(w.domains["assigned"], ESP, return_path_host=rp, tracking_host=tr)
+    w.db.commit()
+
+
+def _rename_ui(w: World, name: str, who: str = "owner", **kw: Any) -> Any:
+    return post_as(w, who, f"/domains/{w.domains['assigned']}/rename", {"name": name}, **kw)
+
+
+@pytest.mark.parametrize(
+    ("lang", "text"),
+    [
+        ("en", "ESP host names were moved to the new domain name: 2."),
+        ("it", "Nomi host ESP spostati sul nuovo nome di dominio: 2."),
+    ],
+)
+def test_rename_rewrites_hosts_and_shows_the_notice(world: World, lang: str, text: str) -> None:
+    _attach_hosts(world, "assigned.example", "go.assigned.example")
+    response = _rename_ui(world, "renamed.example")
+    assert response.status_code == 303
+    location = response.headers["location"]
+    assert location == f"/domains/{world.domains['assigned']}?esp_hosts=2&esp_unmatched=0"
+    assert _stored_hosts(world) == [("renamed.example", "go.renamed.example")]
+    html = call(world, "owner", "GET", location, headers={**HTML, "Accept-Language": lang}).text
+    assert 'data-testid="esp-hosts-rewritten"' in html and text in html
+    assert 'data-testid="esp-hosts-unmatched"' not in html
+
+
+def test_rename_without_hosts_has_no_notice(world: World) -> None:
+    response = _rename_ui(world, "renamed.example")
+    assert response.headers["location"] == f"/domains/{world.domains['assigned']}"
+    html = get(world, "owner", response.headers["location"]).text
+    assert "esp-hosts-rewritten" not in html and "esp-hosts-unmatched" not in html
+
+
+@pytest.mark.parametrize(
+    "query", ["esp_hosts=abc", "esp_hosts=-1", "esp_hosts=99999", "esp_hosts="]
+)
+def test_notice_ignores_malformed_counts(world: World, query: str) -> None:
+    html = get(world, "owner", f"/domains/{world.domains['assigned']}?{query}").text
+    assert "esp-hosts-rewritten" not in html
+
+
+def test_rename_reports_hosts_left_unchanged(world: World) -> None:
+    _attach_hosts(world, "em1.assigned.example", None)
+    repo_row = world.db.scalars(select(DomainEsp)).one()
+    repo_row.tracking_host = "legacy.other.example"  # legacy data outside the old name
+    world.db.commit()
+    location = _rename_ui(world, "renamed.example").headers["location"]
+    assert location.endswith("?esp_hosts=1&esp_unmatched=1")
+    assert _stored_hosts(world) == [("em1.renamed.example", "legacy.other.example")]
+    html = get(world, "owner", location).text
+    assert 'data-testid="esp-hosts-unmatched"' in html
+
+
+@pytest.mark.parametrize(("who", "status"), [("analyst", 403), ("viewer", 403)])
+def test_rename_without_permission_leaves_hosts_unchanged(
+    world: World, who: str, status: int
+) -> None:
+    _attach_hosts(world, "em1.assigned.example", None)
+    assert _rename_ui(world, "renamed.example", who).status_code == status
+    assert _stored_hosts(world) == [("em1.assigned.example", None)]
+
+
+def test_rename_of_a_foreign_domain_is_404_and_hosts_unchanged(world: World) -> None:
+    _attach_hosts(world, "em1.assigned.example", None)
+    url = f"/domains/{world.domains['other']}/rename"
+    assert post_as(world, "owner", url, {"name": "renamed.example"}).status_code == 404
+    assert _stored_hosts(world) == [("em1.assigned.example", None)]

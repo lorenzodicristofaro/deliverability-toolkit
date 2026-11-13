@@ -314,7 +314,7 @@ def test_malformed_form_is_422_without_echo(world: World, data: dict[str, str]) 
 
 
 def test_oversized_form_is_413(world: World) -> None:
-    r = post(world, "analyst", "/tools/dns/lookup", {"name": "a" * 5000})
+    r = post(world, "analyst", "/tools/dns/lookup", {"name": "a" * 9000})
     assert r.status_code == 413
 
 

@@ -12,6 +12,11 @@ Expiry (SessionPolicy): absolute expiry is fixed at creation (`expires_at`); idl
 `last_seen_at` + `idle`, and `last_seen_at` is refreshed by every successful resolve.
 The policy comes from Settings (SESSION_IDLE_TIMEOUT_MINUTES, default 30;
 SESSION_ABSOLUTE_TIMEOUT_MINUTES, default 720 = 12 h) via `SessionPolicy.from_settings`.
+
+Purge (R1-14): `purge_sessions` deletes rows that can never resolve again (past `expires_at`,
+idle for longer than the idle timeout, or revoked) once that state is `SESSION_PURGE_GRACE` old.
+It runs at startup (app.main) and is the entry point for the future scheduler (M7). This is the
+only place that deletes sessions.
 """
 
 from __future__ import annotations
@@ -22,7 +27,7 @@ from typing import Any, cast
 
 from argon2 import PasswordHasher
 from pydantic import SecretStr
-from sqlalchemy import CursorResult, select, update
+from sqlalchemy import ColumnElement, CursorResult, delete, or_, select, update
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
@@ -40,6 +45,13 @@ from app.core.security import (
 from app.models import User, UserSession
 from app.models.user import normalize_email
 from app.repositories.base import coerce_id
+
+# A session row is purged only once it has been dead (expired, idle-expired or revoked) for this
+# long, so clock skew between app instances never removes a row that could still resolve, and a
+# just-revoked row stays visible for a while.
+SESSION_PURGE_GRACE = timedelta(minutes=5)
+# Rows deleted per statement: keeps each DELETE short on a large backlog.
+SESSION_PURGE_BATCH_SIZE = 500
 
 
 @dataclass(frozen=True, slots=True)
@@ -261,3 +273,48 @@ def revoke_all_sessions(
         stmt.values(revoked_at=_now(now)).execution_options(synchronize_session="fetch")
     )
     return int(cast(CursorResult[Any], result).rowcount)
+
+
+def _purge_batch(db: Session, where: ColumnElement[bool], limit: int) -> int:
+    """Delete at most `limit` rows matching `where`; returns how many were deleted."""
+    ids = list(
+        db.scalars(select(UserSession.id).where(where).order_by(UserSession.id).limit(limit))
+    )
+    if not ids:
+        return 0
+    result = db.execute(
+        delete(UserSession)
+        .where(UserSession.id.in_(ids), where)
+        .execution_options(synchronize_session="fetch")
+    )
+    return int(cast(CursorResult[Any], result).rowcount)
+
+
+def purge_sessions(
+    db: Session,
+    *,
+    policy: SessionPolicy | None = None,
+    now: datetime | None = None,
+    batch_size: int = SESSION_PURGE_BATCH_SIZE,
+) -> int:
+    """Delete session rows that can never resolve again and have been dead for at least
+    SESSION_PURGE_GRACE: past `expires_at`, revoked, or (with a `policy`) idle for longer than
+    `policy.idle`. Live and recently revoked sessions are kept. Deletes in batches of
+    `batch_size`; returns how many rows were deleted. Flushes, never commits."""
+    if isinstance(batch_size, bool) or not isinstance(batch_size, int) or batch_size < 1:
+        raise ValueError("batch_size must be a positive integer")
+    # UTC: SQLite stores DateTime values naive, so a non-UTC `now` would compare as local time.
+    cutoff = _now(now).astimezone(UTC) - SESSION_PURGE_GRACE
+    dead: list[ColumnElement[bool]] = [
+        UserSession.expires_at <= cutoff,
+        UserSession.revoked_at <= cutoff,
+    ]
+    if policy is not None:
+        dead.append(UserSession.last_seen_at <= cutoff - policy.idle)
+    where = or_(*dead)
+    total = 0
+    while True:
+        deleted = _purge_batch(db, where, batch_size)
+        total += deleted
+        if deleted < batch_size:
+            return total

@@ -182,6 +182,77 @@ Carried over from M0-07 QA:
   - M6 closed 2026-11-12. Report: docs/reports/M6.md
   - Dependabot (resolved 2026-11-12): the two open alerts (#1 pyproject.toml, #2 uv.lock) are the same advisory GHSA-45c3-73f7-pv4m, fixed by M6-21 (dnspython 2.9.2, on main since PR #2 9d793cb). The "second unidentified alert" item is closed; the alerts should close on the next Dependabot scan.
 
+## R1 — Code review fixes 2026-11-12
+Goal: fix the findings of the maintainer-requested code review of dev 06869fb (review files in docs/reviews/2026-11-12/ on the review branch; each ticket carries its own copy of the details).
+Accept: each ticketed finding is reproduced by a failing test and fixed, or recorded as not reproduced; CI green on dev.
+Tickets (docs/tickets/):
+- [x] R1-01 PARSE-01 quadratic style regexes (ReDoS) + `_REPLY` rewrite (opus)
+- [x] R1-02 AUTH-01 release the DB connection after authentication (opus)
+- [x] R1-03 AUTH-02 login throttle: per-IP limit, argon2 concurrency bound, eviction reset; includes the "Per-IP cap on throttle keys" item (opus)
+- [x] R1-04 AUTH-03 compose.yaml forwards BASE_URL and the other documented settings (sonnet)
+- [x] R1-05 DNS-01 DMARC inherited policy uses sp (sonnet)
+- [x] R1-06 DNS-02 SPF tree own domain-spec target normaliser (opus)
+- [x] R1-07 DNS-03 trace reports an unfinished CNAME chain (opus); following the CNAME is a follow-up
+- [x] R1-08 DNS-04 DKIM non-key TXT is not a found selector, one aggregated finding (sonnet)
+- [x] R1-09 PARSE-02 alignment: dkim=none is no signature; spf from the resinfo with smtp.mailfrom (opus)
+- [x] R1-10 PARSE-03 error status always carries an explaining finding (sonnet; depends R1-09)
+- Lows, run only if budget allows:
+- [x] R1-11 AUTH-06 missing-i18n-key warning shows the key (sonnet)
+- [x] R1-12 AUTH-07 default error bodies translated, no echo, no blank 413 (sonnet)
+- [x] R1-13 AUTH-08 sync DB calls on the event loop in async web handlers (sonnet; depends R1-02)
+- [x] R1-14 AUTH-09 purge expired and revoked sessions (opus)
+- [x] R1-15 AUTH-10 `__Host-` cookies on https, CSRF token expiry (opus; depends R1-04)
+- [x] R1-16 AUTH-11 Cache-Control no-store centrally (sonnet); keyed on the session cookie, see R1-32
+- [x] R1-17 DNS-05 SPF terms after `all` not counted (opus)
+- [x] R1-18 DNS-06 drop the 255-octet SPF_RECORD_TOO_LONG info branch (opus)
+- [x] R1-19 DNS-07 empty reply without RA is an error (sonnet; confidence low) — maintainer 2026-11-12: precautionary rule (a)
+- [x] R1-20 PARSE-04 `dtk check` escapes control characters (sonnet)
+- [x] R1-21 PARSE-05 Received from_ip prefers the TCP-info comment (opus; merged a349692, QA APPROVE round 2)
+- [x] R1-22 PARSE-06 forged lower Authentication-Results field (opus; depends R1-09; option (c), maintainer agreed 2026-11-13; merged 854d34e, QA APPROVE)
+- [x] R1-23 PARSE-07 message analyzer One-Click via the List-Unsubscribe parser (sonnet)
+- [x] R1-24 PARSE-08 To/Cc counts from raw values (sonnet)
+- [x] R1-25 INFRA-03 postgres compose profile: URL, retry, CI smoke (sonnet; depends R1-04)
+- [x] R1-26 INFRA-04 pin app image bases by digest, rebuild check (sonnet; digests need network)
+- [x] R1-27 INFRA-05 run Docker jobs for app/ and locales/ changes (sonnet)
+- [x] R1-28 INFRA-06 migration race between replicas (sonnet)
+- [x] R1-29 INFRA-07 app container hardening (sonnet; related to the safe_regex orphan item below; depends R1-04)
+- [x] R1-30 AUTH-04 TRUSTED_PROXIES setting: client IP from X-Forwarded-For/Forwarded only for a trusted peer; login throttle, setup wizard, .env.example, compose (opus; depends R1-03, R1-04); covers the item "Trusted-proxy setting for the client IP"
+- [x] R1-31 AUTH-05 domain rename rewrites the ESP host suffixes in the same transaction, user notice en+it (sonnet)
+- [x] R1-32 AUTH-11 follow-up: Cache-Control no-store on every response except /static/ and exactly /healthz, regardless of the cookie (sonnet; depends R1-16)
+- [x] R1-33 INFRA-01/02 push policy docs as enforced, workflow permissions test, settings.json deny rules (sonnet; in-review; settings.json and any .github/.claude change pushed only after maintainer approval)
+Follow-ups:
+- R1-21 follow-up (low, needs real MTA Received samples): `helo= [x]` with a space and `(HELO [x])` without "=" are not recognised as labelled, so `from [8.8.8.8] (helo= [10.1.2.3])` gives from_ip 10.1.2.3; consider skipping spaces before "[". "Prefer the comment literal" and helo=/ehlo= handling rest on RFC 5321 4.4 reasoning only, not on real samples.
+- R1-25 follow-up (QA nit): ci-infra.yml postgres smoke relies on the CMD `alembic && uvicorn` chain to prove the app uses PostgreSQL; optionally query alembic_version in the postgres container. The comment at ci-infra.yml:116 ("Default profiles only") now describes only the first smoke.
+- R1-26 follow-up (QA nit): docs/DOCKER-PINS.md:16 names only the OCI index media type (say "image index or manifest list"); rebuild.yml:5-6 "Rule and cadence: docs/UNBOUND.md" should also cite docs/DOCKER-PINS.md.
+- R1-30 follow-up (QA nits): resolve_client_ip (app/web/auth.py:148-154) falls back to the peer silently; add a rate-limited WARNING so a proxy sending ip:port hops is noticed (otherwise all users share one throttle key again). docs/SETUP.md section 7: use a /32 example instead of 172.16.0.0/12. Dev run command in CLAUDE.md lacks --no-proxy-headers (dev-only, loopback; maintainer's file).
+- R1-22 follow-up (for F-01): MSG_ALIGNMENT_FAIL text says "Neither the SPF nor a DKIM identifier is aligned" while a lower-field dkim pair shows aligned (message_findings.py:404-415); `_topmost_results` (message_findings.py:325) still reads MSG_DKIM_NOT_PASS/MSG_SPF_NOT_PASS results from lower fields (consistent with option (c), can only add a warning).
+- R1-12 follow-up: comment at app/web/templating.py:37 and test docstring tests/web/test_default_error_bodies.py:210 miscompute the 4-byte worst case (8192 fits the browser 3-byte maxlength case, ~6.6 KB); test_framework_validation_error_has_no_input_for_api_clients (line 67) already passed before the fix.
+- R1-13 follow-up: AST guard tests/web/test_async_handlers_guard.py:22-37 only knows listed method names and 5 modules; glob app/web and flag db/service/repo_for receivers. Nit: stray comment app/web/rules.py:744-746. Also app/api/v1/content.py:170 sync db.rollback() (existing item below, one line).
+- R1-14 follow-up: the purge runs only at startup; a long-running process accumulates rows until the M7 scheduler calls purge_sessions with a policy; no test sends a purged cookie.
+- R1-23 follow-up: with two List-Unsubscribe fields (one over-long, one mailto-only) the message analyzer reports no One-Click while the content analyzer is silent; align optionally. Nit: a NUL-only unknown https value is called "safety limits".
+- R1-01 follow-up: an over-cap inline style also marks the links section not evaluated (content_analysis.py treats any body not-evaluated reason as incomplete); narrow it to body + rules. Timing tests in tests/parsers/test_content_html.py add ~25 s; consider a `slow` marker.
+- R1-03 follow-up: login throttle limits (IP_MAX_ATTEMPTS, MAX_CONCURRENT_VERIFICATIONS, VERIFICATION_WAIT) are module constants; behind a reverse proxy the per-IP budget is per client once `TRUSTED_PROXIES` is set (R1-30); consider settings.
+- R1-04 follow-up: optional startup warning for a non-localhost http:// BASE_URL; parity test could also assert every forwarded Settings field is documented.
+- R1-05 follow-up: inherited-sp scenario in tests/checks/test_acceptance_m3.py; assert the PCT_PARTIAL p argument in the sp-pct row.
+- R1-06 follow-up: comment in app/checks/dnsutil.py fetch_txt noting the SPF tree builds its TXT question directly; the SPF parser still accepts empty/over-long labels and names that the tree rejects as invalid_target.
+- R1-07 follow-up: follow the CNAME target in the trace (restart from the root within budgets); a CNAME from a non-AA server ends the trace instead of trying the next server; trace.py:556 uses getattr where ServerReply has the fields.
+- R1-09 follow-up: a stated dkim=none header.d=X still adds X to stated_ds, so a DKIM-Signature d=X is not reported as unverified (message_alignment.py:260-262); two spf resinfos with smtp.mailfrom: first wins (RFC 8601 silent).
+- R1-10 follow-up: MSG_AUTHRES_UNPARSED detail says the issue codes are 'listed in the finding data', but CLI/web do not show params unused by the text — add an {issues} placeholder (safe codes) or reword, en+it; property test could map each skipped area to its required code.
+- R1-17 follow-up: no test pins error-over-AFTER_ALL precedence (tests/checks/test_esp_profile.py).
+- R1-15 follow-up: remove the legacy dt_session fallback next release (app/core/security.py session_cookie_value, auth._clear_legacy_session_cookie); dt_lang needs no `__Host-` prefix (not security relevant).
+- R1-31 follow-up: the docstring at app/repositories/domain_esps.py:263 should mention the invalid-rewrite case.
+- R1-32 follow-up: SESSION_COOKIE_NAMES in app/core/security.py:47 is now unused.
+- R1-33 follow-up: tests/test_workflow_permissions.py globs only *.yml (a future .yaml workflow is not checked).
+Not ticketed — maintainer:
+- INFRA-01 and INFRA-02: covered by R1-33 (maintainer set the rulesets and token rights; settings.json deny rules, docs and a workflow permissions test).
+Decided 2026-11-13 (maintainer):
+- AUTH-04: ticket R1-30. AUTH-05: ticket R1-31 (rewrite). AUTH-11 follow-up: ticket R1-32.
+- PARSE-03 leniency: STRICT. An Authentication-Results field without authserv-id is not counted as evaluated (RFC 8601 section 2.2 ABNF; sections 2.5 and 4.1). No code change; MSG_AUTHRES_UNPARSED (R1-10) explains it; sentence added to docs/HEADERS.md.
+- docs/CHECKS.md vs app/checks/dmarc.py: the doc was aligned to the code (failed external-authorization lookup gives `error` only when no critical/high finding is present; always reported as DMARC_EXTERNAL_AUTH_UNVERIFIED).
+
+## Backlog (maintainer request 2026-11-13)
+- [ ] F-01 message analysis: authentication per hop view (Authentication-Results and ARC sets ordered among Received fields, info finding where pass turns to fail; display only, never feeds computed_dmarc) (opus; depends R1-22; ticket docs/tickets/F-01-auth-per-hop-view.md; analyzer extension, no SPEC scope change)
+
 ## M7 — Monitoring
 - [ ] Guarded outbound client (SSRF protection) + tests
 - [ ] Custom check kind http_fetch via guarded client (SPEC §5 still lists HTTP custom checks and http_fetch is deferred to M7: maintainer decision 2026-11-11, leave the wording and review it when M7 starts)
@@ -314,8 +385,8 @@ Maintainer decision 2026-11-12: moved from M9; no test domains or access yet, an
 - [ ] CSRF exemption for future bearer-token API routes
 - [ ] Throttle the `last_seen_at` write in resolve_session
 - [ ] DB-backed login throttle for multi-process deployments
-- [ ] Per-IP cap on throttle keys, plus a warning log when the table is full (a single IP can fill the table with locked keys and block new logins)
-- [ ] Trusted-proxy setting for the client IP (needed before any reverse-proxy deployment)
+- [x] Per-IP cap on throttle keys, plus a warning log when the table is full (a single IP can fill the table with locked keys and block new logins) (done in R1-03)
+- [x] (covered by R1-30: `TRUSTED_PROXIES`, docs/SETUP.md section 7; uvicorn proxy headers disabled in the image) Trusted-proxy setting for the client IP (needed before any reverse-proxy deployment). Consequence added by the 2026-11-12 review: behind a proxy every client shares one throttle IP, so anyone who knows an email address can lock that account remotely (ten wrong passwords per 15 minutes) and can lock the setup wizard (five wrong setup tokens delay, ten lock it); the documented HTTPS path already implies a proxy; uvicorn `forwarded-allow-ips` default (127.0.0.1 only) is unverified, check the uvicorn documentation before designing (review AUTH-04)
 - [ ] `services.auth.rotate_session` helper (`_switch` reads the sessions row directly)
 - [ ] Dispose of the DB engine at shutdown via the lifespan
 - [ ] A breached-password corpus check, offline

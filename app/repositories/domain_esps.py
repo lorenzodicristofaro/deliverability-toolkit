@@ -25,8 +25,11 @@ At most `MAX_ESPS_PER_DOMAIN` assignments per domain (`DomainEspLimitReached`). 
 by a count before the insert, so two concurrent adds could exceed it by one; a concurrent add of
 the same (domain, esp) surfaces as an IntegrityError from the flush (session must roll back).
 
-Callers get immutable `DomainEspRecord`s, never ORM objects. If a domain is renamed, existing
-hosts are not re-validated here (the service that renames decides what to do with them).
+Callers get immutable `DomainEspRecord`s, never ORM objects. When a domain is renamed the service
+calls `rewrite_host_suffix` in the same transaction: a host equal to the old name becomes the new
+name and `<label>.<old>` becomes `<label>.<new>`. A stored host that does not satisfy the rule for
+the old name (legacy data), or whose rewrite would not be a valid host, is left untouched and
+counted as `unmatched`, so the caller can report it.
 """
 
 from __future__ import annotations
@@ -111,6 +114,15 @@ def normalize_host(field: str, value: object, domain_name: str) -> str | None:
     if host != domain_name and not host.endswith("." + domain_name):
         raise DomainEspInvalid(field, "not_in_domain")
     return host
+
+
+@dataclass(frozen=True, slots=True)
+class HostRewrite:
+    """Outcome of `rewrite_host_suffix`: host values rewritten, and host values left untouched
+    because they were not under the old name (or the rewrite was not a valid host)."""
+
+    rewritten: int = 0
+    unmatched: int = 0
 
 
 class DomainEspRepository:
@@ -243,6 +255,37 @@ class DomainEspRepository:
         row.tracking_host = tr_host
         self._session.flush()
         return DomainEspRecord.from_model(row)
+
+    def rewrite_host_suffix(self, domain_id: object, old_name: str, new_name: str) -> HostRewrite:
+        """Move every host of the domain's assignments from `old_name` to `new_name` (both
+        normalised ASCII names): the old name itself becomes the new name, `<label>.<old>`
+        becomes `<label>.<new>`. Does not commit. Nothing happens for a missing, foreign or
+        malformed domain or an unchanged name. Hosts outside the old name are untouched and
+        counted in `unmatched`."""
+        did = coerce_id(domain_id)
+        if did is None or old_name == new_name or self._domain_name(did) is None:
+            return HostRewrite()
+        rewritten = unmatched = 0
+        for row in self._session.scalars(self._select(DomainEsp.domain_id == did)):
+            for field in ("return_path_host", "tracking_host"):
+                host = getattr(row, field)
+                if host is None:
+                    continue
+                if host == old_name:
+                    candidate = new_name
+                elif host.endswith("." + old_name):
+                    candidate = host[: -len(old_name)] + new_name
+                else:
+                    unmatched += 1
+                    continue
+                try:
+                    setattr(row, field, normalize_host(field, candidate, new_name))
+                except DomainEspInvalid:
+                    unmatched += 1
+                else:
+                    rewritten += 1
+        self._session.flush()
+        return HostRewrite(rewritten, unmatched)
 
     def remove(self, domain_id: object, esp_id: object) -> bool:
         """Remove the assignment. False if there was no such row in the context tenant (a

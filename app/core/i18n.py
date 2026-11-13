@@ -54,7 +54,7 @@ def _missing(key: str, lang: str) -> str:
         raise MissingKeyError(key)
     if key not in _warned:
         _warned.add(key)
-        logger.warning("i18n key missing", extra={"i18n_key": key, "lang": lang})
+        logger.warning("i18n key missing", extra={"i18n_msgid": key, "lang": lang})
     return key
 
 

@@ -17,8 +17,11 @@
   itself (token, CSRF, 404 once a user exists).
 - GET/POST /setup: 404 once setup is not required. POST needs the CSRF double-submit token
   (CSRFMiddleware) and the setup token; token attempts share the login throttle
-  (`app.web.auth.login_throttle`) under a fixed account key. Success creates the instance admin,
-  the optional first tenant with an owner membership, and logs the admin in.
+  (`app.web.auth.login_throttle`) under a fixed account key, including its per-IP limit (one
+  budget per client IP for login and setup attempts, R1-03; the client IP comes from the same
+  helper as login, `app.web.auth._client_ip`, so TRUSTED_PROXIES applies, R1-30). Success
+  creates the instance admin, the optional first tenant with an owner membership, and logs the
+  admin in.
 
 Logs never carry the password, and the token appears only in the single issuance line.
 """
@@ -55,7 +58,7 @@ from app.services.setup import (
 )
 from app.web import auth as web_auth
 from app.web.deps import DbDep, SettingsDep, _session_factory
-from app.web.templating import APP_NAME, form_value, read_form, render
+from app.web.templating import APP_NAME, form_value, payload_too_large, read_form, render
 
 logger = logging.getLogger("app.setup")
 # Own level: the token line must reach the operator even with LOG_LEVEL above WARNING.
@@ -192,7 +195,7 @@ async def setup_form(request: Request) -> HTMLResponse:
 async def setup_submit(request: Request, db: DbDep, settings: SettingsDep) -> Response:
     form = await read_form(request)
     if form is None:
-        return Response(status_code=413)
+        return payload_too_large(request)
     await run_in_threadpool(_ensure_pending, request)
     email = form_value(form, "email")
     tenant_name = form_value(form, "tenant_name")

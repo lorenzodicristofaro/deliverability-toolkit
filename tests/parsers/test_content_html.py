@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import time
+from collections.abc import Callable
+
 import pytest
 
 from app.parsers.content_html import (
     GMAIL_CLIP_THRESHOLD_BYTES,
     ContentLimits,
+    _hidden_reasons,
     parse_content,
 )
 
@@ -237,3 +241,178 @@ def test_gmail_flag_with_capped_inputs() -> None:
     assert small.capped
     assert small.html_bytes == 8
     assert not small.exceeds_gmail_clip_threshold
+
+
+# --- R1-01: inline style values are analysed in linear time -----------------------------------
+#
+# No wall-clock thresholds: each adversarial row compares the time at n and 4n (best of several
+# calibrated batches). Linear code grows about 4x, the quadratic regexes this replaced grew 16x.
+_GROWTH_LIMIT = 10.0
+
+
+def _best_batch(fn: Callable[[], object], repeats: int) -> float:
+    best = float("inf")
+    for _ in range(5):
+        start = time.perf_counter()
+        for _ in range(repeats):
+            fn()
+        best = min(best, time.perf_counter() - start)
+    return best
+
+
+def growth(make: Callable[[int], Callable[[], object]], n: int) -> float:
+    """Time ratio of make(4n) over make(n); batches are calibrated on the small size."""
+    small, large = make(n), make(4 * n)
+    repeats = 1
+    while repeats < 100_000 and _best_batch(small, repeats) < 0.02:
+        repeats *= 4
+    return _best_batch(large, repeats) / _best_batch(small, repeats)
+
+
+@pytest.mark.parametrize(
+    ("style", "expected"),
+    [
+        ("font-size:0", True),
+        ("font-size:0.0px", True),
+        ("font-size:+0em", True),
+        ("font-size:-0", True),
+        ("font-size:.0", True),
+        ("font-size:0%", True),
+        ("font-size:00.00rem", True),
+        ("font-size:0pt !important", True),
+        ("font-size:0px\t!IMPORTANT ", True),
+        ("font-size:0.", False),
+        ("font-size:.", False),
+        ("font-size:+", False),
+        ("font-size:px", False),
+        ("font-size:", False),
+        ("font-size:0.0.0", False),
+        ("font-size:0x", False),
+        ("font-size:0 px", False),
+        ("font-size:01", False),
+        ("font-size:0pxpx", False),
+        ("font-size:+-0", False),
+        ("font-size:0!important!important", False),
+        ("font-size:1px", False),
+    ],
+)
+def test_font_size_zero_table(style: str, expected: bool) -> None:
+    assert ("font_size_zero" in _hidden_reasons(style)) is expected
+
+
+@pytest.mark.parametrize(
+    ("style", "expected"),
+    [
+        ("display:none !important", ["display_none"]),
+        ("display:none!important", ["display_none"]),
+        ("display:none   !important   ", ["display_none"]),
+        ("display:none !important;font-size:0 !important", ["display_none", "font_size_zero"]),
+        ("display:none ! important", []),  # not the !important token: unchanged behaviour
+        ("display:!important", []),
+        ("position:fixed;top:-  600px", ["offscreen"]),
+        ("position:absolute;left:-499.9px", []),
+        ("position:absolute;left:-500", ["offscreen"]),
+        ("text-indent:-1e4px", []),
+    ],
+)
+def test_important_and_offscreen_table(style: str, expected: list[str]) -> None:
+    assert _hidden_reasons(style) == expected
+
+
+_ADVERSARIAL_STYLES: list[tuple[str, Callable[[int], str]]] = [
+    ("zero_run", lambda n: "font-size:" + "0" * n + "x"),
+    ("zero_run_dot", lambda n: "font-size:" + "0" * n + ".x"),
+    ("space_run_no_important", lambda n: "color:a" + " " * n + "b"),
+    ("space_run_before_important", lambda n: "display:none" + " " * n + "!important"),
+    ("space_run_after_important", lambda n: "display:none !important" + " " * n + "x"),
+    ("space_run_both_sides", lambda n: "color:a" + " " * n + "!important" + " " * n + "b"),
+    ("digit_run_left", lambda n: "position:absolute;left:-" + "9" * n + "x"),
+    ("digit_run_top_dot", lambda n: "position:fixed;top:-" + "1" * n + "." + "1" * n + "!"),
+    ("neg_space_run", lambda n: "text-indent:-" + " " * n + "x"),
+]
+
+
+@pytest.mark.parametrize(
+    "make", [m for _, m in _ADVERSARIAL_STYLES], ids=[i for i, _ in _ADVERSARIAL_STYLES]
+)
+def test_hidden_reasons_linear_on_adversarial_values(make: Callable[[int], str]) -> None:
+    def call(n: int) -> Callable[[], object]:
+        style = make(n)
+        return lambda: _hidden_reasons(style)
+
+    assert growth(call, 2_500) < _GROWTH_LIMIT
+
+
+@pytest.mark.parametrize(
+    "make", [m for _, m in _ADVERSARIAL_STYLES], ids=[i for i, _ in _ADVERSARIAL_STYLES]
+)
+def test_parse_content_linear_on_adversarial_styles(make: Callable[[int], str]) -> None:
+    cap = ContentLimits().max_style_chars
+
+    def call(n: int) -> Callable[[], object]:
+        style = make(n)
+        # Every size, 4n included, stays under the per-attribute cap so the hidden-text test runs.
+        assert len(style) <= cap
+        html = f'<p style="{style}">x</p>'
+        return lambda: parse_content(html, None)
+
+    # n = 1,000 and 4,000: rows with two runs reach about 8,000 chars at 4n, still under the cap.
+    assert growth(call, 1_000) < _GROWTH_LIMIT
+
+
+@pytest.mark.parametrize(
+    ("label", "style"),
+    [
+        ("zero_run", "font-size:" + "0" * 1_999_000 + "x"),
+        ("space_run", "color:a" + " " * 1_999_000 + "b"),
+        ("hidden_but_long", "display:none;" + " " * 1_999_000),
+    ],
+)
+def test_two_megabyte_style_is_not_evaluated(label: str, style: str) -> None:
+    s = parse_content(f'<p style="{style}">x</p><p style="display:none">y</p>', None)
+    assert not s.capped  # the rest of the body is still parsed
+    assert s.hidden_unevaluated == 1
+    # Only the short attribute was tested; the long one is never reported as "no hidden text".
+    assert [h.reason for h in s.hidden_candidates] == ["display_none"]
+
+
+@pytest.mark.parametrize(("over", "unevaluated"), [(-1, 0), (0, 0), (1, 1), (2, 1)])
+def test_style_cap_boundary(over: int, unevaluated: int) -> None:
+    length = ContentLimits().max_style_chars + over
+    style = "display:none;" + "x" * (length - len("display:none;"))
+    s = parse_content(f'<p style="{style}">x</p>', None)
+    assert s.hidden_unevaluated == unevaluated
+    assert bool(s.hidden_candidates) is (unevaluated == 0)
+
+
+def test_style_cap_uses_limits() -> None:
+    s = parse_content(
+        '<p style="display:none">x</p>', None, limits=ContentLimits(max_style_chars=5)
+    )
+    assert s.hidden_unevaluated == 1
+    assert s.hidden_candidates == ()
+    assert s.inline_style_bytes == len("display:none")  # still measured
+
+
+# _NEG and the charset search measured linear (R1-01 review): kept as is, guarded here.
+def test_charset_search_linear_on_whitespace_runs() -> None:
+    def call(n: int) -> Callable[[], object]:
+        content = "text/html; charset" + " " * n + "=" + " " * n + ";"
+        html = f'<meta http-equiv="Content-Type" content="{content}"><p>x</p>'
+        return lambda: parse_content(html, None)
+
+    assert growth(call, 5_000) < _GROWTH_LIMIT
+
+
+@pytest.mark.parametrize(
+    ("content", "charset"),
+    [
+        ("text/html; charset = UTF-8", "utf-8"),
+        ("text/html;charset=iso-8859-1;x", "iso-8859-1"),
+        ("text/html; charset=", None),
+        ("text/html; charset" + " " * 10_000 + "=", None),
+    ],
+)
+def test_http_equiv_charset_table(content: str, charset: str | None) -> None:
+    html = f'<meta http-equiv="Content-Type" content="{content}">'
+    assert parse_content(html, None).charset == charset

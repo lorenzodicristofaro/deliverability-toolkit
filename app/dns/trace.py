@@ -45,6 +45,13 @@ detail ``lame_or_non_authoritative``) and the next server is tried. A non-author
 answer is kept as ok with detail ``non_authoritative``. Lame delegation = REFUSED or
 non-authoritative absence from every queried server of a zone.
 
+CNAME at the query name (R1-07): when the answering server returns a CNAME chain that ends at a
+name it holds no record of the asked type for (typically a target in another zone), the trace
+ends with outcome ``cname`` (state ``ok``: evaluated, never "no record"); the answer hop has
+state ok, detail ``cname`` (``non_authoritative`` without AA) and the CNAME records, and the
+report carries ``cname_chain`` and ``cname_target``. The target is NOT followed (no restart from
+the root). NXDOMAIN with a CNAME in the answer stays ``nxdomain``.
+
 Timeouts: a TimeoutError raised by ``query_server``/the resolver itself is a per-server failure
 (``query_timeout``/``resolver_timeout``); only expiry of the trace deadline ends the trace
 (``deadline``).
@@ -114,12 +121,16 @@ class TraceOutcome(StrEnum):
     deadline = "deadline"
     no_allowed_server = "no_allowed_server"
     no_server_address = "no_server_address"
+    cname = "cname"  # the name is an alias whose target the answering server did not resolve
 
     @property
     def state(self) -> ResultState:
-        """Only ok/nxdomain/nodata are evaluations; every other outcome is ``error``."""
+        """Only ok/cname/nxdomain/nodata are evaluations; every other outcome is ``error``.
+        ``cname`` maps to ``ok``: the name exists and its data (the alias) was read; it is
+        neither "no record" nor a failure."""
         return {
             TraceOutcome.ok: ResultState.ok,
+            TraceOutcome.cname: ResultState.ok,
             TraceOutcome.nxdomain: ResultState.nxdomain,
             TraceOutcome.nodata: ResultState.nodata,
         }.get(self, ResultState.error)
@@ -153,6 +164,10 @@ class TraceReport:
     queries_sent: int = 0
     elapsed_ms: float = 0.0
     detail_code: str | None = None
+    # Outcome ``cname`` only: the CNAME records at the query name (in order) and the last
+    # target, which the trace reports but does not follow. Empty/None for every other outcome.
+    cname_chain: tuple[DnsRecord, ...] = ()
+    cname_target: str | None = None
 
     @property
     def state(self) -> ResultState:
@@ -538,6 +553,24 @@ class _Tracer:
             )
             return child, cands
         state = res.state
+        chain: tuple[DnsRecord, ...] = tuple(getattr(reply, "cname_chain", ()))
+        target = getattr(reply, "cname_target", None)
+        if state is ResultState.nodata and chain and isinstance(target, str):
+            # An alias whose target this server does not answer for (typically another zone):
+            # reported as ``cname`` with the chain, never "no record of that type". Not followed.
+            if len(chain) > self.limits.max_hop_records:
+                info.failures += 1
+                record(HopKind.failure, ResultState.malformed, "oversized_answer")
+                return None
+            detail = "cname" if reply.authoritative else "non_authoritative"
+            record(HopKind.answer, ResultState.ok, detail, records=chain)
+            return self._report(
+                TraceOutcome.cname,
+                final_zone=zone,
+                final_server=addr,
+                cname_chain=chain,
+                cname_target=target,
+            )
         if state.is_definitive_absence and not reply.authoritative:
             # Absence is only final from an authoritative server: a lame server, try the next.
             info.lame += 1
@@ -587,6 +620,8 @@ class _Tracer:
         final_zone: str | None = None,
         final_server: str | None = None,
         detail: str | None = None,
+        cname_chain: tuple[DnsRecord, ...] = (),
+        cname_target: str | None = None,
     ) -> TraceReport:
         if detail is None and outcome.state is ResultState.error:
             detail = outcome.value
@@ -600,6 +635,8 @@ class _Tracer:
             queries_sent=self.queries,
             elapsed_ms=self._ms(self.started),
             detail_code=detail,
+            cname_chain=cname_chain,
+            cname_target=cname_target,
         )
 
 

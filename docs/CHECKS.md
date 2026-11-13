@@ -39,11 +39,23 @@ A check is a class with a string `id` and `async run(ctx: CheckContext, target: 
   error) makes the lookup, and so the check, `error`. This covers every lookup: the SPF tree, the
   `_dmarc` record (and the organizational-domain fallback), the DMARC external authorization
   lookups at `<domain>._report._dmarc.<destination>`, and the DKIM selector probe.
+  One exception for the DMARC external authorization lookups: when one fails, the DMARC check is
+  `error` only if no `critical` or `high` finding is present; otherwise the status follows the
+  findings (`app/checks/dmarc.py`). The failure is always reported as `DMARC_EXTERNAL_AUTH_UNVERIFIED`.
 - **DKIM rule.** Selectors cannot be enumerated in DNS, so the check probes a seed list and never
   claims DKIM is absent. Failed selectors are always listed in `DKIM_PROBE_ERRORS`. If at least
   one selector is found, the status follows the findings. If none is found and any failed, the
   status is `error`. `DKIM_NO_SELECTOR_FOUND` appears only when every selector was `not_found`.
   A probe cut short by the stream deadline is `error`.
+  A TXT record counts as a DKIM key candidate if it starts with `v=DKIM1` (case and spaces
+  tolerated) or has a `p=` tag; a malformed candidate is still `DKIM_KEY_SYNTAX_ERROR`. A selector
+  whose TXT records are all non-candidates (typically a wildcard TXT such as `v=spf1 -all`) is
+  `not_found`, with no syntax error; ONE `DKIM_NON_KEY_TXT` (info) per run gives the count and up
+  to 20 selector names with a truncated text. A selector with at least one candidate is `found`:
+  every TXT record at the name still counts for `DKIM_MULTIPLE_RECORDS` (a verifier may pick the
+  non-key one), while key findings (syntax, size, revoked, test mode) look at candidates only.
+  In `esp` checks a primary `txt` selector answered
+  only by non-candidates is missing, not ok.
   An empty list (every selector disabled) probes nothing: status `error` with
   `DKIM_NO_SELECTORS_PROBED`, never a verdict about the domain. A list cut by the probe cap is
   incomplete: status `error` with `DKIM_SELECTORS_CAPPED`, and `data["dropped"]` gives the number.
@@ -92,11 +104,18 @@ module's `CODES`; `tests/checks/test_acceptance_m3.py` requires en and it text f
 | `SPF_NO_ALL` | medium | 4.7 |
 | `SPF_REDIRECT_WITH_ALL` | low | 5.1, 6.1 |
 | `SPF_PTR_DEPRECATED` | low | 5.5 |
-| `SPF_RECORD_TOO_LONG` | medium (answer over 450 octets) or info (a string over 255 octets) | 3.3, 3.4 |
+| `SPF_RECORD_TOO_LONG` | medium (name plus SPF text over 450 octets; a record over 255 octets published as several strings is valid and not flagged, R1-18) | 3.4 (3.3 for multiple strings) |
 | `SPF_RESOLUTION_TRUNCATED` | info | 4.6.4 |
 | `SPF_FLATTENING_HINT` | info | none (advisory; no addresses are generated) |
 | `SPF_DNS_ERROR` | medium (status `error`) | 4.4 |
 | `SPF_MX_TOO_MANY_HOSTS` | high | 4.6.4 |
+| `SPF_TERMS_AFTER_ALL` | low | 5.1 (mechanisms after the first `all` are never tested, so they are not counted or followed; still syntax-checked) |
+
+SPF tree targets (`include`, `redirect`, `a`, `mx`, `exists`) follow the RFC 7208 `domain-spec` rule
+the SPF parser applies plus DNS limits (visible ASCII labels such as `spf_c` or `x-`, 1-63 octets
+each, 253-octet name, no backslash), so only names that cannot be queried are `invalid_target`
+(`SPF_SYNTAX_ERROR`); DKIM and ESP CNAME targets intentionally keep the stricter `to_dns_name`
+host-name rule.
 
 ### DMARC (RFC 7489)
 
@@ -124,6 +143,12 @@ module's `CODES`; `tests/checks/test_acceptance_m3.py` requires en and it text f
 | `DMARC_EXTERNAL_NOT_CHECKABLE` | low | 7.1 (our interpretation: a URI that names several hosts) |
 | `DMARC_EXTERNAL_TOO_MANY_DESTINATIONS` | low | none (we check at most 8 destinations) |
 
+Inherited record (found at the organizational domain for a subdomain target): the applied policy is
+`sp` when present and valid, else `p` (RFC 7489 section 6.3). `effective_policy`, `DMARC_POLICY_NONE`,
+`DMARC_POLICY_QUARANTINE` and `DMARC_PCT_PARTIAL` are derived from it, and `DMARC_SUBDOMAIN_POLICY_WEAKER`
+is not emitted (it describes the parent). `data["p"]` and `data["sp"]` stay as published. An invalid `sp`
+follows the section 6.6.3 step 6 path as before.
+
 ### DKIM (RFC 6376, RFC 8301)
 
 | Code | Severity | RFC |
@@ -140,6 +165,7 @@ module's `CODES`; `tests/checks/test_acceptance_m3.py` requires en and it text f
 | `DKIM_PROBE_ERRORS` | low | none |
 | `DKIM_NO_SELECTORS_PROBED` | low | none |
 | `DKIM_SELECTORS_CAPPED` | low | none |
+| `DKIM_NON_KEY_TXT` | info | none |
 
 For DKIM the finding texts cite the RFCs without section numbers, so none are given here
 (`unverified`: the maintainer should add the sections after checking the RFC text).
@@ -226,6 +252,7 @@ No ESP assigned: `ESP_NONE_ASSIGNED` (info) plus any detection findings.
 | Code | Severity | Notes |
 |---|---|---|
 | `ESP_SPF_INCLUDE_MISSING` | high | include host not in the SPF tree |
+| `ESP_SPF_INCLUDE_AFTER_ALL` | high | include host present only after the first `all` of a record: never evaluated (RFC 7208 5.1, R1-17); replaces `ESP_SPF_INCLUDE_MISSING` for that host |
 | `ESP_SPF_PERMERROR` | high (status `error`) | include not found and a record in the tree is a permerror |
 | `ESP_DKIM_RECORD_MISSING` | high | selector name absent |
 | `ESP_DKIM_TARGET_MISMATCH` | medium | no CNAME in the chain fits `target_pattern`; `reason` `chain_end`, `loop`, `empty_target` or `hop_limit` |

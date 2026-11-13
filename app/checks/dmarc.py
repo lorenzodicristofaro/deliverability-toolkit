@@ -150,17 +150,20 @@ class DmarcCheck:
                 data["effective_policy"] = None
             return out, True, data
 
-        data.update(pct=rec.pct, effective_policy=p)
-        if p == "none":
+        # RFC 7489 section 6.3: a subdomain that inherits the record is governed by sp when it
+        # is present and valid, else by p. data["p"] and data["sp"] stay as published.
+        applied = rec.sp if inherited and rec.sp is not None else p
+        data.update(pct=rec.pct, effective_policy=applied)
+        if applied == "none":
             out.append(finding("DMARC_POLICY_NONE", "low"))
-        elif p == "quarantine":
+        elif applied == "quarantine":
             out.append(finding("DMARC_POLICY_QUARANTINE", "info"))
         sp = rec.sp
-        if sp is not None and _RANK[sp] < _RANK[p]:
+        if not inherited and sp is not None and _RANK[sp] < _RANK[p]:
             out.append(finding("DMARC_SUBDOMAIN_POLICY_WEAKER", "low", {"p": p, "sp": sp}))
         pct = rec.pct
-        if pct is not None and pct < 100 and p != "none":
-            out.append(finding("DMARC_PCT_PARTIAL", "low", {"pct": pct, "p": p}))
+        if pct is not None and pct < 100 and applied != "none":
+            out.append(finding("DMARC_PCT_PARTIAL", "low", {"pct": pct, "p": applied}))
         if not has_valid_rua:
             out.append(finding("DMARC_NO_RUA", "low"))
         if rec.ruf:

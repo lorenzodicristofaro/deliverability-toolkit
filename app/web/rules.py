@@ -521,29 +521,42 @@ async def _save(
 ) -> Response:
     """Create (`target` None) or update a rule from the form. The caller has already checked the
     permission (and the rule's visibility), so the body is read only for an allowed caller."""
-    db.rollback()  # no pooled connection is held while the body is read
+    await run_in_threadpool(db.rollback)  # no pooled connection is held while the body is read
     try:
         body = await _read_capped(request, MAX_SAVE_BYTES)
     except _BodyTooLarge:
-        return _form_page(
-            request, service, scope, target, status_code=413, plain_error=TOO_LARGE_KEY
+        return await run_in_threadpool(
+            _form_page, request, service, scope, target, status_code=413, plain_error=TOO_LARGE_KEY
         )
     form = _form(body)
     del body
     if form is None:
-        return _form_page(
-            request, service, scope, target, status_code=422, plain_error=INVALID_FORM_KEY
+        return await run_in_threadpool(
+            _form_page,
+            request,
+            service,
+            scope,
+            target,
+            status_code=422,
+            plain_error=INVALID_FORM_KEY,
         )
     data, echo, problem = _save_data(form, scope)
     del form
     if problem is not None:
         values = None if problem == INVALID_CHARS_KEY else echo  # never echo a NUL
-        return _form_page(
-            request, service, scope, target, values=values, status_code=422, plain_error=problem
+        return await run_in_threadpool(
+            _form_page,
+            request,
+            service,
+            scope,
+            target,
+            values=values,
+            status_code=422,
+            plain_error=problem,
         )
     if target is not None:
         try:
-            stored = service.get_rule(scope, target).pattern
+            stored = (await run_in_threadpool(service.get_rule, scope, target)).pattern
         except RulesAdminError as exc:
             return _failure(request, exc)
         # A textarea cannot carry a stored CR, so a pattern left as shown keeps its stored bytes.
@@ -551,15 +564,23 @@ async def _save(
             data["pattern"] = stored
     try:
         if target is None:
-            service.create(scope, data)
+            await run_in_threadpool(service.create, scope, data)
         else:
-            service.update(scope, target, data)
+            await run_in_threadpool(service.update, scope, target, data)
     except RuleFieldInvalid as exc:
-        return _form_page(
-            request, service, scope, target, values=echo, status_code=422, error=_field_error(exc)
+        return await run_in_threadpool(
+            _form_page,
+            request,
+            service,
+            scope,
+            target,
+            values=echo,
+            status_code=422,
+            error=_field_error(exc),
         )
     except SeedKeyConflict as exc:
-        return _form_page(
+        return await run_in_threadpool(
+            _form_page,
             request,
             service,
             scope,
@@ -582,7 +603,7 @@ async def rules_create(
         return _not_found(request)
     service = _service(db, auth)
     try:  # permission first: a denied caller never has its body read
-        service.check_manage(parsed)
+        await run_in_threadpool(service.check_manage, parsed)
     except RulesAdminError as exc:
         return _failure(request, exc)
     return await _save(request, service, db, parsed, None)
@@ -598,7 +619,7 @@ async def rules_update(
     service = _service(db, auth)
     target = parse_id(rule_id)
     try:  # permission and visibility of the rule first
-        service.check_write(parsed, target)
+        await run_in_threadpool(service.check_write, parsed, target)
     except RulesAdminError as exc:
         return _failure(request, exc)
     return await _save(request, service, db, parsed, target)
@@ -617,22 +638,28 @@ async def rules_toggle(
     service = _service(db, auth)
     target = parse_id(rule_id)
     try:
-        service.check_write(parsed, target)
+        await run_in_threadpool(service.check_write, parsed, target)
     except RulesAdminError as exc:
         return _failure(request, exc)
-    db.rollback()
+    await run_in_threadpool(db.rollback)
     try:
         body = await _read_capped(request, _FORM_OVERHEAD_BYTES)
     except _BodyTooLarge:
-        return _list_page(request, service, parsed, status_code=413, error=TOO_LARGE_KEY)
+        return await run_in_threadpool(
+            _list_page, request, service, parsed, status_code=413, error=TOO_LARGE_KEY
+        )
     form = _form(body)
     enabled = None if form is None else _single(form, "enabled")
     if enabled not in ("0", "1"):
-        return _list_page(request, service, parsed, status_code=422, error=INVALID_FORM_KEY)
+        return await run_in_threadpool(
+            _list_page, request, service, parsed, status_code=422, error=INVALID_FORM_KEY
+        )
     try:
-        service.update(parsed, target, {"enabled": enabled == "1"})
+        await run_in_threadpool(service.update, parsed, target, {"enabled": enabled == "1"})
     except RuleFieldInvalid as exc:  # the service re-validates the stored pattern on any update
-        return _list_page(request, service, parsed, status_code=422, error=exc.key)
+        return await run_in_threadpool(
+            _list_page, request, service, parsed, status_code=422, error=exc.key
+        )
     except RulesAdminError as exc:
         return _failure(request, exc)
     return _redirect(parsed, "enabled" if enabled == "1" else "disabled")
@@ -648,11 +675,13 @@ async def rules_delete(
     service = _service(db, auth)
     target = parse_id(rule_id)
     try:
-        service.check_write(parsed, target)
-        db.rollback()
-        service.delete(parsed, target)
+        await run_in_threadpool(service.check_write, parsed, target)
+        await run_in_threadpool(db.rollback)
+        await run_in_threadpool(service.delete, parsed, target)
     except SeededRuleNotDeletable as exc:
-        return _list_page(request, service, parsed, status_code=409, error=exc.key)
+        return await run_in_threadpool(
+            _list_page, request, service, parsed, status_code=409, error=exc.key
+        )
     except RulesAdminError as exc:
         return _failure(request, exc)
     return _redirect(parsed, "deleted")
@@ -709,10 +738,12 @@ async def rules_test(
         return _not_found(request)
     service = _service(db, auth)
     try:
-        service.check_manage(parsed)
+        await run_in_threadpool(service.check_manage, parsed)
     except RulesAdminError as exc:
         return _failure(request, exc)
-    db.rollback()  # the search can block for seconds: hold no pooled connection meanwhile
+    await run_in_threadpool(
+        db.rollback
+    )  # the search can block for seconds: hold no pooled connection meanwhile
     try:
         body = await _read_capped(request, MAX_TEST_BYTES)
     except _BodyTooLarge:

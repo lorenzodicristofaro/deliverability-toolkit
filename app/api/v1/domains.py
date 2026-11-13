@@ -148,7 +148,12 @@ def update_domain(request: Request, service: Service, body: Body, domain_id: str
         target = _domain_id(domain_id)
         service.check_update(target)
         payload = _parse(request, DomainIn, body)
-        return _domain_json(service.rename(target, payload.name))
+        view = service.rename(target, payload.name)
+        return {
+            **_domain_json(view),
+            "esp_hosts_rewritten": view.esp_hosts_rewritten,
+            "esp_hosts_unmatched": view.esp_hosts_unmatched,
+        }
     except DomainServiceError as exc:
         _raise(request, exc)
 

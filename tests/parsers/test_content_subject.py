@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import time
+from collections.abc import Callable
+
 import pytest
 
-from app.parsers.content_subject import SubjectLimits, analyze_subject
+from app.parsers.content_subject import _REPLY, SubjectLimits, analyze_subject
 
 
 def test_none_is_not_evaluated() -> None:
@@ -125,6 +128,14 @@ def test_punct_runs(text: str, run: int, flag: bool) -> None:
         ("Reply soon", False, None, False),
         ("Re hello", False, None, False),
         ("hello Re: x", False, None, False),
+        ("re [1234] : x", False, "re", True),
+        ("Fw\t:\tx", True, "fwd", False),
+        ("re[12345]: x", False, None, False),
+        ("re[]: x", False, None, False),
+        ("re [1] [2]: x", False, None, False),
+        ("re" + " " * 9_990 + ":x", False, "re", True),
+        ("re" + " " * 9_990 + "x", False, None, False),
+        (" " * 9_990 + "fwd", False, None, False),
     ],
 )
 def test_reply_prefix(text: str, irt: bool | None, prefix: str | None, flag: bool | None) -> None:
@@ -255,3 +266,34 @@ def test_encoded_nul_is_flagged() -> None:
 
 def test_decoded_text_not_decoded_again() -> None:
     assert analyze_subject("=?UTF-8?Q?x?=").length_codepoints == 13
+
+
+def _best_batch(fn: Callable[[], object], repeats: int) -> float:
+    best = float("inf")
+    for _ in range(5):
+        start = time.perf_counter()
+        for _ in range(repeats):
+            fn()
+        best = min(best, time.perf_counter() - start)
+    return best
+
+
+@pytest.mark.parametrize(
+    "make",
+    [
+        lambda n: "re" + " " * n + "x",
+        lambda n: "re" + " " * n + "[1]" + " " * n + "x",
+        lambda n: " " * n + "fwd" + " " * n,
+    ],
+    ids=["space_run", "space_run_around_counter", "leading_and_trailing_run"],
+)
+def test_reply_regex_linear_on_whitespace_runs(make: Callable[[int], str]) -> None:
+    """R1-01: no adjacent \\s* in _REPLY. Relative bound (n vs 4n), no wall-clock threshold."""
+    small, large = make(2_500), make(10_000)
+    repeats = 1
+    while repeats < 100_000 and _best_batch(lambda: _REPLY.match(small), repeats) < 0.02:
+        repeats *= 4
+    ratio = _best_batch(lambda: _REPLY.match(large), repeats) / _best_batch(
+        lambda: _REPLY.match(small), repeats
+    )
+    assert ratio < 10.0  # linear grows about 4x, the old pattern grew about 16x
