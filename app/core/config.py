@@ -15,6 +15,10 @@ MIN_SECRET_LENGTH = 32
 # Session expiry defaults (M1-13): project choice, not taken from an external source.
 DEFAULT_SESSION_IDLE_TIMEOUT_MINUTES = 30
 DEFAULT_SESSION_ABSOLUTE_TIMEOUT_MINUTES = 12 * 60
+# Guarded outbound HTTP client (M7-01): project choices, not taken from an external source.
+DEFAULT_OUTBOUND_HTTP_ALLOWED_PORTS = "80,443"
+DEFAULT_OUTBOUND_HTTP_MAX_REDIRECTS = 3
+OUTBOUND_HTTP_MAX_REDIRECTS_HARD_MAX = 5
 
 RESOLVER_ADDR_INVALID_KEY = "config.resolver_addr.invalid"
 
@@ -142,6 +146,23 @@ def parse_trusted_proxies(value: str) -> tuple[IPNetwork, ...]:
     return tuple(networks)
 
 
+def parse_port_list(value: str, name: str) -> tuple[int, ...]:
+    """Parse a comma-separated list of TCP ports (1-65535), e.g. OUTBOUND_HTTP_ALLOWED_PORTS.
+
+    Whitespace around entries is ignored; duplicates are dropped (first wins). An empty list, an
+    empty entry, a sign, a non-digit or an out-of-range port raises
+    ConfigError(``config.invalid_value``, name=..., entry=...).
+    """
+    ports: list[int] = []
+    for raw in value.split(","):
+        entry = raw.strip()
+        if not (entry.isascii() and entry.isdigit()) or not 1 <= int(entry) <= 65535:
+            raise ConfigError(CONFIG_INVALID_VALUE_KEY, name=name, entry=entry)
+        if int(entry) not in ports:
+            ports.append(int(entry))
+    return tuple(ports)
+
+
 _SECRET_FIELDS = ("secret_key", "encryption_key")
 
 
@@ -176,6 +197,13 @@ class Settings(BaseSettings):
     # parse_trusted_proxies. Default empty: the client IP is the direct peer, headers ignored.
     trusted_proxies: str = ""
     _trusted_networks: tuple[IPNetwork, ...] = PrivateAttr(default=())
+    # Guarded outbound HTTP client (M7-01, ARCHITECTURE section 9): destination ports allowed
+    # (parsed by parse_port_list) and redirects followed per fetch (0..5, 5 is a hard max).
+    outbound_http_allowed_ports: str = DEFAULT_OUTBOUND_HTTP_ALLOWED_PORTS
+    outbound_http_max_redirects: int = Field(
+        default=DEFAULT_OUTBOUND_HTTP_MAX_REDIRECTS, ge=0, le=OUTBOUND_HTTP_MAX_REDIRECTS_HARD_MAX
+    )
+    _outbound_ports: tuple[int, ...] = PrivateAttr(default=())
 
     @field_validator("secret_key", "encryption_key", mode="after")
     @classmethod
@@ -220,6 +248,13 @@ class Settings(BaseSettings):
             raise ConfigError(CONFIG_RESOLVER_ADDRS_REQUIRED_KEY, mode=self.resolver_mode)
         # Parsed once here: an invalid entry fails at startup, requests reuse the result.
         self._trusted_networks = parse_trusted_proxies(self.trusted_proxies)
+        self._outbound_ports = parse_port_list(
+            self.outbound_http_allowed_ports, "OUTBOUND_HTTP_ALLOWED_PORTS"
+        )
+
+    def outbound_http_ports(self) -> tuple[int, ...]:
+        """OUTBOUND_HTTP_ALLOWED_PORTS as parsed at construction (never empty)."""
+        return self._outbound_ports
 
     def trusted_proxy_networks(self) -> tuple[IPNetwork, ...]:
         """TRUSTED_PROXIES as parsed at construction (empty: no proxy is trusted)."""

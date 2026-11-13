@@ -181,8 +181,9 @@ and DNS snapshots are kept longer.
   request input or DNS data (public-resolver list entries, trace referral/glue/NS addresses)
   must be a globally routable unicast IP literal on port 53; a blocked target yields
   `ResultState.blocked`, never "missing". The DNS tool selects resolvers by id only
-  (configured + `seeds/dns_resolvers.yaml`); free-form resolver IPs are deferred to M7,
-  which will absorb this policy into the guarded client.
+  (configured + `seeds/dns_resolvers.yaml`); free-form resolver IPs are deferred to M7.
+  For HTTP the guarded client (section 9, M7-01) now applies the same classification,
+  `address_reason`, to every resolved or literal address; the DNS tool itself is unchanged.
 - Raw DNS tools require the `dns.tools` permission: owner, admin, analyst; never client
   viewer (not grantable by toggle); no anonymous access.
 - Running checks on a tenant domain requires `check.run` (GM decision 2026-11-06, M3-14):
@@ -236,9 +237,70 @@ when a profile is older than 12 months.
 
 ## 9. Security
 
-- Guarded outbound client (HTTP and SMTP): resolve first, reject loopback,
-  private, link-local, CGNAT and cloud metadata ranges, pin the resolved IP
-  to avoid DNS rebinding, enforce size/time limits, restrict redirects.
+- Guarded outbound HTTP client (M7-01, decision record). `app/net/guarded_http.py` `fetch()` is
+  the only way `app/` makes HTTP requests; only `app/net/` may import an HTTP library (`httpx2`),
+  enforced by a test that parses every module under `app/` (no exceptions today). It returns a
+  `FetchResult` (final URL, status, allowlisted response headers, capped body, `truncated`,
+  hop list) or a `FetchError` with a closed kind: `blocked`, `dns_error`, `timeout`,
+  `too_large`, `too_many_redirects`, `scheme_not_allowed`, `port_not_allowed`, `tls_error`,
+  `connect_error`, `protocol_error`, plus a stable `detail` code and the hop number. Callers map
+  every kind to Check `error`; there is no "not found means ok" path. Caller bugs (unknown
+  method, request header outside the allowlist, body on GET/HEAD) raise `ValueError`.
+  - The client absorbs the DNS egress policy for HTTP: addresses are classified by
+    `app.dns.egress.address_reason` (IANA special-purpose registries, retrieved 2026-11-05), not
+    a second list. Blocked: unspecified, "this network", loopback, private (RFC 1918, ULA
+    `fc00::/7`), CGNAT, link-local (incl.
+    `169.254.169.254`), protocol assignments, documentation, benchmarking, reserved, broadcast,
+    multicast, IPv4-mapped, 6to4/NAT64 embedding a blocked IPv4, local-use NAT64, Teredo, and
+    anything outside `2000::/3`.
+  - Per hop (first request and every redirect): scheme `http`/`https`; port in
+    `OUTBOUND_HTTP_ALLOWED_PORTS`; no userinfo (`@`), whitespace, control characters or
+    backslash; host normalised by `app/core/domain_names.py` `to_ascii_domain` (IDNA 2008, 253/63
+    limits, trailing dot removed, all-numeric last label refused, so decimal/octal/hex/short IPv4
+    spellings never reach a resolver); IP literals (strict dotted quad, bracketed IPv6, no zone
+    id) are classified directly. Names are resolved through the project resolver (A then AAAA,
+    once each), never the OS resolver. ANY blocked answer refuses the request (no "pick the good
+    one"); any resolution failure other than NXDOMAIN/NODATA, or no address at all, is
+    `dns_error`.
+  - Pinning: the request URL carries the first validated address (IPv4 first; no fallback to the
+    others), the `Host` header carries the original host, and httpx2's documented
+    `sni_hostname` request extension makes TLS SNI and certificate hostname verification use the
+    original host (httpcore2 passes it as `server_hostname` to the TLS handshake). No custom
+    transport is needed. No second lookup happens between check and connect (rebinding test).
+    Each hop uses a fresh transport with one connection and no keep-alive, so a TLS connection
+    opened for one name is never reused for another.
+  - No ambient configuration: the transport is used directly (no `httpx2.Client`), built with
+    `trust_env=False` and no proxy, so `HTTP(S)_PROXY`, `ALL_PROXY`, `NO_PROXY`, netrc,
+    `SSL_CERT_FILE`/`SSL_CERT_DIR` and cookie jars are never used. TLS verification is always on.
+  - Redirects (301, 302, 303, 307, 308) are followed manually for GET/HEAD; POST (alert webhooks)
+    does not follow unless asked (then 307/308 keep POST and the body, 301/302/303 become GET).
+    Relative `Location` is resolved against the current URL; a missing, oversize or unparsable
+    `Location` is `protocol_error`; https -> http is refused (`scheme_not_allowed`,
+    `https_downgrade`); a revisited URL is `too_many_redirects` (`loop`). `Authorization` is
+    dropped when scheme, host or port changes; `Cookie`, `Host`, `Proxy-*` and `Accept-Encoding`
+    can never be set by callers.
+  - Decompression bombs: `Accept-Encoding: identity` is sent and any other `Content-Encoding` is
+    refused (`protocol_error`); the raw stream is read, nothing is decoded.
+
+  | Limit | Default | Where |
+  |---|---|---|
+  | Allowed ports | 80, 443 | `OUTBOUND_HTTP_ALLOWED_PORTS` |
+  | Redirects | 3 (hard max 5) | `OUTBOUND_HTTP_MAX_REDIRECTS` |
+  | Connect timeout | 5 s | `FetchLimits.connect_timeout` |
+  | Read/write timeout | 10 s per read | `FetchLimits.read_timeout` |
+  | Total deadline | 20 s, DNS and all hops | `FetchLimits.total_timeout` |
+  | Response body | 1 MiB, counted while streaming; over it: `too_large` or, if asked, truncated | `FetchLimits.max_body_bytes` |
+  | POST body | 64 KiB | `FetchLimits.max_request_body_bytes` |
+  | Response headers | 100 fields, 16 KiB names + values (httpcore2 also caps the raw header block at 100 KiB) | `FetchLimits.max_header_count`, `max_header_bytes` |
+  | URL length | 2048 characters | `policy.MAX_URL_LENGTH` |
+
+  All defaults are project choices, not vendor facts.
+  - Test seam: `guarded_http._fetch` takes a transport factory and an address classifier;
+    `fetch()` always passes the real transport and `address_reason`, and no setting reaches
+    them. Unit tests (`tests/net`) use a scripted resolver and `httpx2.MockTransport`; the
+    end-to-end tests use a server bound to 127.0.0.1 inside the test with the loopback block
+    bypassed through the seam. Sockets to anything but loopback fail those tests.
+  - SMTP: separate ticket, same policy.
 - Input validation of domains/IPs (IDNA, length, label rules) at the edge.
 - Regex rules run through `app/core/safe_regex.py` (M5-03): `search_many` runs all
   rules for one text in one worker subprocess with a per-rule deadline; a rule that
