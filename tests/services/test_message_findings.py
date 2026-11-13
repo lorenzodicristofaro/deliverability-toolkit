@@ -1132,7 +1132,8 @@ def test_auth_broke_after_hop_params_and_severity() -> None:
     r = run(POSITIVE[-1][1], POSITIVE[-1][2])
     f = _find(r, "MSG_AUTH_BROKE_AFTER_HOP")
     assert f.severity == "info"
-    assert f.params == {"results": "spf=fail", "authserv_id": "mx.example.org", "hop": 0}
+    # The older pass sits above Received index 0: shown as hop 1, like MSG_HOP_DELAY_HIGH.
+    assert f.params == {"results": "spf=fail", "authserv_id": "mx.example.org", "hop": 1}
     assert f.detail_key == "finding.MSG_AUTH_BROKE_AFTER_HOP.detail"
 
 

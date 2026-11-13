@@ -481,7 +481,9 @@ def _hop_part(hops: HopTimeline, acc: _Acc) -> None:
             "authserv_id": excerpt(authserv_id or ""),
         }
         if hop is not None:
-            params["hop"] = hop
+            # 1-based display number, same convention as MSG_HOP_DELAY_HIGH (index + 1); the
+            # 0-based Received index stays in the hops entries.
+            params["hop"] = hop + 1
         acc.add("MSG_AUTH_BROKE_AFTER_HOP", "info", params, None if hop is not None else "no_hop")
 
 

@@ -157,7 +157,7 @@ taken from the docstring of `app/services/message_findings.py`.
 | MSG_AUTHRES_UNPARSED | medium | an Authentication-Results field has no authserv-id or an error-severity parse issue; parameters are issue codes only (error-class) |
 | MSG_ALIGNMENT_NOT_EVALUATED | medium | computed DMARC alignment is not evaluated although a field is present; parameters are pair reason codes only (error-class) |
 | MSG_ALIGNMENT_LOWER_FIELD_NOT_USED | low | an aligned pass stated in a lower Authentication-Results field was not used and the computed DMARC result is not pass; parameters are the methods and identifier domains |
-| MSG_AUTH_BROKE_AFTER_HOP | info | per-hop view: a method stated pass in an older field and a failure-class result in the next newer field that states it; parameters are `method=result` pairs, the newer field's authserv-id and the hop (detail variant `no_hop` when the older field is below every Received field); display only |
+| MSG_AUTH_BROKE_AFTER_HOP | info | per-hop view: a method stated pass in an older field and a failure-class result in the next newer field that states it; parameters are `method=result` pairs, the newer field's authserv-id and `hop`, the 1-based hop number (Received `index` + 1, as in `MSG_HOP_DELAY_HIGH`) (detail variant `no_hop` when the older field is below every Received field); display only |
 
 ## Per-hop authentication view
 
@@ -215,7 +215,8 @@ index of the nearest Received field below it, or `null` when there is none. `hop
 `MSG_AUTH_BROKE_AFTER_HOP` (info). Parsed entries that state a method are compared oldest to
 newest; when one states `pass` and the next newer one stating the same method states `fail`,
 `softfail`, `temperror` or `permerror`, the finding names the hop of the older entry ("broke
-after hop N"). At most one break per method; methods breaking between the same two entries are
+after hop N"). N is 1-based, the same number `MSG_HOP_DELAY_HIGH` shows for that hop
+(Received `index` + 1); the `hop` field of the entries stays the 0-based `index`. At most one break per method; methods breaking between the same two entries are
 reported together. A method counts as pass when any of its results in the entry is `pass`
 (several DKIM signatures). `none`, `neutral` and `policy` are not a failure class and reset the
 comparison. Result names: dkim RFC 8601 section 2.7.1 (none, pass, fail, policy, neutral,
