@@ -15,6 +15,12 @@ Interpretation precedence for an answer set: any non-A record or unparseable A r
 127.x code -> `unmapped_code`; refusal codes (mapped `refused` or inside a declared refused
 network) mixed with other codes -> `conflicting_codes`; only refusal codes -> `refused`.
 
+Bitmask lists (`return_code_mode: bitmask`, M7-03b): an answer that is not itself a refusal code
+is decomposed into the bits of the last octet of 127.0.0.x and each bit is looked up as
+127.0.0.<bit>. An answer outside 127.0.0.0/24 -> `answer_out_of_range`; a refusal bit summed with
+other bits -> `conflicting_codes`; else 127.0.0.0 (no bit) or any bit without a mapping ->
+`unmapped_code`. A sum of mapped bits gives every bit's category (127.0.0.80 = 16 + 64).
+
 Resolver-level blocking: per run and per list, the first `block_threshold` queries are probes
 and the list's other queries wait for them. If every probe answers with a refusal code, a
 REFUSED rcode or an egress block, the list is `blocked_resolver` for the rest of the run and
@@ -40,7 +46,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Final, Literal
 
-from app.checks.dnsbl_schema import ANSWER_NETWORK, DnsblList
+from app.checks.dnsbl_schema import ANSWER_NETWORK, BITMASK_NETWORK, DnsblList, ReturnCode
 from app.core.domain_names import MAX_DOMAIN_LENGTH, InvalidDomainName, to_ascii_domain
 from app.dns.egress import IPAddress, address_reason
 from app.dns.types import DnsQuestion, DnsResult, Resolver, ResultState
@@ -211,6 +217,42 @@ def _error(reason: Reason, codes: Iterable[str] = ()) -> Interpretation:
     return Interpretation(Outcome.error, reason, bounded, (), truncated)
 
 
+def _is_refusal(lst: DnsblList, addr: ipaddress.IPv4Address) -> bool:
+    rc = lst.return_codes.get(addr)
+    if rc is not None:
+        return rc.meaning == "refused"
+    return any(addr in net for net in lst.refused_networks)
+
+
+def _decompose(lst: DnsblList, addr: ipaddress.IPv4Address) -> tuple[ReturnCode, ...] | Reason:
+    """The mapped listed/info codes `addr` stands for (not a refusal code), or why it can't."""
+    if lst.return_code_mode != "bitmask":
+        rc = lst.return_codes.get(addr)
+        return Reason.unmapped_code if rc is None else (rc,)
+    if addr not in BITMASK_NETWORK:
+        return Reason.answer_out_of_range
+    octet = int(addr) & 0xFF
+    if octet == 0:
+        return Reason.unmapped_code
+    out: list[ReturnCode] = []
+    has_refusal_bit = has_unmapped_bit = False
+    for bit in (1 << i for i in range(8)):
+        if not octet & bit:
+            continue
+        bit_addr = BITMASK_NETWORK.network_address + bit
+        if _is_refusal(lst, bit_addr):
+            has_refusal_bit = True
+        elif (rc := lst.return_codes.get(bit_addr)) is None:
+            has_unmapped_bit = True
+        else:
+            out.append(rc)
+    if has_refusal_bit:  # a refusal bit summed with other bits (a lone one is a refusal code)
+        return Reason.conflicting_codes
+    if has_unmapped_bit:
+        return Reason.unmapped_code
+    return tuple(out)
+
+
 def interpret(lst: DnsblList, result: DnsResult) -> Interpretation:
     """Pure mapping of one DNS result for `lst` to an outcome (see module docstring)."""
     state = result.state
@@ -237,16 +279,13 @@ def interpret(lst: DnsblList, result: DnsResult) -> Interpretation:
     refused = listed = info = 0
     categories: list[str] = []
     for addr in addrs:
-        rc = lst.return_codes.get(addr)
-        if rc is None:
-            is_refused = any(addr in net for net in lst.refused_networks)
-        else:
-            is_refused = rc.meaning == "refused"
-        if is_refused:
+        if _is_refusal(lst, addr):
             refused += 1
-        elif rc is None:
-            return _error(Reason.unmapped_code, codes)
-        else:
+            continue
+        mapped = _decompose(lst, addr)
+        if isinstance(mapped, Reason):
+            return _error(mapped, codes)
+        for rc in mapped:
             if rc.meaning == "listed":
                 listed += 1
             else:
