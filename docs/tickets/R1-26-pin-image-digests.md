@@ -16,7 +16,7 @@ Acceptance criteria:
 - Static test passes; Dockerfile still builds in CI (proof is the first dev CI run).
 - ruff, mypy, relevant tests green.
 New i18n keys: none
-Status: todo
+Status: done (QA APPROVE, merged cb7310c; branch a6bea1a; index digests read 2026-11-13 with docker buildx imagetools inspect and re-read by QA; postgres:17 left on the tag; arm64 build proof is CI)
 
 ## Review details (copied from the code review of 2026-11-12, dev 06869fb)
 - Location: `Dockerfile:1` (`# syntax=docker/dockerfile:1`), `Dockerfile:6` (`python:3.12-slim-trixie`), `Dockerfile:11` (`ghcr.io/astral-sh/uv:0.13.7`), `compose.yaml:41` (`postgres:17`), `.github/workflows/ci.yml:89`, `.github/workflows/rebuild.yml:15-28` (Unbound only), `docker/unbound/Dockerfile:7` (pinned by digest, for comparison).

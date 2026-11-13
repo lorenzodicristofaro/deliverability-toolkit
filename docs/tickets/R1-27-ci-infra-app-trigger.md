@@ -15,7 +15,7 @@ Acceptance criteria:
 - Honest limit stated in the summary: the trigger behaviour on GitHub cannot be proven locally; proof is the next dev CI run (GM checks). The M6-00 behaviour is itself unverified in TODO.
 - ruff, mypy, the static test green.
 New i18n keys: none
-Status: todo
+Status: done (QA APPROVE round 2, merged 7776ecd; branch 5d85cee; round 1 CHANGES REQUESTED: comment cited the wrong source; trigger proof is the next dev CI run)
 
 ## Review details (copied from the code review of 2026-11-12, dev 06869fb)
 - Location: `.github/workflows/ci-infra.yml:26-27` ("Deliberately NOT listed: app/, locales/"), `.github/workflows/ci-infra.yml:30-70`, `.github/workflows/ci.yml:113-115` (`infra` runs on `main` pushes only).

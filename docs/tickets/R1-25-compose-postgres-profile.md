@@ -14,7 +14,7 @@ Acceptance criteria:
 - `docker-build` in `.github/workflows/ci-infra.yml` gets a second smoke step: `--profile postgres` with throwaway credentials, `--wait`, then `/healthz`; action pins and permissions unchanged (`contents: read`). The Docker jobs cannot be run locally: state that the first real proof is the dev CI run.
 - Static test passes; existing compose tests green. ruff, mypy, relevant tests green.
 New i18n keys: none
-Status: todo
+Status: done (QA APPROVE, merged f48c2d1; branch 5298ede; verified locally with Docker: both healthy, alembic_version 0009 in postgres, one restart on first start observed; workflow pushed by the maintainer)
 
 ## Review details (copied from the code review of 2026-11-12, dev 06869fb)
 - Location: `compose.yaml:10-37` (app: no `depends_on`), `compose.yaml:39-58` (postgres), `.env.example:7-8,35-36`, `.github/workflows/ci-infra.yml:105-124` (smoke: default profile only), `.github/workflows/ci.yml:82-109` (PostgreSQL tests use a service container, not the image).
