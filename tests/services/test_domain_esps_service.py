@@ -671,19 +671,40 @@ def _set_hosts(world: World, domain: str, esp: str, rp: str | None, tr: str | No
     world.db.commit()
 
 
+RENAMED = "renamed.example"
+# 247 characters: a valid name, but any host label prefixed to it exceeds 253.
+LONG_NEW = ".".join(["b" * 63] * 3 + ["c" * 50, "test"])
+
 REWRITE_CASES = [
-    # (return_path_host, tracking_host, expected hosts, rewritten, unmatched)
-    ("a.example", None, ("renamed.example", None), 1, 0),  # apex
-    ("em1.a.example", "go.a.example", ("em1.renamed.example", "go.renamed.example"), 2, 0),
-    ("x.y.a.example", None, ("x.y.renamed.example", None), 1, 0),  # deep subdomain
-    (None, None, (None, None), 0, 0),  # nothing assigned
-    ("legacy.other.example", "go.a.example", ("legacy.other.example", "go.renamed.example"), 1, 1),
-    ("xa.example", None, ("xa.example", None), 0, 1),  # shares a suffix, not a label boundary
-    ("a.example.evil.example", None, ("a.example.evil.example", None), 0, 1),
+    # (return_path_host, tracking_host, expected hosts, rewritten, unmatched, new name)
+    ("a.example", None, ("renamed.example", None), 1, 0, RENAMED),  # apex
+    ("em1.a.example", "go.a.example", ("em1.renamed.example", "go.renamed.example"), 2, 0, RENAMED),
+    ("x.y.a.example", None, ("x.y.renamed.example", None), 1, 0, RENAMED),  # deep subdomain
+    (None, None, (None, None), 0, 0, RENAMED),  # nothing assigned
+    (
+        "legacy.other.example",
+        "go.a.example",
+        ("legacy.other.example", "go.renamed.example"),
+        1,
+        1,
+        RENAMED,
+    ),
+    (
+        "xa.example",
+        None,
+        ("xa.example", None),
+        0,
+        1,
+        RENAMED,
+    ),  # shares a suffix, not a label boundary
+    ("em1.a.example", None, ("em1.a.example", None), 0, 1, LONG_NEW),  # invalid rewrite
+    ("a.example.evil.example", None, ("a.example.evil.example", None), 0, 1, RENAMED),
 ]
 
 
-@pytest.mark.parametrize(("rp", "tr", "expected", "rewritten", "unmatched"), REWRITE_CASES)
+@pytest.mark.parametrize(
+    ("rp", "tr", "expected", "rewritten", "unmatched", "new_name"), REWRITE_CASES
+)
 def test_rename_rewrites_hosts(
     world: World,
     rp: str | None,
@@ -691,10 +712,12 @@ def test_rename_rewrites_hosts(
     expected: tuple[str | None, str | None],
     rewritten: int,
     unmatched: int,
+    new_name: str,
 ) -> None:
     _set_hosts(world, "a", ESP, rp, tr)
-    view = _rename_service(world).rename(world.domains["a"], "renamed.example")
+    view = _rename_service(world).rename(world.domains["a"], new_name)
     assert (view.esp_hosts_rewritten, view.esp_hosts_unmatched) == (rewritten, unmatched)
+    assert view.name == new_name
     assert [r[3:] for r in world.rows()] == [expected]
 
 
