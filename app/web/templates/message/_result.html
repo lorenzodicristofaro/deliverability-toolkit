@@ -135,6 +135,47 @@
     {% endif %}
   </section>
 
+  <section data-testid="message-hop-view">
+    <h2>{{ t("message.section.hop_view") }}</h2>
+    {% if analysis.hops is none %}{{ unavailable() }}
+    {% elif not analysis.hops.entries %}<p class="empty-state">{{ t("message.hop_view.empty") }}</p>
+    {% else %}
+    {% set hv = analysis.hops %}
+    {% set kind_text = {"received": t("message.hop_view.kind.received"), "authres": t("message.hop_view.kind.authres"), "arc_set": t("message.hop_view.kind.arc_set")} %}
+    <p>{{ t("message.hop_view.intro") }}</p>
+    {% if hv.received_truncated %}<p data-testid="hop-view-received-truncated">{{ t("message.hop_view.received_truncated") }}</p>{% endif %}
+    {% if hv.arc_truncated %}<p data-testid="hop-view-arc-truncated">{{ t("message.hop_view.arc_truncated") }}</p>{% endif %}
+    <table>
+      <thead><tr>
+        <th scope="col">{{ t("message.hop_view.col.position") }}</th>
+        <th scope="col">{{ t("message.hop_view.col.hop") }}</th>
+        <th scope="col">{{ t("message.hop_view.col.kind") }}</th>
+        <th scope="col">{{ t("message.hop_view.col.source") }}</th>
+        <th scope="col">{{ t("message.hop_view.col.spf") }}</th>
+        <th scope="col">{{ t("message.hop_view.col.dkim") }}</th>
+        <th scope="col">{{ t("message.hop_view.col.dmarc") }}</th>
+        <th scope="col">{{ t("message.hop_view.col.arc") }}</th>
+        <th scope="col">{{ t("message.hop_view.col.note") }}</th>
+      </tr></thead>
+      <tbody>
+      {% for e in hv.entries %}
+        <tr data-hop-entry="{{ e.order }}" data-kind="{{ e.kind }}" data-position="{{ e.position }}" data-parsed="{{ 1 if e.parsed else 0 }}">
+          <td>{{ e.order + 1 }}</td>
+          <td>{% if e.hop is none %}-{% else %}{{ e.hop + 1 }}{% endif %}</td>
+          <td>{{ kind_text[e.kind] }}</td>
+          <td class="dns-wrap">{% if e.kind == "arc_set" %}{{ val(e.arc_domain) }}{% if e.arc_instance is not none %}, {{ t("message.hop_view.instance", instance=e.arc_instance) }}{% endif %}{% if e.arc_cv is not none %}, <code>{{ t("message.hop_view.cv", cv=e.arc_cv|visible) }}</code>{% endif %}{% if e.authserv_id is not none %} ({{ e.authserv_id|visible }}){% endif %}{% elif e.kind == "authres" %}{{ val(e.authserv_id) }}{% else %}-{% endif %}</td>
+          {% for m in ("spf", "dkim", "dmarc", "arc") %}
+          {% set rs = e.results|selectattr("method", "equalto", m)|list %}
+          <td class="dns-wrap">{% if rs %}{% for r in rs %}<code>{{ r.result|visible }}</code>{% if not loop.last %}, {% endif %}{% endfor %}{% else %}-{% endif %}</td>
+          {% endfor %}
+          <td class="dns-wrap">{% if not e.parsed %}<strong>{{ t("message.hop_view.unparsed") }}</strong>{% for i in e.issues %} <code>{{ i|visible }}</code>{% endfor %}{% elif e.stated_not_verifiable %}{{ t("message.hop_view.stated", authserv_id=(e.authserv_id|visible if e.authserv_id is not none else "-")) }}{% endif %}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+  </section>
+
   <section data-testid="message-alignment">
     <h2>{{ t("message.section.alignment") }}</h2>
     {% if analysis.alignment is none %}{{ unavailable() }}{% else %}
