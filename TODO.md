@@ -269,6 +269,7 @@ Decided 2026-11-13 (maintainer):
 - [ ] Alerts: email, webhook, Slack/Teams
 - Accept: scheduled runs respect rate limits; changes produce alerts exactly once.
 Tickets (docs/tickets/M7-*.md, split 2026-11-13; model in brackets):
+- [ ] M7-00 CI test speed 3: pytest-xdist for both test jobs, target at most 50% duration, identical test ids (opus; serialized after M7-01; ci.yml push by maintainer)
 - [ ] M7-01 guarded outbound HTTP client + ARCHITECTURE decision record (opus)
 - [ ] M7-02 custom check kind http_fetch via guarded client (opus; depends M7-01)
 - [ ] M7-03 DNSBL/URIBL engine, refusal detection (opus)
