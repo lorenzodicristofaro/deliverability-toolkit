@@ -18,9 +18,18 @@ Two token kinds, chosen by whether the request carries a validly signed session 
    (HMAC output). Whether the session is still live (revoked, expired) is the auth layer's job.
 
 2. Signed double-submit token (pre-session forms: login, setup). The `dt_csrf` cookie holds
-   `<nonce>.<HMAC-SHA256(K_double, nonce)>`; the request must submit the identical value. Both
-   the cookie signature and the cookie/submitted equality are checked, so an attacker who can
-   plant a cookie without knowing SECRET_KEY cannot forge a pair.
+   `<nonce>.<issued>.<HMAC-SHA256(K_double, nonce "." issued)>`, `issued` being the issue time in
+   whole Unix seconds; the request must submit the identical value. The signature (which covers
+   the issue time), the age (at most `DOUBLE_SUBMIT_MAX_AGE_SECONDS`) and the cookie/submitted
+   equality are checked, so an attacker who can plant a cookie without knowing SECRET_KEY cannot
+   forge a pair, and a pair obtained earlier stops working after the limit (R1-15, AUTH-10).
+
+Cookie names (R1-15): with an https BASE_URL the cookies are `__Host-dt_session` and
+`__Host-dt_csrf` (Secure, Path=/, no Domain: a sibling subdomain cannot set them); with http they
+stay `dt_session` and `dt_csrf`. Migration: on https the old `dt_session` is still read for one
+release (see `security.session_cookie_value`); the old `dt_csrf` is NOT read on https, because
+pre-R1-15 values carry no issue time and are refused anyway, so reading the name would only keep
+the cookie-tossing hole open; an anonymous visitor simply gets a fresh token with the next form.
 
 All comparisons use `hmac.compare_digest`. Templates get the token through `csrf_token_for`.
 The form body is read (and replayed to the app) only when no header token is present, and never
@@ -39,6 +48,8 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import time
+from collections.abc import Mapping
 from typing import Final
 from urllib.parse import parse_qs
 
@@ -51,11 +62,12 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from app.core.config import Settings
 from app.core.i18n import resolve_language, t
 from app.core.security import (
-    SESSION_COOKIE_NAME,
     _b64,
     _is_b64url,
+    is_https,
     new_session_token,
     session_cookie_settings,
+    session_cookie_value,
     unsign_session_token,
 )
 
@@ -63,6 +75,15 @@ CSRF_INVALID_KEY = "csrf.invalid"
 CSRF_HEADER: Final = "X-CSRF-Token"
 CSRF_FORM_FIELD: Final = "csrf_token"
 CSRF_COOKIE_NAME: Final = "dt_csrf"
+HOST_CSRF_COOKIE_NAME: Final = "__Host-dt_csrf"
+# Age limit of a double-submit token. The token only protects pre-session forms (login, setup,
+# language switch), which are filled in seconds or minutes; 12 hours still covers a login page
+# left open over a whole working day, yet bounds how long a pair obtained by an attacker (or
+# planted in a browser) stays usable to hours instead of forever. `csrf_token_for` replaces a
+# cookie once it is past half the limit, so a freshly rendered form always has >= 6 hours left.
+DOUBLE_SUBMIT_MAX_AGE_SECONDS: Final = 12 * 3600
+# Tolerated issue time in the future (clock stepped back by NTP between issue and check).
+DOUBLE_SUBMIT_MAX_SKEW_SECONDS: Final = 300
 # Deny by default: only these methods skip the check.
 SAFE_METHODS: Final = frozenset({"GET", "HEAD", "OPTIONS", "TRACE"})
 EXEMPT_PATHS: Final = frozenset({"/healthz"})
@@ -72,10 +93,17 @@ _FORM_CONTENT_TYPE = "application/x-www-form-urlencoded"
 _FORM_CAPS: dict[str, int] = {}
 
 _SESSION_LABEL = b"deliverability-toolkit/csrf-session/v1"
-_DOUBLE_SUBMIT_LABEL = b"deliverability-toolkit/csrf-double-submit/v1"
+# v2 (R1-15): the MAC covers `<nonce>.<issued>`; v1 tokens (nonce only) never verify.
+_DOUBLE_SUBMIT_LABEL = b"deliverability-toolkit/csrf-double-submit/v2"
 _MAC_LEN = 43  # url-safe base64 of a 32-byte HMAC-SHA256, without padding
 _NONCE_LEN = 43  # security.new_session_token(): 32 random bytes
-_MAX_TOKEN_LEN = _NONCE_LEN + 1 + _MAC_LEN
+_ISSUED_MAX_LEN = 12  # decimal Unix seconds; 10 digits until 2286
+_MAX_TOKEN_LEN = _NONCE_LEN + 1 + _ISSUED_MAX_LEN + 1 + _MAC_LEN
+
+
+def _clock() -> float:
+    """Current Unix time; tests replace it (no sleeping)."""
+    return time.time()
 
 
 def _mac(label: bytes, message: str, secret_key: SecretStr) -> str:
@@ -88,19 +116,44 @@ def session_csrf_token(session_token: str, secret_key: SecretStr) -> str:
     return _mac(_SESSION_LABEL, session_token, secret_key)
 
 
-def new_double_submit_token(secret_key: SecretStr) -> str:
-    """A fresh signed double-submit value: `<nonce>.<mac>`."""
+def new_double_submit_token(secret_key: SecretStr, *, now: float | None = None) -> str:
+    """A fresh signed double-submit value: `<nonce>.<issued>.<mac>`."""
     nonce = new_session_token()
-    return f"{nonce}.{_mac(_DOUBLE_SUBMIT_LABEL, nonce, secret_key)}"
+    signed = f"{nonce}.{int(_clock() if now is None else now)}"
+    return f"{signed}.{_mac(_DOUBLE_SUBMIT_LABEL, signed, secret_key)}"
 
 
-def valid_double_submit_cookie(value: object, secret_key: SecretStr) -> bool:
-    if not isinstance(value, str) or len(value) != _MAX_TOKEN_LEN:
-        return False
-    nonce, sep, mac = value.partition(".")
-    if not sep or not _is_b64url(nonce, _NONCE_LEN) or not _is_b64url(mac, _MAC_LEN):
-        return False
-    return hmac.compare_digest(mac, _mac(_DOUBLE_SUBMIT_LABEL, nonce, secret_key))
+def _double_submit_age(value: object, secret_key: SecretStr, now: float) -> float | None:
+    """Age in seconds of a well formed, validly signed token; None otherwise."""
+    if not isinstance(value, str) or len(value) > _MAX_TOKEN_LEN or not value.isascii():
+        return None
+    parts = value.split(".")
+    if len(parts) != 3:
+        return None
+    nonce, issued, mac = parts
+    if not _is_b64url(nonce, _NONCE_LEN) or not _is_b64url(mac, _MAC_LEN):
+        return None
+    if not (0 < len(issued) <= _ISSUED_MAX_LEN and issued.isdigit()):
+        return None
+    if not hmac.compare_digest(mac, _mac(_DOUBLE_SUBMIT_LABEL, f"{nonce}.{issued}", secret_key)):
+        return None
+    return now - int(issued)
+
+
+def valid_double_submit_cookie(
+    value: object, secret_key: SecretStr, *, now: float | None = None
+) -> bool:
+    """True for a well formed, validly signed token issued at most
+    `DOUBLE_SUBMIT_MAX_AGE_SECONDS` ago (and not further in the future than the skew)."""
+    age = _double_submit_age(value, secret_key, _clock() if now is None else now)
+    return age is not None and -DOUBLE_SUBMIT_MAX_SKEW_SECONDS <= age <= (
+        DOUBLE_SUBMIT_MAX_AGE_SECONDS
+    )
+
+
+def csrf_cookie_name(https: bool) -> str:
+    """The double-submit cookie name: `__Host-dt_csrf` on https, `dt_csrf` on http."""
+    return HOST_CSRF_COOKIE_NAME if https else CSRF_COOKIE_NAME
 
 
 def _same(submitted: str | None, expected: str) -> bool:
@@ -109,13 +162,21 @@ def _same(submitted: str | None, expected: str) -> bool:
     return hmac.compare_digest(submitted.encode("ascii"), expected.encode("ascii"))
 
 
-def check_token(submitted: str | None, cookies: dict[str, str], secret_key: SecretStr) -> bool:
-    """True if `submitted` is valid for the request's cookies (see module docstring)."""
-    session_token = unsign_session_token(cookies.get(SESSION_COOKIE_NAME), secret_key)
+def check_token(
+    submitted: str | None,
+    cookies: Mapping[str, str],
+    secret_key: SecretStr,
+    *,
+    https: bool = False,
+    now: float | None = None,
+) -> bool:
+    """True if `submitted` is valid for the request's cookies (see module docstring). `https`
+    selects the cookie names (BASE_URL scheme)."""
+    session_token = unsign_session_token(session_cookie_value(cookies, https), secret_key)
     if session_token is not None:
         return _same(submitted, session_csrf_token(session_token, secret_key))
-    cookie = cookies.get(CSRF_COOKIE_NAME)
-    if not valid_double_submit_cookie(cookie, secret_key):
+    cookie = cookies.get(csrf_cookie_name(https))
+    if not valid_double_submit_cookie(cookie, secret_key, now=now):
         return False
     assert cookie is not None
     return _same(submitted, cookie)
@@ -123,20 +184,27 @@ def check_token(submitted: str | None, cookies: dict[str, str], secret_key: Secr
 
 def csrf_token_for(conn: HTTPConnection, response: Response, settings: Settings) -> str:
     """Token to embed in a form or HTMX header. Authenticated: the session-bound token.
-    Anonymous: the current valid `dt_csrf` cookie value, or a new one set on `response`
-    (HttpOnly, SameSite=Lax, Path=/, Secure when BASE_URL is https; browser-session lifetime)."""
+    Anonymous: the current double-submit cookie value while it is at most half the age limit
+    old, or a new one set on `response` (`__Host-dt_csrf` with Secure on https, `dt_csrf` on
+    http; HttpOnly, SameSite=Lax, Path=/, no Domain; browser-session lifetime)."""
     secret = settings.secret_key
-    session_token = unsign_session_token(conn.cookies.get(SESSION_COOKIE_NAME), secret)
+    https = is_https(settings)
+    session_token = unsign_session_token(session_cookie_value(conn.cookies, https), secret)
     if session_token is not None:
         return session_csrf_token(session_token, secret)
-    existing = conn.cookies.get(CSRF_COOKIE_NAME)
-    if valid_double_submit_cookie(existing, secret):
+    name = csrf_cookie_name(https)
+    existing = conn.cookies.get(name)
+    now = _clock()
+    age = _double_submit_age(existing, secret, now)
+    if age is not None and -DOUBLE_SUBMIT_MAX_SKEW_SECONDS <= age <= (
+        DOUBLE_SUBMIT_MAX_AGE_SECONDS // 2
+    ):
         assert existing is not None
         return existing
-    value = new_double_submit_token(secret)
+    value = new_double_submit_token(secret, now=now)
     base = session_cookie_settings(settings)
     response.set_cookie(
-        CSRF_COOKIE_NAME,
+        name,
         value,
         httponly=base.httponly,
         samesite=base.samesite,
@@ -255,7 +323,11 @@ class CSRFMiddleware:
             downstream_receive = replay
 
         if len(submitted or "") > _MAX_TOKEN_LEN or not check_token(
-            submitted, dict(conn.cookies), settings.secret_key
+            submitted,
+            conn.cookies,
+            settings.secret_key,
+            https=is_https(settings),
+            now=_clock(),
         ):
             await _forbidden(scope)(scope, receive, send)
             return

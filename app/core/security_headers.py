@@ -12,7 +12,8 @@ Exact values (set unconditionally; a route cannot loosen them):
 - Permissions-Policy: `camera=(), microphone=(), geolocation=()`
 - Strict-Transport-Security: `max-age=31536000`, only when BASE_URL is https. No
   `includeSubDomains`/`preload`: the operator's other subdomains are not ours to commit.
-- Cache-Control: `no-store` on every response to a request that carried a session cookie (R1-16),
+- Cache-Control: `no-store` on every response to a request that carried a session cookie (R1-16;
+  either name, `dt_session` or `__Host-dt_session`, R1-15),
   except `/static/*` and `/healthz`. A route's own Cache-Control is kept when it already contains
   `no-store` (equal or stricter); any other value (absent, `no-cache`, `public`, max-age) is
   replaced, since it is weaker for private data. Requests without the cookie are unchanged.
@@ -32,7 +33,7 @@ from starlette.datastructures import MutableHeaders
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.core.config import Settings
-from app.core.security import SESSION_COOKIE_NAME
+from app.core.security import SESSION_COOKIE_NAMES
 
 CONTENT_SECURITY_POLICY: Final = (
     "default-src 'self'; script-src 'self'; object-src 'none'; base-uri 'self'; "
@@ -58,7 +59,7 @@ def _needs_no_store(scope: Scope) -> bool:
     for name, value in scope.get("headers", []):
         if name == b"cookie":
             for part in value.decode("latin-1").split(";"):
-                if part.strip().split("=", 1)[0] == SESSION_COOKIE_NAME:
+                if part.strip().split("=", 1)[0] in SESSION_COOKIE_NAMES:
                     return True
     return False
 

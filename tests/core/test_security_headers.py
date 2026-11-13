@@ -209,6 +209,18 @@ def test_session_cookie_responses_are_no_store(
     assert response.headers.get_list("cache-control") == ["no-store"]
 
 
+@pytest.mark.parametrize("name", ["__Host-dt_session", "dt_session"])
+def test_both_session_cookie_names_are_no_store(cache_client: TestClient, name: str) -> None:
+    # R1-15: on https the session cookie is `__Host-dt_session` (old name read for one release).
+    response = cache_client.get("/t/page", cookies={name: "anything"})
+    assert response.headers.get_list("cache-control") == ["no-store"]
+
+
+def test_lookalike_cookie_names_unchanged(cache_client: TestClient) -> None:
+    cookies = {"__Host-dt_sessionx": "a", "x__Host-dt_session": "b", "dt_csrf": "c"}
+    assert "cache-control" not in cache_client.get("/t/page", cookies=cookies).headers
+
+
 def test_existing_no_store_is_kept(cache_client: TestClient) -> None:
     response = cache_client.get("/t/strict", cookies=SESSION)
     assert response.headers.get_list("cache-control") == ["private, no-store, max-age=0"]

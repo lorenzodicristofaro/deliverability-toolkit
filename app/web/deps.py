@@ -43,7 +43,7 @@ from app.core.permissions import (
     can,
     is_domain_restricted,
 )
-from app.core.security import SESSION_COOKIE_NAME
+from app.core.security import is_https, session_cookie_value
 from app.core.tenancy import TenantContext
 from app.models import User
 from app.repositories import (
@@ -152,7 +152,7 @@ def optional_session(request: Request, db: DbDep, settings: SettingsDep) -> Auth
 
 
 def _resolve(request: Request, db: DbDep, settings: SettingsDep) -> AuthSession | None:
-    cookie = request.cookies.get(SESSION_COOKIE_NAME)
+    cookie = session_cookie_value(request.cookies, is_https(settings))
     if cookie is None:
         return None
     resolved = resolve_session(
