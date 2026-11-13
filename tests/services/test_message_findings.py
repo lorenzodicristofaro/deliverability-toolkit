@@ -260,6 +260,16 @@ POSITIVE = [
         "".join("--b\r\nContent-Type: text/plain\r\n\r\nx\r\n" for _ in range(250)) + "--b--\r\n",
     ),
     ("MSG_NO_TEXT_PART", ("Content-Type",), ("Content-Type: text/html",), "<p>x</p>"),
+    (
+        "MSG_ALIGNMENT_LOWER_FIELD_NOT_USED",
+        ("Authentication-Results",),
+        (
+            "Authentication-Results: mx.example.org; spf=fail smtp.mailfrom=evil.example;"
+            " dmarc=fail header.from=example.com",
+            "Authentication-Results: mx.example.org; dkim=pass header.d=example.com",
+        ),
+        "x",
+    ),
 ]
 
 
@@ -308,6 +318,16 @@ NEGATIVE = [
     ("MSG_DMARC_NOT_PASS", (), ()),
     ("MSG_ALIGNMENT_FAIL", (), ()),
     ("MSG_ALIGNMENT_STATED_MISMATCH", (), ()),
+    # R1-22: the dkim pass is in a lower field but the top spf pass is aligned (computed pass).
+    (
+        "MSG_ALIGNMENT_LOWER_FIELD_NOT_USED",
+        ("Authentication-Results",),
+        (
+            "Authentication-Results: mx.example.net; spf=pass smtp.mailfrom=b@example.com;"
+            " dmarc=pass header.from=example.com",
+            "Authentication-Results: mx.example.net; dkim=pass header.d=example.com",
+        ),
+    ),
     (
         "MSG_UNVERIFIED_DKIM_SIGNATURE",
         (),
@@ -595,7 +615,7 @@ def test_long_header_derived_params_are_bounded() -> None:
 
 
 def test_codes_are_valid_unique_and_prefixed() -> None:
-    assert len(set(CODES)) == len(CODES) == 34
+    assert len(set(CODES)) == len(CODES) == 35
     assert all(CODE_RE.fullmatch(c) and c.startswith("MSG_") for c in CODES)
 
 
@@ -975,3 +995,57 @@ def test_oneclick_no_unsubscribe_header_unchanged() -> None:
     r = analyze_message(_oneclick_raw(()))
     assert codes(r) == {"MSG_LIST_UNSUBSCRIBE_MISSING"}
     assert r.unevaluated == ()
+
+
+# --- R1-22: a pass from a lower Authentication-Results field is not used -----------------------
+
+_R122_TOP_FAIL = (
+    "Authentication-Results: mx.example.org; spf=fail smtp.mailfrom=evil.example;"
+    " dmarc=fail header.from=example.com"
+)
+_R122_LOWER_DKIM = "Authentication-Results: mx.example.org; dkim=pass header.d=example.com"
+_R122_TOP_SPF_ESP = (
+    "Authentication-Results: mx.example.org; spf=pass smtp.mailfrom=b@bounce.example.net;"
+    " dmarc=pass header.from=example.com"
+)
+
+# (fields top first, codes that must appear, codes that must not appear, status)
+R122_FINDINGS = [
+    # Forged lower field (review scenario): the dkim pass is not used, status stays fail.
+    (
+        (_R122_TOP_FAIL, _R122_LOWER_DKIM),
+        {
+            "MSG_DMARC_NOT_PASS",
+            "MSG_SPF_NOT_PASS",
+            "MSG_ALIGNMENT_FAIL",
+            "MSG_ALIGNMENT_LOWER_FIELD_NOT_USED",
+        },
+        {"MSG_ALIGNMENT_STATED_MISMATCH", "MSG_ALIGNMENT_NOT_EVALUATED"},
+        "fail",
+    ),
+    # Legitimate receiver splitting spf and dkim over two fields (pinned cost of the minimal
+    # rule): computed fail, the stated dmarc=pass disagrees, and the new finding says why.
+    (
+        (_R122_TOP_SPF_ESP, _R122_LOWER_DKIM),
+        {
+            "MSG_ALIGNMENT_FAIL",
+            "MSG_ALIGNMENT_STATED_MISMATCH",
+            "MSG_ALIGNMENT_LOWER_FIELD_NOT_USED",
+        },
+        {"MSG_ALIGNMENT_NOT_EVALUATED", "MSG_DKIM_NOT_PASS", "MSG_AUTHRES_AUTHSERV_MISMATCH"},
+        "fail",
+    ),
+]
+
+
+@pytest.mark.parametrize(("fields", "present", "absent", "status"), R122_FINDINGS)
+def test_lower_field_pass_is_not_used(
+    fields: tuple[str, ...], present: set[str], absent: set[str], status: str
+) -> None:
+    r = run(("Authentication-Results",), fields)
+    assert present <= codes(r)
+    assert not absent & codes(r)
+    assert r.status == status and r.evaluated
+    f = _find(r, "MSG_ALIGNMENT_LOWER_FIELD_NOT_USED")
+    assert f.severity == "low"
+    assert f.params == {"methods": "dkim", "domains": "example.com"}

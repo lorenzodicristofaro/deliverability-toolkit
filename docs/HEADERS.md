@@ -91,6 +91,21 @@ size check happens while streaming, so an oversized body is never buffered.
   Other dkim results without a usable `header.d` stay `unknown`. The spf pair uses the first spf
   result that carries `smtp.mailfrom` (one for `smtp.helo` listed before it is skipped); only when
   none does, it falls back to Return-Path with no stated result.
+- Lower `Authentication-Results` fields (R1-22, minimal rule, maintainer decision 2026-11-13):
+  receivers prepend their field (RFC 8601 section 4.1), so the topmost field is the one most
+  likely written by the last receiver; a field below it may have been written by the sender.
+  When the topmost field does not carry a method, the result still comes from the topmost field
+  that does, but a pair whose stated result comes from a field other than the topmost one
+  (`authres_index > 0`) gets the reason `lower_authres_field` and never makes the computed
+  DMARC result (RFC 7489 section 3.1 alignment) `pass`. Its state stays visible. When that
+  exclusion leaves the computed result other than `pass`, `MSG_ALIGNMENT_LOWER_FIELD_NOT_USED`
+  says so. Limits: trust is not decided (RFC 8601 section 2.5 and 4.1 leave it to the
+  consumer, which knows its own authserv-id) and no signature is verified, so a forged
+  topmost field is not detected either. A legitimate receiver that splits its results over
+  several fields (for example spf in one field and dkim in the next) is treated the same way:
+  its dkim pass from the second field is not used, which can give a computed `fail`,
+  `MSG_ALIGNMENT_FAIL` and `MSG_ALIGNMENT_STATED_MISMATCH` although the receiver stated
+  `dmarc=pass`. A per-hop view is not part of this rule.
 
 ## Findings
 
@@ -134,6 +149,7 @@ taken from the docstring of `app/services/message_findings.py`.
 | MSG_PARSER_LIMIT | medium | input rejected or capped (error-class) |
 | MSG_AUTHRES_UNPARSED | medium | an Authentication-Results field has no authserv-id or an error-severity parse issue; parameters are issue codes only (error-class) |
 | MSG_ALIGNMENT_NOT_EVALUATED | medium | computed DMARC alignment is not evaluated although a field is present; parameters are pair reason codes only (error-class) |
+| MSG_ALIGNMENT_LOWER_FIELD_NOT_USED | low | an aligned pass stated in a lower Authentication-Results field was not used and the computed DMARC result is not pass; parameters are the methods and identifier domains |
 
 ## Permission `message.analyze`
 
