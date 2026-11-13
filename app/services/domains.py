@@ -77,10 +77,23 @@ class DomainView:
     name: str
     display_name: str
     created_at: datetime
+    # Set only by `rename` (R1-31): ESP host values moved to the new name, and host values left
+    # under another name because they did not satisfy the host rule for the old one.
+    esp_hosts_rewritten: int = 0
+    esp_hosts_unmatched: int = 0
 
     @classmethod
-    def from_record(cls, record: DomainRecord) -> DomainView:
-        return cls(record.id, record.name, to_display_name(record.name), record.created_at)
+    def from_record(
+        cls, record: DomainRecord, *, esp_hosts_rewritten: int = 0, esp_hosts_unmatched: int = 0
+    ) -> DomainView:
+        return cls(
+            record.id,
+            record.name,
+            to_display_name(record.name),
+            record.created_at,
+            esp_hosts_rewritten,
+            esp_hosts_unmatched,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,6 +118,7 @@ class DomainService:
         repos = repo_for(ctx, db)
         self._domains = repos.domains
         self._access = repos.domain_access
+        self._esps = repos.domain_esps
         self._memberships = repos.memberships
         self._principal = principal
 
@@ -194,8 +208,12 @@ class DomainService:
         if row is None:  # deleted concurrently
             raise NotFound
         record = DomainRecord.from_model(row)
+        # Same transaction as the rename: both commit together or neither does.
+        hosts = self._esps.rewrite_host_suffix(record.id, current.name, record.name)
         self._db.commit()
-        return DomainView.from_record(record)
+        return DomainView.from_record(
+            record, esp_hosts_rewritten=hosts.rewritten, esp_hosts_unmatched=hosts.unmatched
+        )
 
     def delete(self, domain_id: object) -> None:
         current = self._visible(domain_id)

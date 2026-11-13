@@ -634,3 +634,117 @@ def test_run_finding_keys_exist_in_both_languages(lang: str) -> None:
         for part in ("title", "detail", "remediation"):
             key = f"finding.{code}.{part}"
             assert t(key, lang) != key
+
+
+# --- R1-31: renaming the domain rewrites the ESP hosts -------------------------------------------
+
+
+class _RecordingResolver:
+    """Every name is NXDOMAIN and every question is recorded: no network."""
+
+    identity = "recording"
+
+    def __init__(self) -> None:
+        self.names: list[str] = []
+
+    async def resolve(self, question: DnsQuestion) -> DnsResult:
+        self.names.append(question.name)
+        return DnsResult(question=question, state=ResultState.nxdomain, rcode=3)
+
+
+def _rename_service(world: World) -> Any:
+    from app.services.domains import DomainService
+
+    return DomainService(world.db, _ctx(world), world.principal("owner"))
+
+
+def _set_hosts(world: World, domain: str, esp: str, rp: str | None, tr: str | None) -> None:
+    """Store hosts as legacy data too: straight into the row, bypassing the repository rule."""
+    repo = DomainEspRepository(_ctx(world), world.db)
+    repo.add(world.domains[domain], esp)
+    row = world.db.scalars(
+        select(DomainEsp).where(
+            DomainEsp.domain_id == world.domains[domain], DomainEsp.esp_id == esp
+        )
+    ).one()
+    row.return_path_host, row.tracking_host = rp, tr
+    world.db.commit()
+
+
+REWRITE_CASES = [
+    # (return_path_host, tracking_host, expected hosts, rewritten, unmatched)
+    ("a.example", None, ("renamed.example", None), 1, 0),  # apex
+    ("em1.a.example", "go.a.example", ("em1.renamed.example", "go.renamed.example"), 2, 0),
+    ("x.y.a.example", None, ("x.y.renamed.example", None), 1, 0),  # deep subdomain
+    (None, None, (None, None), 0, 0),  # nothing assigned
+    ("legacy.other.example", "go.a.example", ("legacy.other.example", "go.renamed.example"), 1, 1),
+    ("xa.example", None, ("xa.example", None), 0, 1),  # shares a suffix, not a label boundary
+    ("a.example.evil.example", None, ("a.example.evil.example", None), 0, 1),
+]
+
+
+@pytest.mark.parametrize(("rp", "tr", "expected", "rewritten", "unmatched"), REWRITE_CASES)
+def test_rename_rewrites_hosts(
+    world: World,
+    rp: str | None,
+    tr: str | None,
+    expected: tuple[str | None, str | None],
+    rewritten: int,
+    unmatched: int,
+) -> None:
+    _set_hosts(world, "a", ESP, rp, tr)
+    view = _rename_service(world).rename(world.domains["a"], "renamed.example")
+    assert (view.esp_hosts_rewritten, view.esp_hosts_unmatched) == (rewritten, unmatched)
+    assert [r[3:] for r in world.rows()] == [expected]
+
+
+def test_rename_rewrites_every_esp_and_leaves_others_untouched(world: World) -> None:
+    _set_hosts(world, "a", ESP, "em1.a.example", "a.example")
+    _set_hosts(world, "a", OTHER, "bounce.a.example", None)
+    _set_hosts(world, "a2", ESP, "em1.a2.example", None)
+    world.b_service().assign(world.domains["b"], ESP, return_path_host=SECRET_HOST)
+    view = _rename_service(world).rename(world.domains["a"], "renamed.example")
+    assert view.esp_hosts_rewritten == 3
+    by_domain = {(r[1], r[2]): r[3:] for r in world.rows()}
+    a, a2, b = world.domains["a"], world.domains["a2"], world.domains["b"]
+    assert by_domain[(a, ESP)] == ("em1.renamed.example", "renamed.example")
+    assert by_domain[(a, OTHER)] == ("bounce.renamed.example", None)
+    assert by_domain[(a2, ESP)] == ("em1.a2.example", None)
+    assert by_domain[(b, ESP)] == (SECRET_HOST, None)
+
+
+def test_repository_rewrite_ignores_a_foreign_domain(world: World) -> None:
+    world.b_service().assign(world.domains["b"], ESP, return_path_host=SECRET_HOST)
+    repo = DomainEspRepository(_ctx(world), world.db)
+    result = repo.rewrite_host_suffix(world.domains["b"], "tenantb-secret.example", "x.example")
+    assert (result.rewritten, result.unmatched) == (0, 0)
+    assert repo.rewrite_host_suffix("abc", "a.example", "x.example").rewritten == 0
+    assert [r[3] for r in world.rows()] == [SECRET_HOST]
+
+
+def test_rename_conflict_leaves_hosts_unchanged(world: World) -> None:
+    from app.services.domains import Conflict
+
+    _set_hosts(world, "a", ESP, "em1.a.example", "go.a.example")
+    with pytest.raises(Conflict):
+        _rename_service(world).rename(world.domains["a"], "a2.example")
+    assert [r[3:] for r in world.rows()] == [("em1.a.example", "go.a.example")]
+
+
+def test_rolled_back_rename_leaves_hosts_unchanged(world: World) -> None:
+    _set_hosts(world, "a", ESP, "em1.a.example", None)
+    repo = DomainEspRepository(_ctx(world), world.db)
+    assert repo.rewrite_host_suffix(world.domains["a"], "a.example", "r.example").rewritten == 1
+    world.db.rollback()  # the rename transaction did not commit
+    assert [r[3:] for r in world.rows()] == [("em1.a.example", None)]
+
+
+async def test_esp_check_after_rename_never_queries_the_old_name(world: World) -> None:
+    _set_hosts(world, "a", ESP, "em1.a.example", "go.a.example")
+    _rename_service(world).rename(world.domains["a"], "renamed.example")
+    run = resolve_esp_run(_ctx(world), world.db, world.domains["a"], lambda: PROFILES)
+    resolver = _RecordingResolver()
+    await run.check.run(CheckContext(resolver=resolver), Target(domain="renamed.example"))
+    assert resolver.names
+    assert not [n for n in resolver.names if n == "a.example" or n.endswith(".a.example")]
+    assert "em1.renamed.example" in resolver.names or "go.renamed.example" in resolver.names

@@ -213,6 +213,8 @@
   "domain.form.name": "Nome di dominio",
   "domain.mixed_script": "Attenzione: questo nome mescola sistemi di scrittura diversi e potrebbe imitare un altro dominio.",
   "domain.rename": "Rinomina",
+  "domain.rename.esp_hosts_rewritten": "Nomi host ESP spostati sul nuovo nome di dominio: {count}. Controlla i relativi record DNS.",
+  "domain.rename.esp_hosts_unmatched": "Nomi host ESP lasciati invariati perche non erano sotto il vecchio nome di dominio: {count}. Verificali nella scheda ESP.",
   "domain.rename.submit": "Salva",
   "esp.amazon_ses.per_identity_dkim_selectors": "Easy DKIM richiede di pubblicare record CNAME i cui nomi esatti sono indicati nella console SES per la tua identità. I loro valori sono un token DKIM seguito da un host che varia in base alla Regione AWS e all'identità. Questo profilo non può conoscere quei nomi in anticipo, quindi DKIM non viene controllato automaticamente: copia i record esatti dalla console SES.",
   "esp.amazon_ses.region_specific_records": "I record DNS richiesti da SES cambiano per ogni Regione AWS. Se invii da più Regioni, ognuna richiede una propria identità e propri record.",
