@@ -82,3 +82,12 @@ claude            # in the repo root
 /agents           # check that coder, qa-reviewer and pm are listed
 /gm milestone M0
 ```
+
+## 7. Exposing the app (Docker Compose)
+
+`compose.yaml` publishes port 8000 as `"8000:8000"`, on every host interface, and the app
+serves plain HTTP there: no TLS. Put it behind a TLS-terminating reverse proxy for anything
+beyond a trusted local machine. If a proxy on the same host fronts the app, you can publish
+the port on loopback only by changing the mapping to `127.0.0.1:8000:8000` (an option, not
+the default). Trusted-proxy handling is not implemented yet (TODO.md); do not rely on any
+particular proxy header behaviour.

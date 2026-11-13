@@ -104,3 +104,10 @@ def test_forwarded_defaults_match_settings_defaults() -> None:
         assert env[name] == f"${{{name}:-{expected}}}", name
     for name in sorted(_REQUIRED_NO_DEFAULT):
         assert env[name] == f"${{{name}:-}}", name
+
+
+def test_app_container_hardening() -> None:
+    app = COMPOSE["services"]["app"]
+    assert app["cap_drop"] == ["ALL"]
+    assert "no-new-privileges:true" in app["security_opt"]
+    assert app["init"] is True

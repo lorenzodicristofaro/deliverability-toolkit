@@ -45,6 +45,10 @@ services:
       start_period: 10s
       retries: 3
     restart: unless-stopped
+    cap_drop: [ALL]
+    security_opt:
+      - "no-new-privileges:true"
+    init: true
 
   postgres:
     profiles: ["postgres"]
