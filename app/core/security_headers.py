@@ -12,11 +12,12 @@ Exact values (set unconditionally; a route cannot loosen them):
 - Permissions-Policy: `camera=(), microphone=(), geolocation=()`
 - Strict-Transport-Security: `max-age=31536000`, only when BASE_URL is https. No
   `includeSubDomains`/`preload`: the operator's other subdomains are not ours to commit.
-- Cache-Control: `no-store` on every response to a request that carried a session cookie (R1-16;
-  either name, `dt_session` or `__Host-dt_session`, R1-15),
-  except `/static/*` and `/healthz`. A route's own Cache-Control is kept when it already contains
-  `no-store` (equal or stricter); any other value (absent, `no-cache`, `public`, max-age) is
-  replaced, since it is weaker for private data. Requests without the cookie are unchanged.
+- Cache-Control: `no-store` on every response (R1-32, regardless of any cookie), except paths under
+  `/static/` and exactly `/healthz` (exact match: `/healthzfoo`, `/healthz/` and `/healthz/x`
+  get no-store; `/static` without the trailing slash is not under `/static/` and gets it too).
+  A route's own Cache-Control is kept when it already contains `no-store` (equal or stricter);
+  any other value (absent, `no-cache`, `public`, max-age) is replaced, since it is weaker for
+  private data.
 
 The tests assert that these exact values are sent; they make no claim about how a given browser
 enforces them. BASE_URL is read from `app.state.settings` (set by the lifespan); when settings are
@@ -33,7 +34,6 @@ from starlette.datastructures import MutableHeaders
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.core.config import Settings
-from app.core.security import SESSION_COOKIE_NAMES
 
 CONTENT_SECURITY_POLICY: Final = (
     "default-src 'self'; script-src 'self'; object-src 'none'; base-uri 'self'; "
@@ -49,19 +49,13 @@ SECURITY_HEADERS: Final[tuple[tuple[str, str], ...]] = (
     ("X-Frame-Options", "DENY"),
     ("Permissions-Policy", "camera=(), microphone=(), geolocation=()"),
 )
-_NO_STORE_EXEMPT: Final = ("/static/", "/healthz")
+_NO_STORE_EXEMPT_PREFIX: Final = "/static/"
+_NO_STORE_EXEMPT_PATH: Final = "/healthz"
 
 
 def _needs_no_store(scope: Scope) -> bool:
     path = str(scope.get("path", ""))
-    if path == "/static" or path.startswith(_NO_STORE_EXEMPT):
-        return False
-    for name, value in scope.get("headers", []):
-        if name == b"cookie":
-            for part in value.decode("latin-1").split(";"):
-                if part.strip().split("=", 1)[0] in SESSION_COOKIE_NAMES:
-                    return True
-    return False
+    return path != _NO_STORE_EXEMPT_PATH and not path.startswith(_NO_STORE_EXEMPT_PREFIX)
 
 
 def _https(scope: Scope) -> bool:
