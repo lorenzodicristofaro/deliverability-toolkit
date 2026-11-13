@@ -215,7 +215,7 @@ Tickets (docs/tickets/):
 - [ ] R1-26 INFRA-04 pin app image bases by digest, rebuild check (sonnet; digests need network)
 - [ ] R1-27 INFRA-05 run Docker jobs for app/ and locales/ changes (sonnet)
 - [ ] R1-28 INFRA-06 migration race between replicas (sonnet)
-- [ ] R1-29 INFRA-07 app container hardening (sonnet; related to the safe_regex orphan item below; depends R1-04)
+- [x] R1-29 INFRA-07 app container hardening (sonnet; related to the safe_regex orphan item below; depends R1-04)
 - [ ] R1-30 AUTH-04 TRUSTED_PROXIES setting: client IP from X-Forwarded-For/Forwarded only for a trusted peer; login throttle, setup wizard, .env.example, compose (opus; depends R1-03, R1-04); covers the item "Trusted-proxy setting for the client IP"
 - [x] R1-31 AUTH-05 domain rename rewrites the ESP host suffixes in the same transaction, user notice en+it (sonnet)
 - [x] R1-32 AUTH-11 follow-up: Cache-Control no-store on every response except /static/ and exactly /healthz, regardless of the cookie (sonnet; depends R1-16)

@@ -14,7 +14,7 @@ Acceptance criteria:
 - Install docs state that port 8000 is plain HTTP and should sit behind a TLS proxy, and show the `127.0.0.1:8000:8000` form for that case (describe it as an option; do not claim proxy header behaviour, the trusted-proxy setting is TODO.md:318).
 - Static test pins the three keys; existing compose tests green. ruff, mypy, relevant tests green.
 New i18n keys: none
-Status: todo
+Status: done (QA APPROVE, merged 77a7e34, branch 3d74abf; read_only left out, unverified without Docker; runtime proof is the CI compose smoke)
 
 ## Review details (copied from the code review of 2026-11-12, dev 06869fb)
 - Location: `compose.yaml:10-37` (app) compared with `compose.yaml:70-72` (unbound: `cap_drop: [ALL]`, `no-new-privileges`, `read_only`), `compose.yaml:12-13` (`"8000:8000"`).
