@@ -1,0 +1,52 @@
+# Invented lists for engine tests only (M7-03). Zones, codes and policies are fake; real lists
+# are seeded in seeds/dnsbl.yaml (M7-04).
+lists:
+  - id: ip-both
+    name: Example IP list (v4 and v6)
+    zone: bl.example.com
+    kind: ip
+    ipv4: true
+    ipv6: true
+    return_codes:
+      - {code: 127.0.0.2, meaning: listed, category: spam_source}
+      - {code: 127.0.0.3, meaning: listed, category: exploited_host}
+      - {code: 127.0.0.10, meaning: info, category: dynamic_range}
+      - {code: 127.0.0.254, meaning: refused}
+    refused_networks: [127.255.255.0/24]
+    usage_policy: Example free-text usage policy for tests.
+    verified_on: 2026-01-01
+    sources: [https://docs.example.com/bl]
+    status: verified
+  - id: ip-v4only
+    name: Example IPv4-only list
+    zone: v4.example.net
+    kind: ip
+    ipv4: true
+    ipv6: false
+    return_codes:
+      - {code: 127.0.0.2, meaning: listed, category: spam_source}
+    nodata_is_clean: true
+    verified_on: 2026-01-01
+    sources: [https://docs.example.net/v4]
+    status: verified
+  - id: dom
+    name: Example domain list
+    zone: dbl.example.net
+    kind: domain
+    return_codes:
+      - {code: 127.0.1.2, meaning: listed, category: spam_domain}
+    verified_on: 2026-01-01
+    sources: [https://docs.example.net/dbl]
+    status: verified
+  - id: ip-unverified
+    name: Example unverified list
+    zone: unverified.example.com
+    kind: ip
+    ipv4: true
+    ipv6: false
+    return_codes:
+      - {code: 127.0.0.2, meaning: listed, category: spam_source}
+    verified_on: 2026-01-01
+    sources: [https://docs.example.com/unverified]
+    status: unverified
+    unverified_fields: [return_codes]
