@@ -207,8 +207,8 @@ Tickets (docs/tickets/):
 - [ ] R1-18 DNS-06 drop the 255-octet SPF_RECORD_TOO_LONG info branch (opus; in-review)
 - [x] R1-19 DNS-07 empty reply without RA is an error (sonnet; confidence low) — maintainer 2026-11-12: precautionary rule (a)
 - [x] R1-20 PARSE-04 `dtk check` escapes control characters (sonnet)
-- [ ] R1-21 PARSE-05 Received from_ip prefers the TCP-info comment (opus)
-- [ ] R1-22 PARSE-06 forged lower Authentication-Results field (opus; depends R1-09; in-progress; decision: option (c), maintainer agreed 2026-11-13)
+- [x] R1-21 PARSE-05 Received from_ip prefers the TCP-info comment (opus; merged a349692, QA APPROVE round 2)
+- [x] R1-22 PARSE-06 forged lower Authentication-Results field (opus; depends R1-09; option (c), maintainer agreed 2026-11-13; merged 854d34e, QA APPROVE)
 - [x] R1-23 PARSE-07 message analyzer One-Click via the List-Unsubscribe parser (sonnet)
 - [x] R1-24 PARSE-08 To/Cc counts from raw values (sonnet)
 - [ ] R1-25 INFRA-03 postgres compose profile: URL, retry, CI smoke (sonnet; depends R1-04)
@@ -221,6 +221,8 @@ Tickets (docs/tickets/):
 - [x] R1-32 AUTH-11 follow-up: Cache-Control no-store on every response except /static/ and exactly /healthz, regardless of the cookie (sonnet; depends R1-16)
 - [x] R1-33 INFRA-01/02 push policy docs as enforced, workflow permissions test, settings.json deny rules (sonnet; in-review; settings.json and any .github/.claude change pushed only after maintainer approval)
 Follow-ups:
+- R1-21 follow-up (low, needs real MTA Received samples): `helo= [x]` with a space and `(HELO [x])` without "=" are not recognised as labelled, so `from [8.8.8.8] (helo= [10.1.2.3])` gives from_ip 10.1.2.3; consider skipping spaces before "[". "Prefer the comment literal" and helo=/ehlo= handling rest on RFC 5321 4.4 reasoning only, not on real samples.
+- R1-22 follow-up (for F-01): MSG_ALIGNMENT_FAIL text says "Neither the SPF nor a DKIM identifier is aligned" while a lower-field dkim pair shows aligned (message_findings.py:404-415); `_topmost_results` (message_findings.py:325) still reads MSG_DKIM_NOT_PASS/MSG_SPF_NOT_PASS results from lower fields (consistent with option (c), can only add a warning).
 - R1-12 follow-up: comment at app/web/templating.py:37 and test docstring tests/web/test_default_error_bodies.py:210 miscompute the 4-byte worst case (8192 fits the browser 3-byte maxlength case, ~6.6 KB); test_framework_validation_error_has_no_input_for_api_clients (line 67) already passed before the fix.
 - R1-13 follow-up: AST guard tests/web/test_async_handlers_guard.py:22-37 only knows listed method names and 5 modules; glob app/web and flag db/service/repo_for receivers. Nit: stray comment app/web/rules.py:744-746. Also app/api/v1/content.py:170 sync db.rollback() (existing item below, one line).
 - R1-14 follow-up: the purge runs only at startup; a long-running process accumulates rows until the M7 scheduler calls purge_sessions with a policy; no test sends a purged cookie.

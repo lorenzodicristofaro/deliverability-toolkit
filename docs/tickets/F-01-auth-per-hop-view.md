@@ -24,3 +24,6 @@ Acceptance criteria:
 - No network in tests. ruff, mypy, relevant tests green; API endpoint tenancy/permission test if the schema touches an endpoint with auth.
 New i18n keys (en + it): hop view title and column labels, "stated by {authserv_id}, not verifiable", finding MSG_AUTH_BROKE_AFTER_HOP title/detail (final key names set by the coder)
 Status: todo
+Inputs from R1-22 QA (address in this ticket):
+- MSG_ALIGNMENT_FAIL text says "Neither the SPF nor a DKIM identifier is aligned" while a lower-field dkim pair shows aligned (app/services/message_findings.py:404-415).
+- `_topmost_results` (app/services/message_findings.py:325) still reads per-method results (MSG_DKIM_NOT_PASS / MSG_SPF_NOT_PASS) from lower fields; consistent with option (c), it can only add a warning.

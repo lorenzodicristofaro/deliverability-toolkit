@@ -15,7 +15,10 @@ Acceptance criteria:
 - Module docstring updated. Note in the summary that "prefer the comment" has not been validated against real MTA samples (none in the corpus).
 - No network. ruff, mypy, relevant tests green.
 New i18n keys: none
-Status: todo
+Status: done (QA APPROVE round 2; merged a349692, branch 30a1b0c; round 1 CHANGES REQUESTED for a helo=[...] comment literal picked as from_ip)
+Notes:
+- "Prefer the comment literal" and the helo=/ehlo= handling were not checked against real MTA Received samples (RFC 5321 4.4 reasoning only).
+- Follow-up (low, needs real samples): `helo= [x]` with a space and `(HELO [x])` without "=" are not recognised as labelled, so `from [8.8.8.8] (helo= [10.1.2.3])` gives 10.1.2.3; consider skipping spaces before "[".
 
 ## Review details (copied from the code review of 2026-11-12, dev 06869fb)
 - Location: `app/parsers/received.py:437-445` (sources are searched in the order: `from` value, then its comments; the first literal wins).
