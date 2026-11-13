@@ -91,3 +91,18 @@ beyond a trusted local machine. If a proxy on the same host fronts the app, you 
 the port on loopback only by changing the mapping to `127.0.0.1:8000:8000` (an option, not
 the default). Trusted-proxy handling is not implemented yet (TODO.md); do not rely on any
 particular proxy header behaviour.
+
+## 8. PostgreSQL instead of SQLite (Docker Compose)
+
+`docker compose --profile postgres up -d` only starts the database. The app keeps using SQLite
+until you set `DATABASE_URL` in `.env` (see `.env.example`):
+
+```
+POSTGRES_PASSWORD=<your password>
+DATABASE_URL=postgresql://deliverability:<password>@postgres:5432/deliverability
+```
+
+`<password>` is the same `POSTGRES_PASSWORD`, percent-encoded if it contains special characters
+(`@ : / % ? #`). The app may restart a few times on first start while PostgreSQL initialises
+(`restart: unless-stopped`); this is expected. Check with
+`docker compose exec postgres psql -U deliverability -c '\dt'` that tables exist.

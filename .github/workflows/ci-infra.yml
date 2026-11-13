@@ -124,12 +124,22 @@ jobs:
         run: docker compose up -d --build --wait --wait-timeout 120
       - name: Check /healthz
         run: curl --fail --silent --show-error --max-time 10 http://127.0.0.1:8000/healthz
+      - name: Compose down (default profile)
+        run: docker compose down -v
+      # Second smoke: postgres profile, the app pointed at it. Throwaway literals, no secrets.
+      - name: Compose up with postgres profile and wait for healthy
+        env:
+          POSTGRES_PASSWORD: ci-throwaway-pg
+          DATABASE_URL: postgresql://deliverability:ci-throwaway-pg@postgres:5432/deliverability
+        run: docker compose --profile postgres up -d --build --wait --wait-timeout 180
+      - name: Check /healthz (postgres profile)
+        run: curl --fail --silent --show-error --max-time 10 http://127.0.0.1:8000/healthz
       - name: Show logs on failure
         if: failure()
-        run: docker compose logs --no-color
+        run: docker compose --profile postgres logs --no-color
       - name: Compose down
         if: always()
-        run: docker compose down -v
+        run: docker compose --profile postgres down -v
 
   # Unbound profile against the real image: DNSSEC (AD, SERVFAIL on bad signature), NXDOMAIN,
   # REFUSED from outside the subnet, DNSBL test entry, KSK-2024 anchor, root.key persistence,

@@ -111,3 +111,30 @@ def test_app_container_hardening() -> None:
     assert app["cap_drop"] == ["ALL"]
     assert "no-new-privileges:true" in app["security_opt"]
     assert app["init"] is True
+
+
+# --- R1-25: the postgres profile documents the DATABASE_URL that points the app at it ---
+
+
+def _compose_default(name: str) -> str:
+    value = COMPOSE["services"]["postgres"]["environment"][name]
+    match = re.fullmatch(r"\$\{" + name + r":-([^}]+)\}", value)
+    assert match, f"{name} has no non-empty default in compose.yaml"
+    return match.group(1)
+
+
+def test_env_example_documents_postgres_url() -> None:
+    user = _compose_default("POSTGRES_USER")
+    db = _compose_default("POSTGRES_DB")
+    text = (ROOT / ".env.example").read_text()
+    expected = f"#DATABASE_URL=postgresql://{user}:<password>@postgres:5432/{db}"
+    assert expected in text
+    assert "percent-encoded" in text
+
+
+def test_compose_header_documents_postgres_url() -> None:
+    header = (ROOT / "compose.yaml").read_text().split("services:", 1)[0]
+    user = _compose_default("POSTGRES_USER")
+    db = _compose_default("POSTGRES_DB")
+    assert f"postgresql://{user}:<password>@postgres:5432/{db}" in header
+    assert "restart: unless-stopped" in header
