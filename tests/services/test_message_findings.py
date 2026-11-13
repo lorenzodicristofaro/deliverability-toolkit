@@ -1102,30 +1102,103 @@ def test_alignment_fail_text_holds_when_only_a_lower_field_pair_is_aligned() -> 
     assert "sotto quello più in alto non vengono usati" in IT["finding.MSG_ALIGNMENT_FAIL.detail"]
 
 
-_TOP_SPF_ONLY = "Authentication-Results: mx.example.org; spf=pass smtp.mailfrom=b@example.com"
-_LOWER_DKIM_FAIL = "Authentication-Results: mx.example.org; dkim=fail header.d=x.example"
+_AR_TOP = "Authentication-Results: mx.example.org; "
+_TOP_SPF_ONLY = _AR_TOP + "spf=pass smtp.mailfrom=b@example.com"
+_TOP_DKIM_ONLY = _AR_TOP + "dkim=pass header.d=example.com"
+_TOP_SPF_DKIM_FAIL = _TOP_SPF_ONLY + "; dkim=fail header.d=example.com"
+_TOP_BOTH_PASS = _TOP_SPF_ONLY + "; dkim=pass header.d=example.com"
+_LOWER_SPF_PASS = _TOP_SPF_ONLY
+_LOWER_DKIM_FAIL = _AR_TOP + "dkim=fail header.d=x.example"
+_LOWER_BOTH_FAIL = _AR_TOP + "spf=fail smtp.mailfrom=b@example.com; dkim=fail header.d=example.com"
+_TOP_NO_AUTHSERV_SPF_FAIL = "Authentication-Results: spf=fail smtp.mailfrom=b@example.com"
+_TOP_BROKEN = _AR_TOP + "spf"
 
-# _topmost_results is display only (GM decision): it reads the topmost field that states the
-# method, which may be a lower one. (fields top first, dkim finding present?, severity)
-TOPMOST_RESULTS_PIN = [
-    ((_TOP_SPF_ONLY, _LOWER_DKIM_FAIL), True, "high"),
-    ((_TOP_SPF_ONLY, _R122_LOWER_DKIM), False, None),
-    ((_TOP_SPF_ONLY,), True, "low"),
+# F-01-03 (maintainer decision 2026-11-13): MSG_SPF_NOT_PASS / MSG_DKIM_NOT_PASS read only the
+# topmost Authentication-Results field; a lower field never suppresses, adds or replaces them.
+# (fields top first, expected spf, expected dkim, MSG_AUTHRES_UNPARSED?, computed_dmarc)
+# where an expectation is None (no finding) or (severity, "not_stated" | stated result).
+TOPMOST_ONLY = [
+    pytest.param((_TOP_SPF_ONLY,), None, ("low", "not_stated"), False, "pass", id="top-only"),
+    pytest.param(
+        (_TOP_SPF_ONLY, _R122_LOWER_DKIM),
+        None,
+        ("low", "not_stated"),
+        False,
+        "pass",
+        id="top-not-stating-dkim-lower-pass",
+    ),
+    pytest.param(
+        (_TOP_DKIM_ONLY, _LOWER_SPF_PASS),
+        ("low", "not_stated"),
+        None,
+        False,
+        "pass",
+        id="top-not-stating-spf-lower-pass",
+    ),
+    pytest.param(
+        (_TOP_SPF_DKIM_FAIL, _R122_LOWER_DKIM),
+        None,
+        ("high", "fail"),
+        False,
+        "pass",
+        id="top-dkim-fail-lower-pass",
+    ),
+    pytest.param(
+        (_TOP_SPF_ONLY, _LOWER_DKIM_FAIL),
+        None,
+        ("low", "not_stated"),
+        False,
+        "pass",
+        id="top-not-stating-dkim-lower-fail",
+    ),
+    pytest.param(
+        (_TOP_BOTH_PASS, _LOWER_BOTH_FAIL), None, None, False, "pass", id="top-pass-lower-fail"
+    ),
+    pytest.param(
+        (_TOP_NO_AUTHSERV_SPF_FAIL, _TOP_BOTH_PASS),
+        ("high", "fail"),
+        ("low", "not_stated"),
+        True,
+        "fail",
+        id="top-missing-authserv-id",
+    ),
+    pytest.param(
+        (_TOP_BROKEN, _TOP_BOTH_PASS),
+        ("low", "not_stated"),
+        ("low", "not_stated"),
+        True,
+        "fail",
+        id="top-unparsed",
+    ),
 ]
 
 
-@pytest.mark.parametrize(("fields", "present", "severity"), TOPMOST_RESULTS_PIN)
-def test_topmost_results_reads_lower_fields_for_not_pass_only(
-    fields: tuple[str, ...], present: bool, severity: str | None
+@pytest.mark.parametrize(("fields", "spf", "dkim", "unparsed", "computed"), TOPMOST_ONLY)
+def test_per_method_findings_read_only_the_topmost_field(
+    fields: tuple[str, ...],
+    spf: tuple[str, str] | None,
+    dkim: tuple[str, str] | None,
+    unparsed: bool,
+    computed: str,
 ) -> None:
     raw = msg(("Authentication-Results",), fields)
     r = analyze_message(raw)
-    assert ("MSG_DKIM_NOT_PASS" in codes(r)) is present
-    if present:
-        assert _find(r, "MSG_DKIM_NOT_PASS").severity == severity
-    # The verdict never takes the lower field: spf on top is aligned, so computed is pass.
-    assert analyze_alignment(parse_header_block(raw)).computed_dmarc == "pass"
-    assert "MSG_ALIGNMENT_FAIL" not in codes(r)
+    for code, expected in (("MSG_SPF_NOT_PASS", spf), ("MSG_DKIM_NOT_PASS", dkim)):
+        assert (code in codes(r)) is (expected is not None), code
+        if expected is None:
+            continue
+        severity, stated = expected
+        f = _find(r, code)
+        assert f.severity == severity
+        if stated == "not_stated":
+            assert f.detail_key == f"finding.{code}.detail_not_stated"
+            assert not f.params
+        else:
+            assert f.detail_key == f"finding.{code}.detail"
+            assert f.params == {"result": stated}
+    assert ("MSG_AUTHRES_UNPARSED" in codes(r)) is unparsed
+    # The verdict is unchanged by F-01-03: it applies its own topmost-field rule.
+    assert analyze_alignment(parse_header_block(raw)).computed_dmarc == computed
 
 
 def test_auth_broke_after_hop_params_and_severity() -> None:
