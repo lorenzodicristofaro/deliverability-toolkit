@@ -15,7 +15,6 @@ from app.checks.spf import (
     DNS_ANSWER_GUIDELINE,
     MAX_AFTER_ALL_EVIDENCE,
     NEAR_LOOKUP_THRESHOLD,
-    TXT_STRING_MAX,
     SpfCheck,
 )
 from app.checks.spf_tree import LOOKUP_LIMIT, MX_ADDRESS_LIMIT
@@ -252,27 +251,79 @@ def _ip4s(n: int) -> str:
     return " ".join(f"ip4:192.0.2.{i}" for i in range(n))
 
 
+# Body lengths 13..18 for one ip4 term in a documentation range (RFC 5737), by prefix and width.
+_IP4_BODY = {13: ("192.0.2.", 0), 14: ("192.0.2.", 10), 15: ("192.0.2.", 100)}
+_IP4_BODY |= {16: ("198.51.100.", 0), 17: ("198.51.100.", 10), 18: ("198.51.100.", 100)}
+
+
+def _spf_of_length(length: int, tail: str = "-all") -> str:
+    """A valid SPF record of exactly ``length`` octets made of distinct ip4 terms."""
+    head = "v=spf1"
+    rest = length - len(head) - len(tail) - 1  # each term adds " " + body
+    k = -(-rest // 19)
+    assert 14 * k <= rest, length
+    used: dict[int, int] = {}
+    terms = []
+    for i in range(k):
+        body = rest // k + (1 if i < rest % k else 0) - 1
+        prefix, first = _IP4_BODY[body]
+        terms.append(f"ip4:{prefix}{first + used.get(body, 0)}")
+        used[body] = used.get(body, 0) + 1
+    record = " ".join([head, *terms, tail])
+    assert len(record) == length
+    return record
+
+
+def _split_255(record: str) -> list[str]:
+    """RFC 7208 section 3.3: publish as strings of at most 255 octets, joined without spaces."""
+    return [record[i : i + 255] for i in range(0, len(record), 255)]
+
+
+_LEN_NAME = "x.test"
+
+
 @pytest.mark.parametrize(
-    ("record", "severity", "limit"),
+    ("answer", "severity"),
     [
-        (f"v=spf1 {_ip4s(10)} -all", None, None),
-        (f"v=spf1 {_ip4s(20)} -all", "info", TXT_STRING_MAX),  # 260 chars
-        (f"v=spf1 {_ip4s(36)} -all", "medium", DNS_ANSWER_GUIDELINE),  # 477 chars
+        # ``answer`` is what the 450 guideline measures (RFC 7208 section 3.4): name + record text.
+        (255, None),
+        (256, None),
+        (301, None),
+        (450, None),
+        (451, "medium"),
     ],
 )
-async def test_record_length(record: str, severity: str | None, limit: int | None) -> None:
-    r = await _check(_fake([_txt("x.test", record)]), "x.test")
+async def test_record_length(answer: int, severity: str | None) -> None:
+    record = _spf_of_length(answer - len(_LEN_NAME))
+    entry = {"name": _LEN_NAME, "type": "TXT", "ttl": 60, "rdata": [_split_255(record)]}
+    r = await _check(_fake([entry]), _LEN_NAME)
     found = [f for f in r.findings if f.code == "SPF_RECORD_TOO_LONG"]
     if severity is None:
-        assert found == []
+        assert found == [] and not r.findings
+        assert r.status == "ok"
         return
     (f,) = found
-    assert f.severity == severity and f.params["limit"] == limit
-    assert f.params["length"] > limit
+    assert f.severity == severity
+    assert f.params["limit"] == DNS_ANSWER_GUIDELINE and f.params["length"] == answer
+
+
+@pytest.mark.parametrize(
+    ("answer", "codes"),
+    [
+        (301, {"SPF_SYNTAX_ERROR"}),
+        (451, {"SPF_SYNTAX_ERROR", "SPF_RECORD_TOO_LONG"}),
+    ],
+)
+async def test_record_length_malformed(answer: int, codes: set[str]) -> None:
+    record = _spf_of_length(answer - len(_LEN_NAME), tail="ip4:bogus -all")
+    entry = {"name": _LEN_NAME, "type": "TXT", "ttl": 60, "rdata": [_split_255(record)]}
+    r = await _check(_fake([entry]), _LEN_NAME)
+    assert _codes(r) == codes
+    assert r.status == "fail"
 
 
 def test_length_thresholds_are_rfc_values() -> None:
-    assert (TXT_STRING_MAX, DNS_ANSWER_GUIDELINE) == (255, 450)
+    assert DNS_ANSWER_GUIDELINE == 450
     assert NEAR_LOOKUP_THRESHOLD < LOOKUP_LIMIT == 10
 
 
