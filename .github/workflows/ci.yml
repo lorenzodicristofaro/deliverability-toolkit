@@ -74,8 +74,18 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
       - run: uv sync --frozen
-      - run: nproc  # runner CPU count, for judging whether pytest-xdist would be worth it
-      - run: uv run pytest -q --tb=short --durations=25 --db-backend=sqlite
+      - run: nproc  # runner CPU count; `-n auto` starts one pytest-xdist worker per CPU
+      # pytest-xdist (M7-00, docs/TESTING.md): every worker must collect the same test ids, and
+      # test_csrf.py and test_security.py build parameter ids from tokens generated at import
+      # (different in every process). They run in the second step, single process; together the
+      # two steps run exactly the --db-backend=sqlite selection.
+      - run: >-
+          uv run pytest -q --tb=short --durations=25 -n auto --db-backend=sqlite
+          --ignore=tests/core/test_csrf.py --ignore=tests/core/test_security.py
+      - if: success() || failure()  # also report these when the first step failed
+        run: >-
+          uv run pytest -q --tb=short --db-backend=sqlite
+          tests/core/test_csrf.py tests/core/test_security.py
 
   # Only the PostgreSQL params. --db-backend=postgresql refuses to run without TEST_DATABASE_URL,
   # so this job cannot skip everything and pass.
@@ -105,8 +115,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
       - run: uv sync --frozen
-      - run: nproc  # runner CPU count, for judging whether pytest-xdist would be worth it
-      - run: uv run pytest -q --tb=short --durations=25 --db-backend=postgresql
+      - run: nproc  # runner CPU count; `-n auto` starts one pytest-xdist worker per CPU
+      # Each worker creates and uses its own database ci_test_gwN on this service.
+      - run: uv run pytest -q --tb=short --durations=25 -n auto --db-backend=postgresql
 
   # Full CI on `main`: the Docker jobs without any path filter (reusable workflow, its `on:` paths
   # do not apply to workflow_call).

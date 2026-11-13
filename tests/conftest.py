@@ -5,7 +5,9 @@ TEST_DATABASE_URL is set (CI, or a local throwaway container), on PostgreSQL.
   session (lazily): SQLite tests get a copy of a migrated template, PostgreSQL tests a TRUNCATE.
 - `db_url`: a truly empty database, for tests that run migrations themselves or need no schema.
 - `--db-backend`: runs only one side of the split used by the CI jobs (docs/TESTING.md).
-- `seed_table_access`: skips the startup seed sync in `SEEDLESS_MODULES` and guards that choice."""
+- `seed_table_access`: skips the startup seed sync in `SEEDLESS_MODULES` and guards that choice.
+- pytest-xdist: each worker gets its own PostgreSQL database (`<name>_gwN`, created on first use)
+  and its own SQLite files (per-worker `tmp_path`), so no DB state is shared between workers."""
 
 import os
 import re
@@ -88,6 +90,38 @@ def refusal_reason(test_url: str, app_url: str | None) -> str | None:
     return None
 
 
+_WORKER_NAME = re.compile(r"gw[0-9]+")
+
+
+def worker_database_url(test_url: str, worker: str | None) -> str:
+    """The PostgreSQL database of one pytest-xdist worker: `<name>_<worker>` on the same server
+    (the name keeps "test", so `refusal_reason` still applies). Without xdist (`worker` None or
+    empty: a plain run, or the xdist controller) the URL is returned unchanged."""
+    if not worker:
+        return test_url
+    if not _WORKER_NAME.fullmatch(worker):
+        raise ValueError("unexpected PYTEST_XDIST_WORKER value")
+    parsed = make_url(test_url)
+    return parsed.set(database=f"{parsed.database}_{worker}").render_as_string(hide_password=False)
+
+
+def _create_database_if_missing(server_url: str, worker_url: str) -> None:
+    """Create the worker database through a connection to the vetted database. The name is
+    built by `worker_database_url` from a vetted name and a `gwN` suffix, and quoted."""
+    name = make_url(worker_url).database or ""
+    engine = create_db_engine(server_url).execution_options(isolation_level="AUTOCOMMIT")
+    try:
+        with engine.connect() as conn:
+            exists = conn.execute(
+                text("SELECT 1 FROM pg_database WHERE datname = :name"), {"name": name}
+            ).first()
+            if exists is None:
+                quoted = engine.dialect.identifier_preparer.quote_identifier(name)
+                conn.execute(text(f"CREATE DATABASE {quoted}"))
+    finally:
+        engine.dispose()
+
+
 class _PostgresState:
     """What this session knows about the PostgreSQL test database."""
 
@@ -100,14 +134,25 @@ _pg = _PostgresState()
 
 
 def pytest_sessionstart(session: pytest.Session) -> None:
-    """Refuse an unsafe TEST_DATABASE_URL before anything is collected or run (exit code 2)."""
+    """Refuse an unsafe TEST_DATABASE_URL before anything is collected or run (exit code 2).
+    In a pytest-xdist worker, switch this process to its own database: TEST_DATABASE_URL is
+    rewritten for the worker only, so every fixture and subprocess that reads it (here,
+    tests/tenancy/conftest.py, spawned migration workers) uses the worker's database."""
     url = os.environ.get("TEST_DATABASE_URL")
     if not url:
         return
-    reason = refusal_reason(url, os.environ.get("DATABASE_URL"))
+    app_url = os.environ.get("DATABASE_URL")
+    reason = refusal_reason(url, app_url)
     if reason:
         pytest.exit(f"Refusing to reset the test database: {reason}", returncode=2)
-    _pg.vetted_url = url
+    worker_url = worker_database_url(url, os.environ.get("PYTEST_XDIST_WORKER"))
+    if worker_url != url:
+        reason = refusal_reason(worker_url, app_url)
+        if reason:
+            pytest.exit(f"Refusing to reset the worker test database: {reason}", returncode=2)
+        _create_database_if_missing(url, worker_url)
+        os.environ["TEST_DATABASE_URL"] = worker_url
+    _pg.vetted_url = worker_url
 
 
 def _require_vetted(url: str) -> None:
