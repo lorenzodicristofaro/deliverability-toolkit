@@ -153,6 +153,11 @@ and DNS snapshots are kept longer.
   allowed (all selectors are probed) but results stream.
 - Optional worker mode: `ROLE=web|worker|all`, all state in the DB, so scaling
   later means pointing several workers at PostgreSQL.
+- Migrations are safe to run from several containers started together: on
+  PostgreSQL, `migrations/env.py` holds a session-level advisory lock
+  (`MIGRATION_LOCK_KEY`) for the whole upgrade, so the first replica migrates and
+  the others wait (no lock timeout) and then find the schema already at head.
+  SQLite takes no lock (single container).
 
 ## 7. DNS layer
 
