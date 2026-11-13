@@ -1056,14 +1056,17 @@ R122_FINDINGS = [
     ),
     # Legitimate receiver splitting spf and dkim over two fields (pinned cost of the minimal
     # rule): computed fail, the stated dmarc=pass disagrees, and the new finding says why.
+    # Under F-01-03 the per-method finding also reads only the top field, so dkim is reported
+    # not_stated (low); severity and variant are checked in TOPMOST_ONLY.
     (
         (_R122_TOP_SPF_ESP, _R122_LOWER_DKIM),
         {
             "MSG_ALIGNMENT_FAIL",
             "MSG_ALIGNMENT_STATED_MISMATCH",
             "MSG_ALIGNMENT_LOWER_FIELD_NOT_USED",
+            "MSG_DKIM_NOT_PASS",
         },
-        {"MSG_ALIGNMENT_NOT_EVALUATED", "MSG_DKIM_NOT_PASS", "MSG_AUTHRES_AUTHSERV_MISMATCH"},
+        {"MSG_ALIGNMENT_NOT_EVALUATED", "MSG_AUTHRES_AUTHSERV_MISMATCH"},
         "fail",
     ),
 ]
