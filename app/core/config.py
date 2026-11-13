@@ -7,7 +7,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from pydantic import Field, SecretStr, ValidationError, field_validator
+from pydantic import Field, PrivateAttr, SecretStr, ValidationError, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 DEFAULT_RESOLVER_PORT = 53
@@ -110,6 +110,38 @@ def parse_resolver_addrs(value: str) -> list[ResolverAddr]:
     return [_parse_entry(raw.strip()) for raw in value.split(",")]
 
 
+IPNetwork = ipaddress.IPv4Network | ipaddress.IPv6Network
+
+
+def parse_trusted_proxies(value: str) -> tuple[IPNetwork, ...]:
+    """Parse TRUSTED_PROXIES (R1-30): comma-separated IPv4/IPv6 addresses or CIDR networks.
+
+    - A bare address is a single-host network (``10.0.0.5`` is ``10.0.0.5/32``, ``::1`` is
+      ``::1/128``). A network must have no host bits set (``10.0.0.0/8``, not ``10.0.0.1/8``).
+    - An empty or whitespace-only string yields an empty tuple: no proxy is trusted.
+    - Whitespace around entries is ignored; an empty entry ("a,,b", trailing comma), a hostname,
+      ``*``, a port, a bracketed IPv6 or an IPv6 zone id is an error.
+    - An IPv4-mapped IPv6 network (``::ffff:10.0.0.0/104``) is kept as given; client addresses
+      are unmapped before matching (app.web.auth), so list IPv4 proxies as IPv4.
+    - Raises ConfigError(``config.invalid_value``, name="TRUSTED_PROXIES", entry=...).
+    No DNS or network access.
+    """
+    if value.strip() == "":
+        return ()
+    networks: list[IPNetwork] = []
+    for raw in value.split(","):
+        entry = raw.strip()
+        try:
+            if entry == "" or "%" in entry:
+                raise ValueError(entry)
+            networks.append(ipaddress.ip_network(entry, strict=True))
+        except ValueError:
+            raise ConfigError(
+                CONFIG_INVALID_VALUE_KEY, name="TRUSTED_PROXIES", entry=entry
+            ) from None
+    return tuple(networks)
+
+
 _SECRET_FIELDS = ("secret_key", "encryption_key")
 
 
@@ -140,6 +172,10 @@ class Settings(BaseSettings):
     session_absolute_timeout_minutes: int = Field(
         default=DEFAULT_SESSION_ABSOLUTE_TIMEOUT_MINUTES, gt=0
     )
+    # Reverse proxies whose X-Forwarded-For is trusted for the client IP (R1-30), parsed by
+    # parse_trusted_proxies. Default empty: the client IP is the direct peer, headers ignored.
+    trusted_proxies: str = ""
+    _trusted_networks: tuple[IPNetwork, ...] = PrivateAttr(default=())
 
     @field_validator("secret_key", "encryption_key", mode="after")
     @classmethod
@@ -182,6 +218,12 @@ class Settings(BaseSettings):
             raise ConfigError(CONFIG_INVALID_VALUE_KEY, name="SESSION_IDLE_TIMEOUT_MINUTES")
         if not self.parsed_resolver_addrs() and self.resolver_mode in ("custom", "unbound"):
             raise ConfigError(CONFIG_RESOLVER_ADDRS_REQUIRED_KEY, mode=self.resolver_mode)
+        # Parsed once here: an invalid entry fails at startup, requests reuse the result.
+        self._trusted_networks = parse_trusted_proxies(self.trusted_proxies)
+
+    def trusted_proxy_networks(self) -> tuple[IPNetwork, ...]:
+        """TRUSTED_PROXIES as parsed at construction (empty: no proxy is trusted)."""
+        return self._trusted_networks
 
     def parsed_resolver_addrs(self) -> list[ResolverAddr]:
         return parse_resolver_addrs(self.resolver_addrs)

@@ -24,9 +24,10 @@ Policy per client IP (R1-03), checked first, before the key and before any passw
   `ip_window` (`IP_WINDOW`, 15 min) after its last counted attempt. Without this limit a client
   sending a new account string on every request would never meet a delay, and every request
   would still pay one full argon2 verification (the dummy one for unknown accounts).
-- "IP" is the direct peer address the web layer passes in. Behind a reverse proxy every client
-  shares the proxy's address, so they share this limit until a trusted-proxy setting exists
-  (tracked separately, AUTH-04).
+- "IP" is the client address the web layer passes in (`app.web.auth.resolve_client_ip`, R1-30):
+  the direct peer, or, when that peer is in `TRUSTED_PROXIES`, the rightmost X-Forwarded-For
+  hop that is not a trusted proxy. With a proxy in front and `TRUSTED_PROXIES` empty every
+  client shares the proxy's address, and with it this limit and every (IP, account) key.
 
 Atomicity: `acquire` checks the IP and the key and, if the attempt is allowed, counts it up front
 (a failure for the key, an attempt for the IP), under one lock. Parallel requests therefore

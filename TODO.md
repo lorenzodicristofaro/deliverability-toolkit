@@ -230,7 +230,7 @@ Follow-ups:
 - R1-14 follow-up: the purge runs only at startup; a long-running process accumulates rows until the M7 scheduler calls purge_sessions with a policy; no test sends a purged cookie.
 - R1-23 follow-up: with two List-Unsubscribe fields (one over-long, one mailto-only) the message analyzer reports no One-Click while the content analyzer is silent; align optionally. Nit: a NUL-only unknown https value is called "safety limits".
 - R1-01 follow-up: an over-cap inline style also marks the links section not evaluated (content_analysis.py treats any body not-evaluated reason as incomplete); narrow it to body + rules. Timing tests in tests/parsers/test_content_html.py add ~25 s; consider a `slow` marker.
-- R1-03 follow-up: login throttle limits (IP_MAX_ATTEMPTS, MAX_CONCURRENT_VERIFICATIONS, VERIFICATION_WAIT) are module constants; behind a reverse proxy the per-IP budget is shared by all users until the trusted-proxy item lands; consider settings.
+- R1-03 follow-up: login throttle limits (IP_MAX_ATTEMPTS, MAX_CONCURRENT_VERIFICATIONS, VERIFICATION_WAIT) are module constants; behind a reverse proxy the per-IP budget is per client once `TRUSTED_PROXIES` is set (R1-30); consider settings.
 - R1-04 follow-up: optional startup warning for a non-localhost http:// BASE_URL; parity test could also assert every forwarded Settings field is documented.
 - R1-05 follow-up: inherited-sp scenario in tests/checks/test_acceptance_m3.py; assert the PCT_PARTIAL p argument in the sp-pct row.
 - R1-06 follow-up: comment in app/checks/dnsutil.py fetch_txt noting the SPF tree builds its TXT question directly; the SPF parser still accepts empty/over-long labels and names that the tree rejects as invalid_target.
@@ -385,7 +385,7 @@ Maintainer decision 2026-11-12: moved from M9; no test domains or access yet, an
 - [ ] Throttle the `last_seen_at` write in resolve_session
 - [ ] DB-backed login throttle for multi-process deployments
 - [x] Per-IP cap on throttle keys, plus a warning log when the table is full (a single IP can fill the table with locked keys and block new logins) (done in R1-03)
-- [ ] (covered by R1-30) Trusted-proxy setting for the client IP (needed before any reverse-proxy deployment). Consequence added by the 2026-11-12 review: behind a proxy every client shares one throttle IP, so anyone who knows an email address can lock that account remotely (ten wrong passwords per 15 minutes) and can lock the setup wizard (five wrong setup tokens delay, ten lock it); the documented HTTPS path already implies a proxy; uvicorn `forwarded-allow-ips` default (127.0.0.1 only) is unverified, check the uvicorn documentation before designing (review AUTH-04)
+- [x] (covered by R1-30: `TRUSTED_PROXIES`, docs/SETUP.md section 7; uvicorn proxy headers disabled in the image) Trusted-proxy setting for the client IP (needed before any reverse-proxy deployment). Consequence added by the 2026-11-12 review: behind a proxy every client shares one throttle IP, so anyone who knows an email address can lock that account remotely (ten wrong passwords per 15 minutes) and can lock the setup wizard (five wrong setup tokens delay, ten lock it); the documented HTTPS path already implies a proxy; uvicorn `forwarded-allow-ips` default (127.0.0.1 only) is unverified, check the uvicorn documentation before designing (review AUTH-04)
 - [ ] `services.auth.rotate_session` helper (`_switch` reads the sessions row directly)
 - [ ] Dispose of the DB engine at shutdown via the lifespan
 - [ ] A breached-password corpus check, offline

@@ -106,6 +106,20 @@ def test_forwarded_defaults_match_settings_defaults() -> None:
         assert env[name] == f"${{{name}:-}}", name
 
 
+def test_trusted_proxies_is_forwarded_with_an_empty_default() -> None:
+    # R1-30: also covered by the parity tests above; explicit so a rename cannot drop it.
+    assert "TRUSTED_PROXIES" in _documented_settings()
+    assert COMPOSE["services"]["app"]["environment"]["TRUSTED_PROXIES"] == "${TRUSTED_PROXIES:-}"
+    assert Settings.model_fields["trusted_proxies"].default == ""
+
+
+def test_image_disables_uvicorn_proxy_header_rewriting() -> None:
+    # R1-30: the client IP is decided by the app from TRUSTED_PROXIES only, never by uvicorn.
+    cmd = [line for line in (ROOT / "Dockerfile").read_text().splitlines() if line[:4] == "CMD "]
+    assert len(cmd) == 1 and "exec uvicorn " in cmd[0] and "--no-proxy-headers" in cmd[0]
+    assert "forwarded-allow-ips" not in cmd[0]
+
+
 def test_app_container_hardening() -> None:
     app = COMPOSE["services"]["app"]
     assert app["cap_drop"] == ["ALL"]

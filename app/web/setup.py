@@ -18,8 +18,10 @@
 - GET/POST /setup: 404 once setup is not required. POST needs the CSRF double-submit token
   (CSRFMiddleware) and the setup token; token attempts share the login throttle
   (`app.web.auth.login_throttle`) under a fixed account key, including its per-IP limit (one
-  budget per client IP for login and setup attempts, R1-03). Success creates the instance admin,
-  the optional first tenant with an owner membership, and logs the admin in.
+  budget per client IP for login and setup attempts, R1-03; the client IP comes from the same
+  helper as login, `app.web.auth._client_ip`, so TRUSTED_PROXIES applies, R1-30). Success
+  creates the instance admin, the optional first tenant with an owner membership, and logs the
+  admin in.
 
 Logs never carry the password, and the token appears only in the single issuance line.
 """

@@ -48,4 +48,7 @@ VOLUME ["/data"]
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD ["python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=4).status == 200 else 1)"]
 
-CMD ["sh", "-c", "alembic upgrade head && exec uvicorn app.main:app --host 0.0.0.0 --port 8000"]
+# --no-proxy-headers (R1-30): uvicorn must not rewrite the client address from X-Forwarded-For
+# (its default trusts 127.0.0.1 and ::1, or $FORWARDED_ALLOW_IPS); the app alone decides,
+# from TRUSTED_PROXIES (app/web/auth.py resolve_client_ip).
+CMD ["sh", "-c", "alembic upgrade head && exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --no-proxy-headers"]

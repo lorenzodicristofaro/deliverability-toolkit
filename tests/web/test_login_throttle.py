@@ -423,7 +423,7 @@ class App:
     app: FastAPI
 
 
-def _app(db_url: str, *, with_user: bool) -> FastAPI:
+def _app(db_url: str, *, with_user: bool, trusted_proxies: str = "") -> FastAPI:
     if with_user:
         engine = create_db_engine(db_url)
         try:
@@ -433,7 +433,12 @@ def _app(db_url: str, *, with_user: bool) -> FastAPI:
         finally:
             engine.dispose()
     application = create_app(
-        Settings(database_url=db_url, secret_key=KEY, encryption_key=KEY)  # type: ignore[call-arg]
+        Settings(  # type: ignore[call-arg]
+            database_url=db_url,
+            secret_key=KEY,
+            encryption_key=KEY,
+            trusted_proxies=trusted_proxies,
+        )
     )
     application.state.login_throttle = LoginThrottle(clock=Clock())
     return application
@@ -441,15 +446,20 @@ def _app(db_url: str, *, with_user: bool) -> FastAPI:
 
 @contextmanager
 def _running(
-    db_url: str, monkeypatch: pytest.MonkeyPatch, *, with_user: bool = True
+    db_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    with_user: bool = True,
+    trusted_proxies: str = "",
+    peer: str = CLIENT_IP,
 ) -> Iterator[App]:
     monkeypatch.setenv("DATABASE_URL", db_url)
     monkeypatch.setenv("SECRET_KEY", KEY)
     monkeypatch.setenv("ENCRYPTION_KEY", KEY)
     monkeypatch.setattr(web_auth, "PASSWORD_HASHER", FAST)
-    application = _app(db_url, with_user=with_user)
+    application = _app(db_url, with_user=with_user, trusted_proxies=trusted_proxies)
     try:
-        with TestClient(application) as client:
+        with TestClient(application, client=(peer, 50000)) as client:
             yield App(client, application)
     finally:
         engine = getattr(application.state, "db_engine", None)
@@ -637,3 +647,102 @@ def test_setup_token_path_shares_the_ip_limit(
         )
         assert response.status_code == 429
         assert "Troppi tentativi" in response.text
+
+
+# --- R1-30 (AUTH-04): client IP behind a trusted reverse proxy, through the real app ----------
+
+PROXY = "10.0.0.5"  # the reverse proxy as the app sees it (the direct peer)
+CLIENT_A = "198.51.100.1"
+CLIENT_B = "198.51.100.2"
+
+
+def _advance(a: App, seconds: float) -> None:
+    a.app.state.login_throttle._clock.now += seconds
+
+
+def _login_as(a: App, xff: str, password: str) -> int:
+    headers = {"X-Forwarded-For": xff}
+    token = _csrf(a.client.get("/login", headers=headers).text)
+    response = a.client.post(
+        "/login",
+        data={"email": ACCOUNT, "password": password, "csrf_token": token},
+        headers=headers,
+        follow_redirects=False,
+    )
+    return response.status_code
+
+
+@pytest.mark.parametrize(
+    ("trusted", "a_xff", "b_xff"),
+    [
+        ("10.0.0.0/8", CLIENT_A, CLIENT_B),
+        ("10.0.0.5", CLIENT_A, CLIENT_B),
+        # Spoofed leftmost entries in A's header do not move A's key.
+        ("10.0.0.0/8", f"{CLIENT_B}, 6.6.6.6, {CLIENT_A}", CLIENT_B),
+        # Two trusted proxies in a row: the rightmost untrusted hop is the client.
+        ("10.0.0.0/8", f"{CLIENT_A}, 10.1.1.1", f"{CLIENT_B}, 10.1.1.1"),
+        ("10.0.0.0/8, 2001:db8:f::/48", "2001:db8::a", "2001:db8::b, 2001:db8:f::1"),
+    ],
+)
+def test_failures_from_client_a_do_not_delay_client_b_behind_a_trusted_proxy(
+    migrated_db_url: str, monkeypatch: pytest.MonkeyPatch, trusted: str, a_xff: str, b_xff: str
+) -> None:
+    with _running(migrated_db_url, monkeypatch, trusted_proxies=trusted, peer=PROXY) as a:
+        statuses = []
+        for _ in range(10):  # ten failures, each after its backoff delay has passed
+            statuses.append(_login_as(a, a_xff, "wrong"))
+            _advance(a, 20.0)
+        assert statuses == [401] * 10
+        assert _login_as(a, a_xff, "wrong") == 429  # A is locked out
+        assert _login_as(a, b_xff, PASSWORD) == 303  # B logs in at once
+        assert _login_as(a, a_xff, PASSWORD) == 429  # A is still locked
+
+
+@pytest.mark.parametrize(
+    ("trusted", "peer"),
+    [
+        ("", PROXY),  # default: no trusted proxy, the header is ignored
+        ("10.0.0.0/8", "192.0.2.9"),  # the peer is not a trusted proxy
+        ("10.0.0.0/8", CLIENT_IP),  # the peer is not even an IP address
+    ],
+)
+def test_forwarding_header_from_an_untrusted_peer_is_ignored(
+    migrated_db_url: str, monkeypatch: pytest.MonkeyPatch, trusted: str, peer: str
+) -> None:
+    with _running(migrated_db_url, monkeypatch, trusted_proxies=trusted, peer=peer) as a:
+        for _ in range(10):
+            assert _login_as(a, CLIENT_A, "wrong") == 401
+            _advance(a, 20.0)
+        # One key (peer, account) whatever the header says: B shares A's lockout.
+        assert _login_as(a, CLIENT_B, PASSWORD) == 429
+        throttle = a.app.state.login_throttle
+        assert throttle_key(peer, ACCOUNT) in throttle._entries
+        assert throttle_key(CLIENT_A, ACCOUNT) not in throttle._entries
+
+
+def test_setup_token_attempts_from_client_a_do_not_delay_client_b(
+    migrated_db_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with _running(
+        migrated_db_url, monkeypatch, with_user=False, trusted_proxies="10.0.0.0/8", peer=PROXY
+    ) as a:
+
+        def attempt(xff: str) -> int:
+            headers = {"X-Forwarded-For": xff}
+            token = _csrf(a.client.get("/setup", headers=headers).text)
+            response = a.client.post(
+                "/setup",
+                data={"csrf_token": token, "setup_token": "x" * 43},
+                headers=headers,
+                follow_redirects=False,
+            )
+            return response.status_code
+
+        statuses = []
+        for _ in range(10):  # ten wrong tokens, each after its backoff delay has passed
+            statuses.append(attempt(CLIENT_A))
+            _advance(a, 20.0)
+        assert statuses == [400] * 10
+        assert attempt(CLIENT_A) == 429  # the wizard is locked for A
+        assert attempt(CLIENT_B) == 400  # B's token is checked, not throttled
+        assert attempt(f"{CLIENT_B}, {CLIENT_A}") == 429  # a spoofed leftmost B does not help A
