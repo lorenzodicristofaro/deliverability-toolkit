@@ -16,3 +16,4 @@ Acceptance criteria:
 Open for the maintainer (to be listed in the PR): every `unverified` entry; any list whose terms forbid use through the shipped default resolvers; whether to ship lists that require registration or a paid data feed (default: no).
 New i18n keys: none
 Status: done
+Outcome (QA APPROVE round 1, 4287d2a, merged eb3d082): seed has 3 lists (spamcop-bl, surbl-multi, uribl-multi), all `unverified`, each with official sources and verified_on. Spamhaus and Barracuda left out (no confirmable official data); reasons and sources in docs/DNSBL.md. Awaiting maintainer data (2026-11-14): SpamCop IPv6 and terms, Barracuda. Follow-ups: M7-03b (bitmask codes, default_enabled), M7-05b (Spamhaus via DQS).

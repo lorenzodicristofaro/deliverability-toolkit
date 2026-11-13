@@ -279,8 +279,12 @@ Tickets (docs/tickets/M7-*.md, split 2026-11-13; model in brackets):
 - [ ] M7-02 custom check kind http_fetch via guarded client (opus; depends M7-01)
 - [x] M7-03 DNSBL/URIBL engine, refusal detection (opus)
   - [ ] Follow-up (low): move the private loader helpers (_StrictLoader, _list, _text, ...) imported by app/checks/dnsbl_schema.py from app/esp/profile.py and app/dns/knowledge.py into a shared public module
-- [ ] M7-04 seeds/dnsbl.yaml + docs/DNSBL.md, unverified entries to the maintainer (sonnet; depends M7-03)
-- [ ] M7-05 dnsbl check registration, API, CLI, web (sonnet; depends M7-03, M7-04)
+- [x] M7-04 seeds/dnsbl.yaml + docs/DNSBL.md, unverified entries to the maintainer (sonnet; depends M7-03)
+  - Status: done (4287d2a, QA APPROVE round 1): spamcop-bl, surbl-multi, uribl-multi, all unverified; Spamhaus and Barracuda excluded.
+  - Note: awaiting maintainer data (2026-11-14): SpamCop IPv6 and terms, Barracuda.
+- [ ] M7-03b DNSBL bitmask return codes + `default_enabled` schema field (opus; depends M7-03)
+- [ ] M7-05 dnsbl check registration, API, CLI, web; disabled-by-default lists enabled by instance admin (sonnet; depends M7-03, M7-03b, M7-04)
+- [ ] M7-05b Spamhaus via DQS key, key via secret service (opus; depends M7-03b, M7-05, M7-14b; schedule after M7-14b)
 - [ ] M7-06 monitor_targets model, migration, repository (sonnet)
 - [ ] M7-07 check_runs history model, migration, retention (sonnet; depends M7-06)
 - [ ] M7-08 DNS snapshots + diff (sonnet; depends M7-06)
