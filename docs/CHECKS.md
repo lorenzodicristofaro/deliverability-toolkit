@@ -106,6 +106,7 @@ module's `CODES`; `tests/checks/test_acceptance_m3.py` requires en and it text f
 | `SPF_FLATTENING_HINT` | info | none (advisory; no addresses are generated) |
 | `SPF_DNS_ERROR` | medium (status `error`) | 4.4 |
 | `SPF_MX_TOO_MANY_HOSTS` | high | 4.6.4 |
+| `SPF_TERMS_AFTER_ALL` | low | 5.1 (mechanisms after the first `all` are never tested, so they are not counted or followed; still syntax-checked) |
 
 SPF tree targets (`include`, `redirect`, `a`, `mx`, `exists`) follow the RFC 7208 `domain-spec` rule
 the SPF parser applies plus DNS limits (visible ASCII labels such as `spf_c` or `x-`, 1-63 octets

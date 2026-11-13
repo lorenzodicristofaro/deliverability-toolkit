@@ -10,7 +10,11 @@ Counting rules (RFC 7208 section 4.6.4):
   ``all ip4 ip6`` and ``exp`` are not counted. The count spans the whole tree, so a domain
   included twice is counted twice (as a receiver evaluating the record would). Only
   syntactically valid terms are counted; a ``redirect`` is ignored (not counted, not followed)
-  when the record has an ``all`` mechanism (section 6.1).
+  when the record has an ``all`` mechanism (section 6.1). Mechanisms after the first ``all``
+  of a record are neither counted nor followed (section 5.1: ``all`` always matches, so they
+  are never tested); they are still parsed, so a syntax error among them still makes the
+  record a permerror (section 4.6). An ``all`` inside an included record stops only that
+  record's terms. Terms before the first ``all`` follow the worst-case convention above.
 - Void lookups are terms whose query is answered NXDOMAIN or NODATA: the TXT query of an
   ``include`` or ``redirect`` target, the MX query of ``mx``, the A query of ``exists`` and
   the A query of ``a``. For ``a`` this models the dominant IPv4 receiver (which asks A only);
@@ -319,6 +323,10 @@ async def _lookups(
     has_all = any(t.name == "all" for t in record.mechanisms)
     out: list[TermLookup] = []
     for term in record.terms:
+        if _is_all(term):
+            # RFC 7208 5.1: all always matches, so later mechanisms are never tested. The only
+            # lookup modifier, redirect, is ignored anyway when an all is present (6.1).
+            break
         if term.kind == "invalid" or not term.valid or term.name not in LOOKUP_TERMS:
             continue
         if term.kind == "modifier" and (term.name != "redirect" or has_all):
@@ -326,6 +334,17 @@ async def _lookups(
         run.lookup_count += 1
         out.append(await _term(run, name, term, depth, path))
     return tuple(out)
+
+
+def _is_all(term: SpfTerm) -> bool:
+    return term.kind == "mechanism" and term.name == "all" and term.valid
+
+
+def mechanisms_after_all(record: SpfRecord) -> tuple[SpfTerm, ...]:
+    """Mechanisms after the first valid ``all``: never tested by a receiver (RFC 7208 5.1)."""
+    mechanisms = record.mechanisms
+    first = next((i for i, t in enumerate(mechanisms) if _is_all(t)), None)
+    return () if first is None else mechanisms[first + 1 :]
 
 
 def _spf_label_ok(label: str) -> bool:

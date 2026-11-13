@@ -31,6 +31,7 @@ from app.checks.spf_tree import (
     SpfNode,
     SpfTree,
     TermLookup,
+    mechanisms_after_all,
     resolve_spf,
 )
 from app.core.domain_names import InvalidDomainName
@@ -55,7 +56,11 @@ CODES: tuple[str, ...] = (
     "SPF_FLATTENING_HINT",
     "SPF_DNS_ERROR",
     "SPF_MX_TOO_MANY_HOSTS",
+    "SPF_TERMS_AFTER_ALL",
 )
+
+# Evidence items listed for SPF_TERMS_AFTER_ALL (one finding per record; ``count`` has the total).
+MAX_AFTER_ALL_EVIDENCE = 10
 
 # Lookup count from which SPF_NEAR_LOOKUP_LIMIT / SPF_FLATTENING_HINT are emitted (9 and 10
 # are still within the RFC 7208 section 4.6.4 limit of LOOKUP_LIMIT).
@@ -150,6 +155,12 @@ def _node_findings(node: SpfNode) -> list[Finding]:
             out.append(finding("SPF_PTR_DEPRECATED", "low", name, ptr))
         if "redirect_with_all" in node.record.issue_codes():
             out.append(finding("SPF_REDIRECT_WITH_ALL", "low", name))
+        after = mechanisms_after_all(node.record)
+        if after:
+            # Section 5.1: never tested, so not counted or queried (M3-07); reported once.
+            params = {**name, "count": len(after)}
+            evidence = [t.raw for t in after[:MAX_AFTER_ALL_EVIDENCE]]
+            out.append(finding("SPF_TERMS_AFTER_ALL", "low", params, evidence))
     out.extend(_length_findings(node))
     return out
 
