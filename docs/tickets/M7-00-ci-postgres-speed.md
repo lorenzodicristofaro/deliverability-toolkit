@@ -1,6 +1,6 @@
 # M7-00 CI test speed 3: pytest-xdist for the PostgreSQL and SQLite test jobs
 Milestone: M7
-Branch: feature/m7-00-ci-test-speed-3
+Branch: feature/m7-00-ci-postgres-speed
 Files in scope: tests/conftest.py, tests/support/** (if needed), pyproject.toml, uv.lock, docs/TESTING.md, .github/workflows/ci.yml
 Out of scope: anything under app/, removing, skipping, de-parametrising or marking flaky any test, changing what a test asserts.
 Depends on: none (GM serializes it after M7-01)
@@ -28,4 +28,4 @@ Decision: pytest-xdist on both jobs, not a matrix. Per worker: SQLite files unde
 Deviation: tests/core/test_csrf.py and tests/core/test_security.py (40 params of 3 tests) have parameter ids built from tokens generated at import, different in every process (also between two plain collections), so xdist refuses them ("Different tests were collected"). Those files are out of scope, so the test-sqlite job runs them in a second single-process step. Follow-up suggestion: give them stable `ids=` and drop the second step.
 Collect-only proof (sorted `--collect-only -q`): PostgreSQL side identical before/after (5948 ids). SQLite side: step 1 (25773) and step 2 (303) do not overlap, and their union equals the before set (26064) once the 40 random-id params are normalised to their function name (counts equal) and the 12 new self-tests of `worker_database_url` are removed. Nothing removed, skipped, de-parametrised or marked flaky.
 Isolation: no random-order plugin is installed; green with worker counts 4 and 16 on both sides and single process on both sides; worker databases ci_test_gw0..gw15 left empty after the runs.
-Status: todo
+Status: merged, awaiting dev CI measurement (merged into dev locally, QA APPROVE round 1, commit 9bf618f; the maintainer must send the ci.yml change to GitHub; the 50% target is measured on the first dev CI run after that, run ids and nproc to be added here)

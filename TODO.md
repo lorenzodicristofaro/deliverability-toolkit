@@ -270,6 +270,10 @@ Decided 2026-11-13 (maintainer):
 - Accept: scheduled runs respect rate limits; changes produce alerts exactly once.
 Tickets (docs/tickets/M7-*.md, split 2026-11-13; model in brackets):
 - [ ] M7-00 CI test speed 3: pytest-xdist for both test jobs, target at most 50% duration, identical test ids (opus; serialized after M7-01; ci.yml push by maintainer)
+  - Status: merged into dev locally (9bf618f, QA APPROVE round 1), awaiting dev CI measurement: maintainer must send the ci.yml change to GitHub; the 50% target is measured on the first dev CI run after that. Keep unticked until measured.
+  - [ ] Follow-up (low): give tests/core/test_csrf.py and tests/core/test_security.py stable parametrize ids so the separate single-process CI step can be removed
+  - [ ] Follow-up (low): tests/conftest.py:96-106 worker DB name could be truncated near PostgreSQL's 63-char limit (gw1/gw10 collision), local only
+  - [ ] Follow-up (low): watch wall-clock tests under -n auto on CI: test_content_rules_engine.py:242/277, test_spf.py:374, test_received.py:565, test_authres.py:738, test_content_rules_admin.py:657
 - [x] M7-01 guarded outbound HTTP client + ARCHITECTURE decision record (opus)
 - [ ] Follow-up (low): tests/parsers/test_message.py::test_fold_bomb_is_bounded_and_fast failed once in two local PostgreSQL full runs under load (timing test, flaky candidate)
 - [ ] M7-02 custom check kind http_fetch via guarded client (opus; depends M7-01)
