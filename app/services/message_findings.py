@@ -49,7 +49,7 @@ MSG_SPF_NOT_PASS                         high/    stated spf: fail -> high; othe
                                          low
 MSG_DKIM_NOT_PASS                        same     no stated dkim pass
 MSG_DMARC_NOT_PASS                       same     stated dmarc is not pass
-MSG_ALIGNMENT_FAIL                       high     computed: no identifier aligned
+MSG_ALIGNMENT_FAIL                       high     computed: no usable aligned pass
 MSG_ALIGNMENT_STATED_MISMATCH            medium   stated dmarc disagrees with computed
 MSG_UNVERIFIED_DKIM_SIGNATURE            low      DKIM-Signature with no stated result
 MSG_ARC_INVALID                          low      ARC chain structurally invalid
@@ -67,6 +67,8 @@ MSG_AUTHRES_UNPARSED                     medium   Authentication-Results unusabl
 MSG_ALIGNMENT_NOT_EVALUATED              medium   no identifier to align (error-class)
 MSG_ALIGNMENT_LOWER_FIELD_NOT_USED       low      an aligned pass from a lower
                                                   Authentication-Results field was not used
+MSG_AUTH_BROKE_AFTER_HOP                 info     a stated pass became a failure in a newer
+                                                  field (per-hop view, display only)
 ======================================== ======== =========================================
 
 ``MSG_DUPLICATE_SINGLETON_HEADER`` is reported for Subject, Date and Message-ID; a repeated
@@ -109,6 +111,7 @@ from app.parsers.message import (
 from app.parsers.mime import MimeSummary
 from app.parsers.received import ReceivedChain, parse_received_values
 from app.services.message_alignment import LOWER_AUTHRES_FIELD, AlignmentReport
+from app.services.message_hops import HopTimeline, find_auth_breaks
 
 MAX_EXCERPT = 200
 MAX_DATE_SKEW = timedelta(hours=24)
@@ -157,6 +160,7 @@ CODES: tuple[str, ...] = (
     "MSG_AUTHRES_UNPARSED",
     "MSG_ALIGNMENT_NOT_EVALUATED",
     "MSG_ALIGNMENT_LOWER_FIELD_NOT_USED",
+    "MSG_AUTH_BROKE_AFTER_HOP",
 )
 
 
@@ -326,6 +330,13 @@ def _received_part(chain: ReceivedChain, acc: _Acc) -> None:
 
 
 def _topmost_results(headers: tuple[AuthResHeader, ...], method: str) -> list[str]:
+    """Stated results of ``method`` from the topmost field that states it.
+
+    That may be a lower field (R1-22 QA input, GM decision 2026-11-13): display only. It
+    selects the MSG_SPF_NOT_PASS / MSG_DKIM_NOT_PASS warnings and their wording and never
+    feeds ``computed_dmarc`` or the alignment pairs, which apply the topmost-field rule in
+    :mod:`app.services.message_alignment`. Behaviour unchanged, pinned by a test.
+    """
     for header in headers:
         found = header.by_method().get(method)
         if found:
@@ -455,6 +466,27 @@ def _alignment_part(alignment: AlignmentReport, have_authres: bool, acc: _Acc) -
         )
 
 
+def _hop_part(hops: HopTimeline, acc: _Acc) -> None:
+    """MSG_AUTH_BROKE_AFTER_HOP, one per older/newer entry pair. Info only: derived from the
+    display-only per-hop view, it never changes a verdict."""
+    grouped: dict[tuple[int, int], list[tuple[str, str, int | None, str | None]]] = {}
+    for b in find_auth_breaks(hops):
+        grouped.setdefault((b.from_order, b.to_order), []).append(
+            (b.method, b.result, b.hop, b.authserv_id)
+        )
+    for items in grouped.values():
+        hop, authserv_id = items[0][2], items[0][3]
+        params: dict[str, object] = {
+            "results": ", ".join(f"{m}={r}" for m, r, _, _ in items),
+            "authserv_id": excerpt(authserv_id or ""),
+        }
+        if hop is not None:
+            # 1-based display number, same convention as MSG_HOP_DELAY_HIGH (index + 1); the
+            # 0-based Received index stays in the hops entries.
+            params["hop"] = hop + 1
+        acc.add("MSG_AUTH_BROKE_AFTER_HOP", "info", params, None if hop is not None else "no_hop")
+
+
 def _arc_part(arc: ArcChain, acc: _Acc) -> None:
     if arc.status == "invalid":
         codes = list(dict.fromkeys(i.code for i in arc.issues if i.severity == "error"))
@@ -549,8 +581,10 @@ def build_message_findings(
     mime: MimeSummary | None,
     arc: ArcChain,
     alignment: AlignmentReport,
+    hops: HopTimeline | None = None,
 ) -> MessageFindings:
-    """Turn already parsed outputs into findings. ``mime`` None means it was not parsed."""
+    """Turn already parsed outputs into findings. ``mime`` None means it was not parsed;
+    ``hops`` None means the per-hop view was not built (no MSG_AUTH_BROKE_AFTER_HOP)."""
     acc = _Acc()
     limits: list[str] = []
     try:
@@ -565,6 +599,8 @@ def build_message_findings(
         _auth_part(alignment, headers, acc)
     _alignment_part(alignment, bool(headers), acc)
     _arc_part(arc, acc)
+    if hops is not None:
+        _hop_part(hops, acc)
     _other_part(block, alignment, acc)
     if "list_unsubscribe" in acc.unevaluated:
         limits.append("list_unsubscribe")
