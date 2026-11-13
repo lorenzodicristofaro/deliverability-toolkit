@@ -20,6 +20,13 @@ and the list's other queries wait for them. If every probe answers with a refusa
 REFUSED rcode or an egress block, the list is `blocked_resolver` for the rest of the run and
 its remaining queries are not sent.
 
+Target addresses that are not globally routable unicast (private, loopback, link-local,
+documentation, multicast, IPv4-mapped forms of those, ...) are `not_applicable` with reason
+`non_public_address` and are never queried, so nothing about internal hosts reaches a list
+operator. Classification is `app.dns.egress.address_reason` (injectable for tests). List test
+points (e.g. a list's documented 127.0.0.2 entry) are not special-cased here; if needed they
+will come from list data later.
+
 An unverified list is not queried (`list_unverified`) unless `include_unverified` is set; its
 results are then marked `unverified=True`.
 """
@@ -35,6 +42,7 @@ from typing import Final, Literal
 
 from app.checks.dnsbl_schema import ANSWER_NETWORK, DnsblList
 from app.core.domain_names import MAX_DOMAIN_LENGTH, InvalidDomainName, to_ascii_domain
+from app.dns.egress import IPAddress, address_reason
 from app.dns.types import DnsQuestion, DnsResult, Resolver, ResultState
 
 DEFAULT_BLOCK_THRESHOLD: Final = 3
@@ -45,6 +53,8 @@ MAX_TARGETS: Final = 256
 MAX_TARGET_INPUT_LENGTH: Final = 1024
 
 AcquireHook = Callable[[str], Awaitable[None]]
+# Returns None for a public address, else any non-None reason (default: egress classification).
+AddressPolicy = Callable[[IPAddress], object]
 
 
 class Outcome(StrEnum):
@@ -79,8 +89,11 @@ class Reason(StrEnum):
     blocked_resolver = "blocked_resolver"
     list_unverified = "list_unverified"
     name_too_long = "name_too_long"
+    invalid_name = "invalid_name"
+    rate_limit_error = "rate_limit_error"
     # not applicable
     kind_mismatch = "kind_mismatch"
+    non_public_address = "non_public_address"
     ipv4_unsupported = "ipv4_unsupported"
     ipv6_unsupported = "ipv6_unsupported"
 
@@ -305,6 +318,7 @@ class DnsblEngine:
         *,
         include_unverified: bool = False,
         acquire: AcquireHook | None = None,
+        address_policy: AddressPolicy = address_reason,
         concurrency: int = DEFAULT_CONCURRENCY,
         query_timeout_s: float = DEFAULT_QUERY_TIMEOUT_S,
         block_threshold: int = DEFAULT_BLOCK_THRESHOLD,
@@ -317,6 +331,7 @@ class DnsblEngine:
         self._lists = tuple(lists)
         self._include_unverified = include_unverified
         self._acquire = acquire or _no_acquire
+        self._address_policy = address_policy
         self._semaphore = asyncio.Semaphore(concurrency)
         self._timeout = query_timeout_s
         self._threshold = block_threshold
@@ -355,32 +370,43 @@ class DnsblEngine:
     async def _one(self, lst: DnsblList, target: DnsblTarget) -> DnsblResult:
         if (na := not_applicable_reason(lst, target)) is not None:
             return self._skip(lst, target, Outcome.not_applicable, na)
+        if target.ip is not None and self._address_policy(target.ip) is not None:
+            return self._skip(lst, target, Outcome.not_applicable, Reason.non_public_address)
         if not lst.verified and not self._include_unverified:
             return self._skip(lst, target, Outcome.error, Reason.list_unverified)
         try:
             name = build_query_name(lst, target)
-        except DnsblQueryError:
-            return self._skip(lst, target, Outcome.error, Reason.name_too_long)
+        except DnsblQueryError as exc:
+            reason = Reason.name_too_long if exc.reason == "name_too_long" else Reason.invalid_name
+            return self._skip(lst, target, Outcome.error, reason)
 
         st = self._state[lst.id]
         if not st.decided and st.probes_started < self._threshold:
             st.probes_started += 1
-            res = await self._query(lst, target, name)
-            if not st.decided:
-                if res.reason in _REFUSAL_REASONS:
+            counted = False
+            try:
+                res = await self._query(lst, target, name)
+                if not st.decided and res.reason in _REFUSAL_REASONS:
+                    counted = True
                     st.probes_refused += 1
                     if st.probes_refused >= self._threshold:
                         st.decide(blocked=True)
-                else:
+                return res
+            finally:
+                # Any other probe outcome, incl. an exception or cancellation, releases the
+                # waiting queries for this list: they must never hang on a failed probe.
+                if not st.decided and not counted:
                     st.decide(blocked=False)
-            return res
         await st.event.wait()
         if st.blocked:
             return self._skip(lst, target, Outcome.error, Reason.blocked_resolver, name)
         return await self._query(lst, target, name)
 
     async def _query(self, lst: DnsblList, target: DnsblTarget, name: str) -> DnsblResult:
-        await self._acquire(lst.id)
+        try:
+            await self._acquire(lst.id)
+        except Exception:  # noqa: BLE001 - the rate limiter failed: this query is an error
+            return self._skip(lst, target, Outcome.error, Reason.rate_limit_error, name)
         async with self._semaphore:
             result: DnsResult | None = None
             try:

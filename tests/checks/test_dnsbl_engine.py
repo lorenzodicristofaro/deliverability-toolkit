@@ -26,6 +26,7 @@ from app.checks.dnsbl_engine import (
     parse_target,
 )
 from app.checks.dnsbl_schema import DnsblList, read_dnsbl_lists
+from app.dns.egress import BlockReason, IPAddress, address_reason
 from app.dns.types import DnsQuestion, DnsRecord, DnsResult, ResultState
 from tests.support.dns_zones import FakeResolver, parse_zones
 
@@ -212,6 +213,17 @@ def test_evidence_is_bounded() -> None:
 # --- engine runs ---------------------------------------------------------------------------------
 
 
+def _docs_allowed(ip: IPAddress) -> BlockReason | None:
+    """Test policy: production classification, except documentation ranges (our test IPs)."""
+    reason = address_reason(ip)
+    return None if reason is BlockReason.documentation else reason
+
+
+def _engine(resolver: Any, lists: list[DnsblList], **kw: Any) -> DnsblEngine:
+    kw.setdefault("address_policy", _docs_allowed)
+    return DnsblEngine(resolver, lists, **kw)
+
+
 def _fake(entries: list[dict[str, Any]]) -> FakeResolver:
     return parse_zones({"zones": {"default": entries}}).resolver()
 
@@ -232,7 +244,7 @@ async def test_run_mixed_targets_and_lists() -> None:
             {"name": f"{V6_NIBBLES}.bl.example.com", "type": "A", "state": "servfail"},
         ]
     )
-    engine = DnsblEngine(fake, [BOTH, V4, DOM, UNVERIFIED])
+    engine = _engine(fake, [BOTH, V4, DOM, UNVERIFIED])
     report = await engine.run(_targets("192.0.2.1", "2001:db8::1", "example.com"))
     got = {(r.target, r.list_id): (r.outcome, r.reason) for r in report.results}
     assert got == {
@@ -265,7 +277,7 @@ async def test_run_mixed_targets_and_lists() -> None:
 async def test_unverified_list_with_flag(answer: str | None, outcome: Outcome) -> None:
     name = "1.2.0.192.unverified.example.com"
     fake = _fake([_a(name, answer)] if answer else [])
-    engine = DnsblEngine(fake, [UNVERIFIED], include_unverified=True)
+    engine = _engine(fake, [UNVERIFIED], include_unverified=True)
     (res,) = (await engine.run(_targets("192.0.2.1"))).results
     assert res.outcome is outcome and res.unverified and res.query_name == name
 
@@ -294,7 +306,7 @@ async def test_blocked_resolver_short_circuit(
         elif ans is not None:
             entries.append(_a(name, ans))
     fake = _fake(entries)
-    engine = DnsblEngine(fake, [BOTH], concurrency=1, block_threshold=3)
+    engine = _engine(fake, [BOTH], concurrency=1, block_threshold=3)
     report = await engine.run(_targets(*ips))
     assert len(fake.questions) == queried
     assert (report.blocked_lists == {"ip-both"}) is blocked
@@ -342,7 +354,7 @@ class _ScriptedResolver:
 async def test_egress_blocked_probes_block_list() -> None:
     names = {f"{i}.2.0.192.bl.example.com": ResultState.blocked for i in range(1, 5)}
     resolver = _ScriptedResolver(_fake([]), names)
-    engine = DnsblEngine(resolver, [BOTH], block_threshold=2, concurrency=4)
+    engine = _engine(resolver, [BOTH], block_threshold=2, concurrency=4)
     report = await engine.run(_targets(*(f"192.0.2.{i}" for i in range(1, 5))))
     assert report.blocked_lists == {"ip-both"}
     assert [r.reason for r in report.results] == [Reason.egress_blocked] * 2 + [
@@ -354,7 +366,7 @@ async def test_timeout_and_exception_are_errors() -> None:
     resolver = _ScriptedResolver(
         _fake([]), hang=frozenset({Q4}), raise_on=frozenset({"2.2.0.192.bl.example.com"})
     )
-    engine = DnsblEngine(resolver, [BOTH], query_timeout_s=0.01)
+    engine = _engine(resolver, [BOTH], query_timeout_s=0.01)
     report = await engine.run(_targets("192.0.2.1", "192.0.2.2", "192.0.2.3"))
     assert [(r.outcome, r.reason) for r in report.results] == [
         (Outcome.error, Reason.timeout),
@@ -370,7 +382,7 @@ async def test_concurrency_cap_and_acquire_hook() -> None:
     async def acquire(list_id: str) -> None:
         acquired.append(list_id)
 
-    engine = DnsblEngine(resolver, [BOTH, V4], concurrency=2, acquire=acquire)
+    engine = _engine(resolver, [BOTH, V4], concurrency=2, acquire=acquire)
     report = await engine.run(_targets(*(f"192.0.2.{i}" for i in range(1, 11))))
     assert all(r.outcome is Outcome.not_listed for r in report.results)
     assert resolver.max_in_flight <= 2
@@ -383,7 +395,7 @@ async def test_acquire_not_called_without_query() -> None:
     async def acquire(list_id: str) -> None:
         calls.append(list_id)
 
-    engine = DnsblEngine(_fake([]), [DOM, UNVERIFIED], acquire=acquire)
+    engine = _engine(_fake([]), [DOM, UNVERIFIED], acquire=acquire)
     await engine.run(_targets("192.0.2.1"))
     assert calls == []
 
@@ -391,12 +403,112 @@ async def test_acquire_not_called_without_query() -> None:
 def test_engine_rejects_bad_settings() -> None:
     for kw in ({"concurrency": 0}, {"block_threshold": 0}, {"query_timeout_s": 0}):
         with pytest.raises(ValueError):
-            DnsblEngine(_fake([]), [BOTH], **kw)  # type: ignore[arg-type]
+            _engine(_fake([]), [BOTH], **kw)  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="duplicate"):
-        DnsblEngine(_fake([]), [BOTH, BOTH])
+        _engine(_fake([]), [BOTH, BOTH])
 
 
 async def test_too_many_targets() -> None:
-    engine = DnsblEngine(_fake([]), [BOTH])
+    engine = _engine(_fake([]), [BOTH])
     with pytest.raises(ValueError, match="at most"):
         await engine.run(_targets("192.0.2.1") * 257)
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "10.1.2.3",  # private
+        "172.16.0.1",
+        "192.168.1.1",
+        "127.0.0.2",  # loopback, incl. a typical list test point
+        "169.254.169.254",  # link-local / metadata
+        "100.64.0.1",  # shared address space
+        "0.0.0.0",
+        "224.0.0.1",  # multicast
+        "255.255.255.255",
+        "240.0.0.1",
+        "192.0.2.1",  # documentation, under the default policy
+        "::1",
+        "::",
+        "fe80::1",
+        "fd00::1",  # unique local
+        "ff02::1",
+        "2001:db8::1",  # documentation, under the default policy
+        "::ffff:10.0.0.1",  # IPv4-mapped private, unwrapped first
+        "::ffff:127.0.0.1",
+    ],
+)
+async def test_non_public_target_is_not_queried(raw: str) -> None:
+    fake = _fake([])
+    calls: list[str] = []
+
+    async def acquire(list_id: str) -> None:
+        calls.append(list_id)
+
+    engine = DnsblEngine(fake, [BOTH, V4], acquire=acquire)  # default egress classification
+    report = await engine.run(_targets(raw))
+    for res in report.results:
+        assert (res.outcome, res.reason) in {
+            (Outcome.not_applicable, Reason.non_public_address),
+            (Outcome.not_applicable, Reason.ipv6_unsupported),
+        }
+        assert res.query_name is None and res.dns_state is None
+    assert fake.questions == [] and calls == []
+
+
+async def test_public_target_is_queried_with_default_policy() -> None:
+    fake = _fake([])
+    report = await DnsblEngine(fake, [V4]).run(_targets("8.8.8.8"))
+    (res,) = report.results
+    assert res.outcome is Outcome.not_listed and res.query_name == "8.8.8.8.v4.example.net"
+    assert len(fake.questions) == 1
+
+
+@pytest.mark.parametrize(
+    ("raised", "reason"),
+    [("name_too_long", Reason.name_too_long), ("invalid_name", Reason.invalid_name)],
+)
+async def test_query_error_reason_is_kept(
+    monkeypatch: pytest.MonkeyPatch, raised: str, reason: Reason
+) -> None:
+    import app.checks.dnsbl_engine as engine_mod
+
+    def boom(_lst: DnsblList, _target: DnsblTarget) -> str:
+        raise DnsblQueryError(raised)
+
+    monkeypatch.setattr(engine_mod, "build_query_name", boom)
+    fake = _fake([])
+    (res,) = (await _engine(fake, [BOTH]).run(_targets("192.0.2.1"))).results
+    assert (res.outcome, res.reason) == (Outcome.error, reason)
+    assert fake.questions == []
+
+
+async def test_long_domain_gives_name_too_long() -> None:
+    fake = _fake([])
+    target = ".".join(["a" * 63] * 3) + "." + "b" * 40 + ".example"
+    (res,) = (await _engine(fake, [DOM]).run(_targets(target))).results
+    assert (res.outcome, res.reason) == (Outcome.error, Reason.name_too_long)
+
+
+@pytest.mark.parametrize("fail_on", [{1}, {1, 2, 3}, {1, 2, 3, 4, 5, 6}])
+async def test_raising_acquire_hook_is_error_and_never_hangs(fail_on: set[int]) -> None:
+    fake = _fake([])
+    count = 0
+
+    async def acquire(_list_id: str) -> None:
+        nonlocal count
+        count += 1
+        mine = count
+        await asyncio.sleep(0)
+        if mine in fail_on:
+            raise RuntimeError("limiter down")
+
+    engine = _engine(fake, [BOTH], acquire=acquire, concurrency=2, block_threshold=3)
+    report = await asyncio.wait_for(
+        engine.run(_targets(*(f"192.0.2.{i}" for i in range(1, 7)))), timeout=2
+    )
+    reasons = [r.reason for r in report.results]
+    assert reasons.count(Reason.rate_limit_error) == len(fail_on)
+    assert all(r in (Reason.rate_limit_error, None) for r in reasons)
+    assert len(fake.questions) == 6 - len(fail_on)
+    assert report.blocked_lists == frozenset()
