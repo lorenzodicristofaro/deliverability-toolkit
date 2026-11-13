@@ -1,5 +1,13 @@
 # Default `docker compose up` starts only the app (SQLite, zero config).
-#   docker compose --profile postgres up   adds PostgreSQL
+#   docker compose --profile postgres up   adds PostgreSQL (the app only uses it if DATABASE_URL says so)
+#     DATABASE_URL=postgresql://deliverability:<password>@postgres:5432/deliverability
+#     <password> = POSTGRES_PASSWORD, percent-encoded if it has special characters (@ : / % ? #).
+#     User and database are the POSTGRES_USER / POSTGRES_DB defaults below. Without that
+#     DATABASE_URL the app keeps writing to the SQLite volume and PostgreSQL stays empty.
+#     Startup order: depends_on cannot be conditional on a profile, so the app may start before
+#     PostgreSQL accepts connections; `alembic upgrade head` then waits for it (refused or
+#     starting up only, at most 60 s, migrations/env.py). Past that the container exits and
+#     `restart: unless-stopped` starts it again.
 #   docker compose --profile unbound up    adds a local validating resolver (own image)
 # Rule: no bind mounts of folders outside the project into containers.
 # Secrets come from the environment or a gitignored .env (see .env.example).
@@ -19,6 +27,19 @@ services:
       # profile use RESOLVER_MODE=unbound and RESOLVER_ADDRS=172.28.53.2:5353 (docs/UNBOUND.md).
       RESOLVER_MODE: ${RESOLVER_MODE:-system}
       RESOLVER_ADDRS: ${RESOLVER_ADDRS:-}
+      # Every other setting documented in .env.example (defaults equal the Settings defaults;
+      # tests/test_compose_config.py enforces both). Without these, .env values never reach
+      # the container (BASE_URL=https://... would be ignored: no Secure cookies, no HSTS).
+      ROLE: ${ROLE:-all}
+      ALLOW_SMTP_CHECKS: ${ALLOW_SMTP_CHECKS:-false}
+      ALLOW_REGISTRATION: ${ALLOW_REGISTRATION:-false}
+      BASE_URL: ${BASE_URL:-http://localhost:8000}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      SESSION_IDLE_TIMEOUT_MINUTES: ${SESSION_IDLE_TIMEOUT_MINUTES:-30}
+      SESSION_ABSOLUTE_TIMEOUT_MINUTES: ${SESSION_ABSOLUTE_TIMEOUT_MINUTES:-720}
+      # Reverse proxies trusted for X-Forwarded-For (R1-30, docs/SETUP.md section 7). Empty:
+      # the client IP is the direct peer (behind a proxy every user shares one throttle IP).
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES:-}
     networks:
       - default  # internet access
       - dns      # reach the unbound profile at 172.28.53.2; internal, no outside access
@@ -35,6 +56,10 @@ services:
       start_period: 10s
       retries: 3
     restart: unless-stopped
+    cap_drop: [ALL]
+    security_opt:
+      - "no-new-privileges:true"
+    init: true
 
   postgres:
     profiles: ["postgres"]

@@ -23,3 +23,8 @@ zones:
     - {name: _dmarc.example.net, type: TXT, ttl: 300, rdata: ["v=DMARC1; p=reject; rua=mailto:dmarc@example.net"]}
     - {name: sub.example.net, type: A, ttl: 300, rdata: [192.0.2.20]}
     - {name: _dmarc.own.sub.example.net, type: TXT, ttl: 300, rdata: ["v=DMARC1; p=none; rua=mailto:dmarc@example.net"]}
+    - {name: _dmarc.sp-strict.test, type: TXT, ttl: 300, rdata: ["v=DMARC1; p=none; sp=reject; rua=mailto:dmarc@sp-strict.test"]}
+    - {name: _dmarc.sp-weak.test, type: TXT, ttl: 300, rdata: ["v=DMARC1; p=reject; sp=none; rua=mailto:dmarc@sp-weak.test"]}
+    - {name: _dmarc.sp-absent.test, type: TXT, ttl: 300, rdata: ["v=DMARC1; p=none; rua=mailto:dmarc@sp-absent.test"]}
+    - {name: _dmarc.sp-invalid.test, type: TXT, ttl: 300, rdata: ["v=DMARC1; p=reject; sp=zzz; rua=mailto:dmarc@sp-invalid.test"]}
+    - {name: _dmarc.sp-pct.test, type: TXT, ttl: 300, rdata: ["v=DMARC1; p=reject; sp=quarantine; pct=50; rua=mailto:dmarc@sp-pct.test"]}

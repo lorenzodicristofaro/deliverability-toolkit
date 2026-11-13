@@ -92,6 +92,9 @@ relevant tests instead of the full suite; the GM skips a local full suite on the
 PostgreSQL) is the full-suite gate. Such tickets default to `sonnet` for coder and QA unless the data needs judgement
 across conflicting vendor sources.
 
+QA worktree rule (GM, 2026-11-12): `qa-reviewer` reviews in its own temporary git worktree and never checks out a
+branch in the main working tree (a QA run once left the main tree on a detached HEAD).
+
 ## 4. Loop
 
 1. GM reads CLAUDE.md, WORKFLOW.md, TODO.md and `docs/HANDOFF.md` (if present).
@@ -121,22 +124,46 @@ across conflicting vendor sources.
 - `qa` only ever receives a `dev` commit whose CI is green, so `qa` pushes do not run CI again (from M6-00).
 - What runs when (M6-00): `ci.yml` (lint, test-sqlite, test-postgres) runs on `dev` and `main` pushes and on
   pull requests, skipped for docs-only changes. `ci-infra.yml` (docker-build, integration-unbound,
-  unbound-arm64-smoke) runs on `dev` pushes and pull requests only when a Docker-related path changes (list and
-  reasons at the top of that file); on `main` pushes `ci.yml` calls it without a path filter, so `main` runs
-  every job. `qa` pushes run nothing. A path-filtered or skipped workflow reports no check at all, so a
-  required check can stay Pending on a pull request that skips it (how the ruleset treats this is unverified).
+  unbound-arm64-smoke) runs on `dev` pushes and pull requests only when a Docker-related path changes,
+  including `app/**` and `locales/**` (list and reasons at the top of that file); on `main` pushes `ci.yml`
+  calls it without a path filter, so `main` runs every job. `qa` pushes run nothing. A path-filtered or
+  skipped workflow reports no check at all, so a required check can stay Pending on a pull request that
+  skips it (how the ruleset treats this is unverified).
   `codeql.yml` (M6-15) runs CodeQL on `main` pushes, pull requests to `main` and weekly; not a required check.
+- pip-audit (M6-24): `pip-audit.yml` audits `uv.lock` (`uv export --frozen ... --all-groups`, then pinned
+  `uvx pip-audit --no-deps --disable-pip`) and fails on any known vulnerability. `ci.yml` calls it as the
+  `pip-audit` job, so it runs on `dev`/`main` pushes and pull requests and is skipped for docs-only changes like
+  the test jobs (maintainer decision 2026-11-12). New advisories appear without code changes, so the file also
+  runs weekly (Mondays) on its own; scheduled workflows run from `main`, so the schedule starts after the next
+  `qa` -> `main` promotion. Not a required check.
+- Red pip-audit: first bump the dependency (`uv lock --upgrade-package <name>`, with a regression test where
+  the advisory is reachable). If no fixed version exists, add a time-boxed ignore: `--ignore-vuln <GHSA id>` on
+  the pip-audit command, with a comment next to the flag (GHSA id, reason, expiry date), and the same three
+  facts in the commit message. Maximum 90 days; remove the flag when it expires or the fix ships. No silent
+  ignores.
 - Coder, PM and QA never push. `main`, tags, releases, force pushes and branch deletions stay with the human.
-- Enforced in two layers. Client side, `.claude/settings.json`: exact allow rules for `git push origin dev|qa`,
-  deny rules for `main`, tags, force, `--all`, `--mirror`, delete refspecs, and for `gh pr merge`, `gh release`,
-  `gh api`, `gh repo`, `gh secret`. Server side, repository rulesets: `protect-qa` (no deletion, no force push)
-  and `protect-main` (no deletion, no force push, pull request required with 0 approvals, merge commits only,
-  required checks `lint`, `test-sqlite`, `test-postgres`, `secret-scan`). See `docs/SETUP.md`.
+- Enforced in two layers. Client side, `.claude/settings.json`: exact allow rules for `git push origin dev|qa`
+  (and both together) and `gh run list|view|watch`; deny rules for pushes naming `main`, force (`--force`, `-f`,
+  `+`), `--tags`, `refs/tags`, `--all`, `--mirror`, `--delete`, `-d`, `:` refspecs, tag names `v*`, and any
+  `git ... push` with options before the verb (`Bash(git * push*)` also denies any git command containing
+  " push" after the verb, e.g. a commit message, `git log --grep push` or a branch name, so agents keep the
+  word "push" out of commit messages); for `git tag`, `gh pr merge`, `gh release`, `gh api`, `gh repo`,
+  `gh secret`; and for Edit/Write of `.claude/settings*.json`, `.claude/agents/`, `.claude/commands/`,
+  `.claude/skills/`, `.claude/hooks/`. A form neither denied nor allowed asks for confirmation. Server side,
+  repository rulesets: `protect-main` (no deletion, no force push, pull request required with 0 approvals, merge
+  commits only, required checks `lint`, `test-sqlite`, `test-postgres`, `secret-scan`), `protect-qa` and
+  `protect-dev` (no deletion, no force push), `protect-tags` (tags `v*`: no creation, update or deletion, no
+  force push, empty bypass list). See `docs/SETUP.md` and `docs/RELEASE.md`.
+- Every change to `.github/**` or `.claude/**` is flagged in the merge report and is approved by the maintainer before
+  the push. Commits touching `.github/workflows/` are pushed by the maintainer (the GM token has no Workflows
+  permission).
 - `qa` → `main` is a pull request opened and merged by the maintainer.
 
 ### Credentials and permissions
 - The machine where agents run has a fine-grained GitHub token scoped to this repository: Contents read/write,
-  Actions read, no pull-request rights. It has no production secrets.
+  Actions read, no pull-request rights, no Workflows permission. It has no production secrets.
+- Repository Actions settings: workflow permissions read-only; "Allow GitHub Actions to create and approve pull
+  requests" disabled. `tests/test_workflow_permissions.py` rejects any `write` grant in a workflow except `security-events: write` in `codeql.yml`.
 - Production credentials, release tokens and the production encryption key are never present there.
 - QA and prod use separate databases and separate `SECRET_KEY` / `ENCRYPTION_KEY`. Never test on the production database.
 - Secret scanning runs on every commit (pre-commit hook) and in CI.

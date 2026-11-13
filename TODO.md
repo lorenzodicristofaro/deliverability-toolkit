@@ -140,10 +140,10 @@ Carried over from M0-07 QA:
   - [x] M5-25 acceptance tests + docs/CONTENT.md
 
 ## M6 — ESP profiles
-- [ ] YAML schema + CI validation, loader, per-domain ESP assignment
-- [ ] Profile checks (SPF include, DKIM CNAMEs, return-path, tracking domain)
-- [ ] Initial profiles verified against official docs, incl. MailUp/TeamSystem and other Italian ESPs
-- [ ] Contributor guide for adding a profile
+- [x] YAML schema + CI validation, loader, per-domain ESP assignment
+- [x] Profile checks (SPF include, DKIM CNAMEs, return-path, tracking domain)
+- [x] Initial profiles verified against official docs, incl. MailUp/TeamSystem and other Italian ESPs
+- [x] Contributor guide for adding a profile
 - Accept: each profile has `verified_on` + sources; sample domains produce expected findings.
 - Tickets (docs/tickets/):
   - [x] M6-00 CI: fewer billed Actions minutes (no CI on qa, path-filtered infra jobs)
@@ -175,7 +175,91 @@ Carried over from M0-07 QA:
   - [x] M6-21 deps: dnspython 2.9.2 plus compression-pointer regression test (opus, depends on M6-20); merged 9b0d610, QA APPROVE
   - [x] M6-22 docs: record the xato.net dataset terms (public domain, Mark Burnett) in the password list header and THIRD_PARTY_NOTICES, add attribution (sonnet; resolves the "MAINTAINER TO CONFIRM ... xato.net" item below)
   - [ ] M6-21 nit (QA, optional): tests/dns/test_backends.py:229-247 — add a pointer-chain variant whose chain resolves to the qname itself, to prove a vulnerable parser cannot yield a spoofed ok.
-  - [ ] Optional, pending maintainer decision (GM proposed 2026-11-11): add `pip-audit` as a CI job on dev
+  - [x] pip-audit as a CI job on dev: APPROVED by the maintainer 2026-11-12 -> M6-24
+  - [x] M6-23 MailUp DKIM: ml01+ml02 CNAMEs OR ml00 TXT, alternative selector sets in the ESP schema (opus; maintainer decision 2026-11-12); merged 99e408b, QA APPROVE
+  - [x] M6-24 CI: pip-audit job on dev pushes and PRs (skips docs-only pushes) plus weekly run on main (sonnet); merged 2336d26, QA APPROVE
+  - [x] M6-25 knowledge data: PSL licence MPL-2.0 and Gmail clip size 102,400 marked verified (sonnet); merged 348959d, QA APPROVE
+  - M6 closed 2026-11-12. Report: docs/reports/M6.md
+  - Dependabot (resolved 2026-11-12): the two open alerts (#1 pyproject.toml, #2 uv.lock) are the same advisory GHSA-45c3-73f7-pv4m, fixed by M6-21 (dnspython 2.9.2, on main since PR #2 9d793cb). The "second unidentified alert" item is closed; the alerts should close on the next Dependabot scan.
+
+## R1 — Code review fixes 2026-11-12
+Goal: fix the findings of the maintainer-requested code review of dev 06869fb (review files in docs/reviews/2026-11-12/ on the review branch; each ticket carries its own copy of the details).
+Accept: each ticketed finding is reproduced by a failing test and fixed, or recorded as not reproduced; CI green on dev.
+Tickets (docs/tickets/):
+- [x] R1-01 PARSE-01 quadratic style regexes (ReDoS) + `_REPLY` rewrite (opus)
+- [x] R1-02 AUTH-01 release the DB connection after authentication (opus)
+- [x] R1-03 AUTH-02 login throttle: per-IP limit, argon2 concurrency bound, eviction reset; includes the "Per-IP cap on throttle keys" item (opus)
+- [x] R1-04 AUTH-03 compose.yaml forwards BASE_URL and the other documented settings (sonnet)
+- [x] R1-05 DNS-01 DMARC inherited policy uses sp (sonnet)
+- [x] R1-06 DNS-02 SPF tree own domain-spec target normaliser (opus)
+- [x] R1-07 DNS-03 trace reports an unfinished CNAME chain (opus); following the CNAME is a follow-up
+- [x] R1-08 DNS-04 DKIM non-key TXT is not a found selector, one aggregated finding (sonnet)
+- [x] R1-09 PARSE-02 alignment: dkim=none is no signature; spf from the resinfo with smtp.mailfrom (opus)
+- [x] R1-10 PARSE-03 error status always carries an explaining finding (sonnet; depends R1-09)
+- Lows, run only if budget allows:
+- [x] R1-11 AUTH-06 missing-i18n-key warning shows the key (sonnet)
+- [x] R1-12 AUTH-07 default error bodies translated, no echo, no blank 413 (sonnet)
+- [x] R1-13 AUTH-08 sync DB calls on the event loop in async web handlers (sonnet; depends R1-02)
+- [x] R1-14 AUTH-09 purge expired and revoked sessions (opus)
+- [x] R1-15 AUTH-10 `__Host-` cookies on https, CSRF token expiry (opus; depends R1-04)
+- [x] R1-16 AUTH-11 Cache-Control no-store centrally (sonnet); keyed on the session cookie, see R1-32
+- [x] R1-17 DNS-05 SPF terms after `all` not counted (opus)
+- [x] R1-18 DNS-06 drop the 255-octet SPF_RECORD_TOO_LONG info branch (opus)
+- [x] R1-19 DNS-07 empty reply without RA is an error (sonnet; confidence low) — maintainer 2026-11-12: precautionary rule (a)
+- [x] R1-20 PARSE-04 `dtk check` escapes control characters (sonnet)
+- [x] R1-21 PARSE-05 Received from_ip prefers the TCP-info comment (opus; merged a349692, QA APPROVE round 2)
+- [x] R1-22 PARSE-06 forged lower Authentication-Results field (opus; depends R1-09; option (c), maintainer agreed 2026-11-13; merged 854d34e, QA APPROVE)
+- [x] R1-23 PARSE-07 message analyzer One-Click via the List-Unsubscribe parser (sonnet)
+- [x] R1-24 PARSE-08 To/Cc counts from raw values (sonnet)
+- [x] R1-25 INFRA-03 postgres compose profile: URL, retry, CI smoke (sonnet; depends R1-04)
+- [x] R1-26 INFRA-04 pin app image bases by digest, rebuild check (sonnet; digests need network)
+- [x] R1-27 INFRA-05 run Docker jobs for app/ and locales/ changes (sonnet)
+- [x] R1-28 INFRA-06 migration race between replicas (sonnet)
+- [x] R1-29 INFRA-07 app container hardening (sonnet; related to the safe_regex orphan item below; depends R1-04)
+- [x] R1-30 AUTH-04 TRUSTED_PROXIES setting: client IP from X-Forwarded-For/Forwarded only for a trusted peer; login throttle, setup wizard, .env.example, compose (opus; depends R1-03, R1-04); covers the item "Trusted-proxy setting for the client IP"
+- [x] R1-31 AUTH-05 domain rename rewrites the ESP host suffixes in the same transaction, user notice en+it (sonnet)
+- [x] R1-32 AUTH-11 follow-up: Cache-Control no-store on every response except /static/ and exactly /healthz, regardless of the cookie (sonnet; depends R1-16)
+- [x] R1-33 INFRA-01/02 push policy docs as enforced, workflow permissions test, settings.json deny rules (sonnet; in-review; settings.json and any .github/.claude change pushed only after maintainer approval)
+Follow-ups:
+- R1-21 follow-up (low, needs real MTA Received samples): `helo= [x]` with a space and `(HELO [x])` without "=" are not recognised as labelled, so `from [8.8.8.8] (helo= [10.1.2.3])` gives from_ip 10.1.2.3; consider skipping spaces before "[". "Prefer the comment literal" and helo=/ehlo= handling rest on RFC 5321 4.4 reasoning only, not on real samples.
+- [x] R1-25b postgres-profile startup race fixed: bounded DB wait before migrations (docs/tickets/R1-25b-postgres-startup-wait.md; merged; CI infra proof on the next dev run).
+- R1-25b follow-up (QA nits, low): docs/SETUP.md section 8: say a localized external server only falls back to fail-fast then the restart loop; a hanging connect is bounded by psycopg default 130 s, set connect_timeout if it ever matters; unused type: ignore at migrations/env.py:157 (outside mypy app).
+- R1-25 follow-up (QA nit): ci-infra.yml postgres smoke relies on the CMD `alembic && uvicorn` chain to prove the app uses PostgreSQL; optionally query alembic_version in the postgres container. The comment at ci-infra.yml:116 ("Default profiles only") now describes only the first smoke.
+- R1-26 follow-up (QA nit): docs/DOCKER-PINS.md:16 names only the OCI index media type (say "image index or manifest list"); rebuild.yml:5-6 "Rule and cadence: docs/UNBOUND.md" should also cite docs/DOCKER-PINS.md.
+- R1-30 follow-up (QA nits): resolve_client_ip (app/web/auth.py:148-154) falls back to the peer silently; add a rate-limited WARNING so a proxy sending ip:port hops is noticed (otherwise all users share one throttle key again). docs/SETUP.md section 7: use a /32 example instead of 172.16.0.0/12. Dev run command in CLAUDE.md lacks --no-proxy-headers (dev-only, loopback; maintainer's file).
+- R1-22 follow-up: addressed in F-01-01 (MSG_ALIGNMENT_FAIL reworded; `_topmost_results` documented and pinned).
+- F-01-03 (next after R1-25b; maintainer decision 2026-11-13): per-method findings (MSG_DKIM_NOT_PASS, MSG_SPF_NOT_PASS, same rule for any other per-method result) use ONLY the topmost Authentication-Results field: the message's authentication outcome is what the receiver stated. A lower field never suppresses or replaces it. Where a lower hop passed and the top did not, the hop view and MSG_AUTH_BROKE_AFTER_HOP already show that it was correct earlier; the message still counts as not authenticated. Change `_topmost_results` (app/services/message_findings.py) and its F-01-01 pin test, update docs/HEADERS.md; verdict/computed_dmarc unchanged (opus).
+- F-01 follow-up (low, UX): hop numbering differs on one page: Received table shows the 0-based index, the hop view and MSG_HOP_DELAY_HIGH / MSG_AUTH_BROKE_AFTER_HOP show 1-based. Unify to 1-based in the Received table display.
+- F-01-01 QA nits: detail_no_hop text says "below every Received field" even when the Received list was truncated at 100 (message_hops.py:317, locales :535): use the no_hop variant only when received_truncated is false or reword; docs/HEADERS.md:209 add "and signing algorithm" to the RFC 8617 4.2.1 uniqueness rule.
+- F-01-02 QA nits: shared HOP_SCENARIOS chain test modules (tests/api, tests/web import tests/cli/test_analyze.py, which imports tests/services): move to tests/support/; _result.html:144 `kind_text[e.kind]` fails on an unknown kind: use the i18n key pattern as the CLI does.
+- R1-12 follow-up: comment at app/web/templating.py:37 and test docstring tests/web/test_default_error_bodies.py:210 miscompute the 4-byte worst case (8192 fits the browser 3-byte maxlength case, ~6.6 KB); test_framework_validation_error_has_no_input_for_api_clients (line 67) already passed before the fix.
+- R1-13 follow-up: AST guard tests/web/test_async_handlers_guard.py:22-37 only knows listed method names and 5 modules; glob app/web and flag db/service/repo_for receivers. Nit: stray comment app/web/rules.py:744-746. Also app/api/v1/content.py:170 sync db.rollback() (existing item below, one line).
+- R1-14 follow-up: the purge runs only at startup; a long-running process accumulates rows until the M7 scheduler calls purge_sessions with a policy; no test sends a purged cookie.
+- R1-23 follow-up: with two List-Unsubscribe fields (one over-long, one mailto-only) the message analyzer reports no One-Click while the content analyzer is silent; align optionally. Nit: a NUL-only unknown https value is called "safety limits".
+- R1-01 follow-up: an over-cap inline style also marks the links section not evaluated (content_analysis.py treats any body not-evaluated reason as incomplete); narrow it to body + rules. Timing tests in tests/parsers/test_content_html.py add ~25 s; consider a `slow` marker.
+- R1-03 follow-up: login throttle limits (IP_MAX_ATTEMPTS, MAX_CONCURRENT_VERIFICATIONS, VERIFICATION_WAIT) are module constants; behind a reverse proxy the per-IP budget is per client once `TRUSTED_PROXIES` is set (R1-30); consider settings.
+- R1-04 follow-up: optional startup warning for a non-localhost http:// BASE_URL; parity test could also assert every forwarded Settings field is documented.
+- R1-05 follow-up: inherited-sp scenario in tests/checks/test_acceptance_m3.py; assert the PCT_PARTIAL p argument in the sp-pct row.
+- R1-06 follow-up: comment in app/checks/dnsutil.py fetch_txt noting the SPF tree builds its TXT question directly; the SPF parser still accepts empty/over-long labels and names that the tree rejects as invalid_target.
+- R1-07 follow-up: follow the CNAME target in the trace (restart from the root within budgets); a CNAME from a non-AA server ends the trace instead of trying the next server; trace.py:556 uses getattr where ServerReply has the fields.
+- R1-09 follow-up: a stated dkim=none header.d=X still adds X to stated_ds, so a DKIM-Signature d=X is not reported as unverified (message_alignment.py:260-262); two spf resinfos with smtp.mailfrom: first wins (RFC 8601 silent).
+- R1-10 follow-up: MSG_AUTHRES_UNPARSED detail says the issue codes are 'listed in the finding data', but CLI/web do not show params unused by the text — add an {issues} placeholder (safe codes) or reword, en+it; property test could map each skipped area to its required code.
+- R1-17 follow-up: no test pins error-over-AFTER_ALL precedence (tests/checks/test_esp_profile.py).
+- R1-15 follow-up: remove the legacy dt_session fallback next release (app/core/security.py session_cookie_value, auth._clear_legacy_session_cookie); dt_lang needs no `__Host-` prefix (not security relevant).
+- R1-31 follow-up: the docstring at app/repositories/domain_esps.py:263 should mention the invalid-rewrite case.
+- R1-32 follow-up: SESSION_COOKIE_NAMES in app/core/security.py:47 is now unused.
+- R1-33 follow-up: tests/test_workflow_permissions.py globs only *.yml (a future .yaml workflow is not checked).
+Not ticketed — maintainer:
+- INFRA-01 and INFRA-02: covered by R1-33 (maintainer set the rulesets and token rights; settings.json deny rules, docs and a workflow permissions test).
+Decided 2026-11-13 (maintainer):
+- AUTH-04: ticket R1-30. AUTH-05: ticket R1-31 (rewrite). AUTH-11 follow-up: ticket R1-32.
+- PARSE-03 leniency: STRICT. An Authentication-Results field without authserv-id is not counted as evaluated (RFC 8601 section 2.2 ABNF; sections 2.5 and 4.1). No code change; MSG_AUTHRES_UNPARSED (R1-10) explains it; sentence added to docs/HEADERS.md.
+- docs/CHECKS.md vs app/checks/dmarc.py: the doc was aligned to the code (failed external-authorization lookup gives `error` only when no critical/high finding is present; always reported as DMARC_EXTERNAL_AUTH_UNVERIFIED).
+
+## Backlog (maintainer request 2026-11-13)
+- [x] F-01 message analysis: authentication per hop view (Authentication-Results and ARC sets ordered among Received fields, info finding where pass turns to fail; display only, never feeds computed_dmarc) (opus; depends R1-22; ticket docs/tickets/F-01-auth-per-hop-view.md; analyzer extension, no SPEC scope change); split into:
+  - [x] F-01-01 hop view service, MSG_AUTH_BROKE_AFTER_HOP info finding, R1-22 QA inputs, docs/HEADERS.md (opus; docs/tickets/F-01-01-hop-view-service.md)
+  - [x] F-01-02 hop view in API JSON, web and CLI, i18n en+it, permission tests (opus; depends F-01-01; docs/tickets/F-01-02-hop-view-surfaces.md)
 
 ## M7 — Monitoring
 - [ ] Guarded outbound client (SSRF protection) + tests
@@ -191,8 +275,6 @@ Carried over from M0-07 QA:
 - Accept: real-world report samples parsed; zip-bomb and XXE tests pass.
 
 ## M9 — Integrations and extra records
-- [ ] Google Postmaster Tools (OAuth, per domain) — verify current API first
-- [ ] Microsoft SNDS — verify current access method first
 - [ ] BIMI (SVG Tiny-PS + VMC/CMC), MTA-STS, TLS-RPT, DANE, DNSSEC view
 - [ ] Provider requirements checklist (Gmail/Yahoo/Microsoft) as dated data
 - [ ] Optional SMTP module (off by default)
@@ -201,19 +283,25 @@ Carried over from M0-07 QA:
 - [ ] Share links, tenant branding, PDF/CSV/JSON export, audit log UI, TOTP, API keys
 - [ ] Docs site, OpenAPI, install guides (Docker, Unraid/Synology/Proxmox notes), screenshots
 - [ ] Security review checklist, dependency/license audit, v0.1.0 release
+- Note: v0.1.0 ships without the M11 integrations (Postmaster Tools, SNDS).
+
+## M11 — External reputation integrations
+Maintainer decision 2026-11-12: moved from M9; no test domains or access yet, and the rest must work first. SPEC unchanged (both already optional, no milestone in SPEC).
+- [ ] Google Postmaster Tools (OAuth, per domain) — verify current API first
+- [ ] Microsoft SNDS — verify current access method first
 
 ## Follow-ups (post-M1)
 - Maintainer principle 2026-11-11 (ESP profiles): the known-record checks exist mainly to find which records a domain already has and associate them with an ESP; the seed/profile list is a convenient starting point for the best-known providers; whether a vendor marks a record required or optional matters little, because if a record is missing the client is told to add it. Vendor required/optional disputes are not escalated.
-- [ ] MAINTAINER (M6-09): MailUp SPF conflict DECIDED 2026-11-11 (include musvc.com only when the domain already has an SPF record; never create an SPF record containing only MailUp's include; DMARC unaffected because SPF for DMARC is evaluated on the return-path domain) — implemented by M6-17. `mailchef` (Emailchef, TXT) DKIM seed question DECIDED 2026-11-11: add it (-> M6-18). Still open: review the Italian wording of the esp.mailup.* and esp.emailchef.* strings. Contactlab/Experian, Agile Telecom, Aruba not evaluated (two-profile cap).
+- [ ] MAINTAINER (M6-09): MailUp SPF conflict DECIDED 2026-11-11 (include musvc.com only when the domain already has an SPF record; never create an SPF record containing only MailUp's include; DMARC unaffected because SPF for DMARC is evaluated on the return-path domain) — implemented by M6-17. `mailchef` (Emailchef, TXT) DKIM seed question DECIDED 2026-11-11: add it (-> M6-18). Italian wording of esp.mailup.* and esp.emailchef.* APPROVED as is by the maintainer 2026-11-12 (closed; the esp.mailup.dkim_txt_alternative text is reworded by M6-23 and its new Italian goes back for review). Contactlab/Experian, Agile Telecom, Aruba not evaluated (two-profile cap).
 - [ ] ESP schema gap (M6-08): DKIM selectors that are per-identity (Amazon SES, names shown in the console) or not documented (Mailgun) cannot be expressed; both profiles ship `selectors: []` plus a pitfall. Plan a schema extension (e.g. per-assignment selector names) in a later ticket. A future SES target pattern must not assume dkim.<region>.amazonses.com (hosted zone varies by Region and identity).
   Microsoft 365 (M6-10): selector1/selector2 CNAME targets have two documented formats with different label counts (`...-v1.dkim.mail.microsoft`, May 2025, and `...onmicrosoft.com`), so the profile has no target_pattern; the check only confirms the CNAMEs exist and detection skips them.
-- [ ] MAINTAINER (M6-10): Brevo-blocked part resolved by M6-16. Still open: review the Italian of esp.google_workspace.* and esp.microsoft_365.* (Microsoft labels kept in English: the it-it page is inconsistent).
+- [x] MAINTAINER (M6-10): Brevo-blocked part resolved by M6-16. Italian of esp.google_workspace.* and esp.microsoft_365.* APPROVED as is by the maintainer 2026-11-12 (Microsoft labels kept in English: the it-it page is inconsistent).
 - [x] MAINTAINER (M6-08 vendor facts, unverified): resolved by M6-16. SendGrid link-branding/tracking CNAME (host, target, optional); Mailgun DKIM selector name, tracking host, whether Automatic Sender Security/key rotation makes DKIM a CNAME, whether the tracking CNAME is required with tracking off. Maintainer is collecting the official pages (2026-11-11).
-- [ ] MAINTAINER (M6-16): the Mailgun tracking CNAME optional/required confirmation is closed by the maintainer principle above (2026-11-11). Only open: review Italian of esp.brevo.*, esp.mailgun.*, esp.sendgrid.tracking.
-- [ ] ESP schema gaps (M6-16, later milestone): per-domain generated DKIM selector names (Mailgun TXT, Mailgun ASS pdk-like CNAMEs); DKIM "TXT or CNAME" alternatives (Brevo, Mailgun, SendGrid m1 vs s1/s2); verification TXT records (Brevo code); target for tracking_domain/return_path; Brevo new-flow branded CNAMEs (help article 35337929909778, "only available to some accounts").
+- [x] MAINTAINER (M6-16): the Mailgun tracking CNAME optional/required confirmation is closed by the maintainer principle above (2026-11-11). Italian of esp.brevo.*, esp.mailgun.*, esp.sendgrid.tracking APPROVED as is by the maintainer 2026-11-12.
+- [ ] ESP schema gaps (M6-16, later milestone): per-domain generated DKIM selector names (Mailgun TXT, Mailgun ASS pdk-like CNAMEs); DKIM "TXT or CNAME" alternatives (the mechanism exists since M6-23, `dkim.alternatives`; applying it to Brevo, Mailgun and SendGrid m1 vs s1/s2 is open and needs official sources); verification TXT records (Brevo code); target for tracking_domain/return_path; Brevo new-flow branded CNAMEs (help article 35337929909778, "only available to some accounts").
 - [x] DKIM seed (M6-16): brevo1/brevo2 confirmed on help.brevo.com; adding them needs `"help.brevo.com": "brevo"` in `_VENDOR_HOSTS` in tests/checks/test_dkim_selectors.py. Moved to M6-18.
 - [ ] SendGrid domain-authentication page documentation error recorded (M6-16 QA): it says "To route click and open tracking statistics ... Twilio SendGrid requires this CNAME record" under the bullet describing the s1/s2 DKIM CNAMEs, and mentions a selector "s" while the table uses s1/s2; profile values follow the table. "optional" for link branding rests on "If you choose No, you can add Link Branding later".
-- [ ] M6-17 QA nits: (a) docs/templates/esp-profile.example.yaml: add a commented `only_if_record` line pointing to the docs/ESP_PROFILES.md table (new opt-in field `spf.only_if_record`, used only by MailUp). (b) locales/it.json:227 `esp.mailup.spf_only_if_published`: avoid repeating "il DMARC" (e.g. "...perché verifica l'SPF sul dominio del return-path..."); fold into the maintainer Italian review. (c) Optional test: opt-in profile with an "ok" DNS answer carrying no TXT records (classified as error), same path as the existing failure-state test.
+- [ ] M6-17 QA nits: (a) docs/templates/esp-profile.example.yaml: add a commented `only_if_record` line pointing to the docs/ESP_PROFILES.md table (new opt-in field `spf.only_if_record`, used only by MailUp). (b) locales/it.json:227 `esp.mailup.spf_only_if_published`: avoid repeating "il DMARC" (e.g. "...perché verifica l'SPF sul dominio del return-path..."); nit (b) CLOSED 2026-11-12: the maintainer approved the Italian as is. (c) Optional test: opt-in profile with an "ok" DNS answer carrying no TXT records (classified as error), same path as the existing failure-state test.
 - [ ] Test nit (M6-16 QA): tests/esp/test_acceptance.py:393-419 could add a variant per profile with only one part unverified.
 - [ ] nit (M6-08 QA): SendGrid Note quote reads '...and supports SPF'; the page says '...supports SPF and DKIM'.
 - [ ] ESPs tab (M6-07 QA): should-fix test gap: tests/web/test_domain_esps_ui.py:295-311 has no regression test for hostile DNS evidence (an SPF include or CNAME target carrying `"><script>` from a fake-DNS zone, asserted escaped in `esps-detected` and the per-ESP group); QA checked it by hand and it is escaped. Nits: removing an already-removed assignment shows the full 404 page (app/web/domain_esps.py:291), a redirect with a notice is friendlier; the M6-07 ticket says app/web/__init__.py but routers register in app/main.py. Per-user rate limiting of DNS-running GETs is a project-wide gap (app/api/v1/checks.py:33).
@@ -271,7 +359,7 @@ Carried over from M0-07 QA:
 - [ ] dkim_selectors comment nit (M5-06 QA): model:86 and migration 0006:123 blame the plain tenant_id index; the partial tenant index is the cause. Fix wording.
 - [ ] custom_checks nits (M5-07 QA): DB does not check remediation_text has exactly en+it keys (repo does; document in docstring); ints over 4300 digits raise a bare ValueError from json.dumps instead of a typed `too_large` reason; if `definition` ever becomes jsonb the length CHECK no longer matches json.dumps.
 - [ ] Seed loaders (M5-09 QA): make the private helpers public (app.dns.knowledge _check_keys/_url_list…, app.core.org_domain _psl) and move seed tests to tests/knowledge.
-- [ ] MAINTAINER TO CONFIRM (M5-09): URL shorteners unverified against official pages: t.co (help.x.com returned 403), tinyurl.com, ow.ly, buff.ly, lnkd.in, is.gd, j.mp (seeds/url_shorteners.yaml). Nit: all_aligned is None (not False) when a link is known unaligned and another is unevaluated; M5-14 should use unaligned_count.
+- [ ] DEFERRED, not a blocker (maintainer decision 2026-11-12: keep as is, stays unverified; revisit if someone publishes a census) (M5-09): URL shorteners unverified against official pages: t.co (help.x.com returned 403), tinyurl.com, ow.ly, buff.ly, lnkd.in, is.gd, j.mp (seeds/url_shorteners.yaml). Nit: all_aligned is None (not False) when a link is known unaligned and another is unevaluated; M5-14 should use unaligned_count.
 - [ ] Content findings (M5-14 QA): internal parser failure surfaces as CONTENT_INPUT_CAPPED, whose remediation tells the user to fix the input (pairs with the MSG_SECTION_FAILED follow-up); raw reason codes appear in localized text; `{prefix}` shows the normalised "re".
 - [ ] Content parsers (M5-14 QA): add a public visible-text API from M5-08, replacing `_VisibleText` subclassing private `_Collector`; `_lookup_charset` is private.
 - [ ] tests/services/test_content_analysis.py (M5-14 QA): the socket guard does not detect an attempt whose exception is caught and ignored; a guard recording attempts, asserted empty, would close it.
@@ -305,8 +393,8 @@ Carried over from M0-07 QA:
 - [ ] CSRF exemption for future bearer-token API routes
 - [ ] Throttle the `last_seen_at` write in resolve_session
 - [ ] DB-backed login throttle for multi-process deployments
-- [ ] Per-IP cap on throttle keys, plus a warning log when the table is full (a single IP can fill the table with locked keys and block new logins)
-- [ ] Trusted-proxy setting for the client IP (needed before any reverse-proxy deployment)
+- [x] Per-IP cap on throttle keys, plus a warning log when the table is full (a single IP can fill the table with locked keys and block new logins) (done in R1-03)
+- [x] (covered by R1-30: `TRUSTED_PROXIES`, docs/SETUP.md section 7; uvicorn proxy headers disabled in the image) Trusted-proxy setting for the client IP (needed before any reverse-proxy deployment). Consequence added by the 2026-11-12 review: behind a proxy every client shares one throttle IP, so anyone who knows an email address can lock that account remotely (ten wrong passwords per 15 minutes) and can lock the setup wizard (five wrong setup tokens delay, ten lock it); the documented HTTPS path already implies a proxy; uvicorn `forwarded-allow-ips` default (127.0.0.1 only) is unverified, check the uvicorn documentation before designing (review AUTH-04)
 - [ ] `services.auth.rotate_session` helper (`_switch` reads the sessions row directly)
 - [ ] Dispose of the DB engine at shutdown via the lifespan
 - [ ] A breached-password corpus check, offline
@@ -324,12 +412,13 @@ Carried over from M0-07 QA:
 - [ ] DKIM seed: per-entry `verified_on` (file-level date only; M3-20b entries verified 2026-11-07 noted in a comment)
 - [ ] DKIM seed: Mailchimp campaigns, Postmark, HubSpot selectors not found in official docs; add if the maintainer supplies an official source
 - [ ] Optional: add an explicit `evaluated` field to CheckResult if the runner-only convention proves insufficient (M3-01 QA)
-- [ ] MAINTAINER TO CONFIRM: Public Suffix List data licence (MPL-2.0 per the PyPI publicsuffixlist page only); check github.com/publicsuffix/list LICENSE; recorded as unverified in seeds/public_suffix_source.yaml (M3-09)
+- [x] MAINTAINER TO CONFIRM: Public Suffix List data licence: GM read github.com/publicsuffix/list LICENSE on 2026-11-12 ("Mozilla Public License Version 2.0"), maintainer accepts; seed record updated by M6-25 (M3-09)
+- [x] Gmail clipping threshold 102,400 bytes: confirmed by the maintainer 2026-11-12 from their own experience (source: maintainer confirmation, no URL); recorded by M6-25
 - [ ] SPF parser nits (M3-04 QA): at the 4096-char cut, drop the partial last term so it does not add a second misleading issue; add a comment on Unicode-whitespace term splitting
 - [ ] DMARC parser: reject a `!size` whose value after the unit (number*unit) exceeds 64 bits (M3-05 QA).
 - [ ] Move the no-network socket guard from tests/dns/conftest.py to tests/conftest.py so tests/checks need no cross-package import (M3-07 QA).
 - [ ] spf_tree.py:319 per-term `valid` filter is dead code; remove or assert (M3-07 QA nit).
 - [ ] DKIM parser: optionally reject base64 with non-zero padding bits (M3-06 QA nit).
-- [ ] HTMX under CSP `script-src 'self'` is unverified, maintainer to confirm against https://htmx.org/docs/ (set includeIndicatorStyles=false and allowEval=false when vendored)
+- [x] HTMX under CSP `script-src 'self'`: closed 2026-11-12 (GM): the app does not use HTMX (no vendored HTMX; web JS is static files under script-src 'self'). If HTMX is ever introduced, verify https://htmx.org/docs/ first (includeIndicatorStyles=false and allowEval=false when vendored).
 - [ ] Authentication tab: catch InvalidTarget from run_checks and render the error page instead of a 500 (M3-17 QA nit)
 - [ ] _result.html uses class dns-state-absent for warn/fail/info; use a neutral per-status class (M3-17 QA nit)

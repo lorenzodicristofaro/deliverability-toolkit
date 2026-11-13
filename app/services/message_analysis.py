@@ -2,7 +2,8 @@
 
 ``analyze_message(raw)`` composes the public APIs of the M4 parsers
 (:mod:`app.parsers.message`, ``mime``, ``received``, ``authres``, ``arc``),
-:func:`app.services.message_alignment.analyze_alignment` and
+:func:`app.services.message_alignment.analyze_alignment`,
+:func:`app.services.message_hops.build_hop_view` (per-hop view, display only) and
 :mod:`app.services.message_findings` into one immutable :class:`MessageAnalysis`.
 
 Hard rules (ticket M4-10):
@@ -60,6 +61,7 @@ from app.services.message_findings import (
     excerpt,
     rejected_input_findings,
 )
+from app.services.message_hops import HopEntry, HopTimeline, build_hop_view
 
 __all__ = ["MessageAnalysis", "analyze_message", "redact_received"]
 
@@ -103,6 +105,7 @@ _DEPENDENT_CODES: dict[str, frozenset[str]] = {
     "authentication_results": _AUTH_CODES | _ALIGNMENT_CODES,
     "alignment": _AUTH_CODES | _ALIGNMENT_CODES | {"MSG_REPLY_TO_DIFFERS", "MSG_REPLY_TO_UNUSABLE"},
     "arc": frozenset({"MSG_ARC_INVALID", "MSG_ARC_CV_FAIL"}),
+    "hops": frozenset({"MSG_AUTH_BROKE_AFTER_HOP"}),
 }
 
 
@@ -256,6 +259,35 @@ class MimeView(_Model):
     warnings: tuple[str, ...]
 
 
+class HopResultView(_Model):
+    method: str
+    result: str
+
+
+class HopEntryView(_Model):
+    """One entry of the per-hop view (see :mod:`app.services.message_hops`)."""
+
+    order: int
+    kind: str
+    position: int
+    hop: int | None
+    parsed: bool
+    authserv_id: str | None
+    authres_index: int | None
+    arc_instance: int | None
+    arc_domain: str | None
+    arc_cv: str | None
+    results: tuple[HopResultView, ...]
+    stated_not_verifiable: bool
+    issues: tuple[str, ...]
+
+
+class HopsView(_Model):
+    entries: tuple[HopEntryView, ...]
+    received_truncated: bool
+    arc_truncated: bool
+
+
 class MessageAnalysis(_Model):
     """Result of :func:`analyze_message`. Sections are ``None`` when not produced."""
 
@@ -266,6 +298,7 @@ class MessageAnalysis(_Model):
     arc: ArcView | None
     alignment: AlignmentView | None
     mime: MimeView | None
+    hops: HopsView | None
     findings: tuple[Finding, ...]
 
 
@@ -497,6 +530,34 @@ def _alignment_view(a: AlignmentReport) -> AlignmentView:
     )
 
 
+def _hop_entry(e: HopEntry) -> HopEntryView:
+    return HopEntryView(
+        order=e.order,
+        kind=e.kind,
+        position=e.position,
+        hop=e.hop,
+        parsed=e.parsed,
+        authserv_id=_x(e.authserv_id),
+        authres_index=e.authres_index,
+        arc_instance=e.arc_instance,
+        arc_domain=_x(e.arc_domain),
+        arc_cv=_x(e.arc_cv),
+        results=tuple(
+            HopResultView(method=excerpt(r.method), result=excerpt(r.result)) for r in e.results
+        ),
+        stated_not_verifiable=e.stated_not_verifiable,
+        issues=tuple(excerpt(c) for c in e.issues),
+    )
+
+
+def _hops_view(t: HopTimeline) -> HopsView:
+    return HopsView(
+        entries=tuple(_hop_entry(e) for e in t.entries),
+        received_truncated=t.received_truncated,
+        arc_truncated=t.arc_truncated,
+    )
+
+
 def _mime_view(m: MimeSummary) -> MimeView:
     t = m.totals
     return MimeView(
@@ -539,7 +600,7 @@ def _mime_view(m: MimeSummary) -> MimeView:
 
 
 def _count_addresses(block: HeaderBlock, name: str) -> int:
-    values = [f.decoded_value for f in block.get_all(name)]
+    values = [f.raw_value for f in block.get_all(name)]
     return sum(1 for _, addr in getaddresses(values) if addr)
 
 
@@ -599,6 +660,7 @@ def _rejected(code: str) -> MessageAnalysis:
         arc=None,
         alignment=None,
         mime=None,
+        hops=None,
         findings=findings,
     )
 
@@ -665,6 +727,9 @@ def _analyze(raw: bytes) -> MessageAnalysis:
     )
     mime, mime_v = _parse_and_view("mime", failed, lambda: parse_mime(raw), _mime_view)
     summary = _section("summary", failed, lambda: _summary(block, len(raw)))
+    hops, hops_v = _parse_and_view(
+        "hops", failed, lambda: build_hop_view(block, received, headers, arc), _hops_view
+    )
 
     findings: list[Finding] = []
     evaluated = True
@@ -685,6 +750,7 @@ def _analyze(raw: bytes) -> MessageAnalysis:
             arc=arc or ArcChain("none", (), (), (), (), 0, False),
             alignment=alignment
             or AlignmentReport((), (), None, None, None, "not_evaluated", False, False),
+            hops=hops,
         ),
     )
     if mf is not None:
@@ -707,6 +773,7 @@ def _analyze(raw: bytes) -> MessageAnalysis:
             "arc": arc_v,
             "alignment": alignment_v,
             "mime": mime_v,
+            "hops": hops_v,
             "findings": ordered,
         }
     )

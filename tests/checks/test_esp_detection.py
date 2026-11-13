@@ -128,6 +128,46 @@ CASES: list[tuple[str, Zone, list[str], tuple[str, ...], list[str], list[str], s
         ["ESP_DETECTED_NOT_ASSIGNED", "ESP_NONE_ASSIGNED"],
         "warn",
     ),
+    # R1-17: an include after all is never evaluated, but still associates the ESP.
+    (
+        "spf_include_after_all_match",
+        {SPF: ["v=spf1 -all include:spf.alpha.example.com"]},
+        CANDIDATES,
+        (),
+        ["alpha-esp"],
+        ["ESP_DETECTED_NOT_ASSIGNED", "ESP_NONE_ASSIGNED"],
+        "warn",
+    ),
+    (
+        "spf_include_after_all_in_nested_record_match",
+        {
+            SPF: [f"v=spf1 include:_spf.{D} -all"],
+            (f"_spf.{D}", "TXT"): ["v=spf1 ~all include:_spf.beta.example.net"],
+        },
+        CANDIDATES,
+        (),
+        ["beta-esp"],
+        ["ESP_DETECTED_NOT_ASSIGNED", "ESP_NONE_ASSIGNED"],
+        "warn",
+    ),
+    (
+        "spf_redirect_after_all_is_ignored_no_match",
+        {SPF: ["v=spf1 -all redirect=_spf.beta.example.net"]},
+        CANDIDATES,
+        (),
+        [],
+        ["ESP_NONE_ASSIGNED"],
+        "info",
+    ),
+    (
+        "spf_include_after_all_macro_no_match",
+        {SPF: ["v=spf1 -all include:%{d}.spf.alpha.example.com"]},
+        CANDIDATES,
+        (),
+        [],
+        ["ESP_NONE_ASSIGNED"],
+        "info",
+    ),
     (
         "dkim_cname_match",
         {A1: ["a1.dkim.u42.alpha.example.com."]},
@@ -400,6 +440,14 @@ async def test_spf_failure_with_every_candidate_matched_is_partial() -> None:
     assert _detected(r) == ["alpha-esp"]
     assert _codes(r) == ["ESP_DETECTED_NOT_ASSIGNED", "ESP_NONE_ASSIGNED"]
     assert r.status == "warn"
+
+
+async def test_include_after_all_detected_without_query_or_lookup() -> None:
+    """R1-17: association reads the record text; nothing after all is queried or counted."""
+    r, dns = await _run({SPF: ["v=spf1 -all include:spf.alpha.example.com"]}, ["alpha-esp"])
+    assert _detected(r) == ["alpha-esp"]
+    assert r.data["detection"]["spf"] == "ok"
+    assert dns.questions == [SPF, A1]
 
 
 @pytest.mark.parametrize(

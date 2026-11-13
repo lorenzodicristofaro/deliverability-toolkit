@@ -33,16 +33,35 @@ CI layout and which jobs run on which push: see "Push policy" in `docs/WORKFLOW.
 Decision 2026-11-04: the GM session may push `dev` and `qa`; everything else stays with you (see `docs/WORKFLOW.md`).
 1. **Scoped credentials**: authenticate `gh` with a fine-grained token limited to this repository
    (Contents: read/write, Actions: read, no pull-request rights). Do not use a token with access to other repositories.
-2. **Permission rules** in `.claude/settings.json` (checked in): exact allow rules for `git push origin dev`,
-   `git push origin qa` (and both together), `gh run list|view|watch`; deny rules for `main`, tags, force
-   pushes, `--all`, `--mirror` and delete refspecs; also deny `gh pr merge`, `gh release`, `gh api`, `gh repo`,
-   `gh secret`. Any other push form is not allowed and prompts.
-3. **Rulesets** (server side, repository Settings -> Rules): `protect-qa` (no deletion, no force push) and
-   `protect-main` (no deletion, no force push, pull request required with 0 approvals, merge commits only,
-   required checks `lint`, `test-sqlite`, `test-postgres`, `secret-scan`).
+2. **Permission rules** in `.claude/settings.json` (checked in).
+   - Allow, exact forms only: `git push origin dev`, `git push origin qa`, `git push origin dev qa`,
+     `git push origin qa dev`, `gh run list|view|watch *`.
+   - Deny, push: `git push *main*`, `*--force*`, `*-f*`, `*+*`, `*--tags*`, `*refs/tags*`, `*--all*`,
+     `*--mirror*`, `*--delete*`, `* -d *`, `* :*`, `git push -d*`, `git push * v*`, and `git * push*` (a push with
+     options before the verb, such as `git -C . push`). `git * push*` also denies any git command that contains
+     " push" after the verb (a commit message, `git log --grep push`, a branch name), so agents keep the word
+     "push" out of commit messages.
+   - Deny, other: `git tag *`, `gh pr merge *`, `gh release *`, `gh api *`, `gh repo *`, `gh secret *`.
+   - Deny, edits (Edit and Write): `**/.claude/settings*.json`, `**/.claude/agents/**`, `**/.claude/commands/**`,
+     `**/.claude/skills/**`, `**/.claude/hooks/**`.
+   - A form that is neither denied nor allowed asks for confirmation.
+3. **Rulesets** (server side, repository Settings -> Rules): `protect-qa` (no deletion, no force push),
+   `protect-dev` (no deletion, no force push), `protect-main` (no deletion, no force push, pull request required
+   with 0 approvals, merge commits only, required checks `lint`, `test-sqlite`, `test-postgres`, `secret-scan`),
+   `protect-tags` (tags `v*`: restrict creations, updates and deletions, block force pushes, empty bypass list;
+   disabled only while you release, see `docs/RELEASE.md`).
+   **Workflow permissions** (Settings -> Actions -> General): read-only; "Allow GitHub Actions to create and approve
+   pull requests" disabled. The GM token has no Workflows permission, so a push touching `.github/workflows/` is
+   refused; the maintainer pushes those commits.
+   **Rule**: every change to `.github/**` or `.claude/**` is flagged in the merge report and is approved by the maintainer
+   before the push. `tests/test_workflow_permissions.py` fails if a workflow grants itself a `write` permission
+   (only exception: `security-events: write` in `codeql.yml`).
 4. **Private vulnerability reporting**: enable it in Settings -> Advanced Security, so `SECURITY.md` is accurate.
 The permission-rule syntax can change between Claude Code versions: after changes, **test it** by asking
-Claude Code to run `git push origin main` and `git push --force origin dev`, and confirm both are refused.
+Claude Code to run each of these and confirm they are refused: `git push origin main`,
+`git push --force origin dev`, `git push origin v0.0.0-test`, `git push -d origin dev`,
+`git -C . push origin dev`. Edit probes: an edit in a worktree is allowed; an edit of `.claude/agents/pm.md`, of a
+worktree's `.claude/settings.json` and of a worktree's `.claude/agents/coder.md` is refused.
 
 ## 4. Environments in the home lab
 - `compose.dev.yaml`, `compose.qa.yaml`, `compose.prod.yaml`: different ports, volumes and `.env` files.
@@ -63,3 +82,76 @@ claude            # in the repo root
 /agents           # check that coder, qa-reviewer and pm are listed
 /gm milestone M0
 ```
+
+## 7. Exposing the app (Docker Compose)
+
+`compose.yaml` publishes port 8000 as `"8000:8000"`, on every host interface, and the app
+serves plain HTTP there: no TLS. Put it behind a TLS-terminating reverse proxy for anything
+beyond a trusted local machine. If a proxy on the same host fronts the app, you can publish
+the port on loopback only by changing the mapping to `127.0.0.1:8000:8000` (an option, not
+the default).
+
+### Behind a reverse proxy: `TRUSTED_PROXIES`
+
+The login throttle and the setup wizard count failed attempts per client IP (and per account).
+Behind a reverse proxy the app's direct peer is the proxy, for every user. Set
+`TRUSTED_PROXIES` (in `.env`; `compose.yaml` forwards it) to the address or network of the
+proxy as the app sees it, for example `TRUSTED_PROXIES=172.16.0.0/12` or
+`TRUSTED_PROXIES=10.0.0.5,2001:db8::5`. Comma-separated IPv4/IPv6 addresses or CIDR networks;
+hostnames, `*`, ports and networks with host bits set (`10.0.0.1/8`) are refused and the app
+does not start.
+
+Which address that is depends on your setup: a proxy container on the same Compose network
+is seen with its container address; a proxy on the host reaching the published port is
+typically seen as the Docker network gateway (unverified for every Docker engine and network
+mode: check what your proxy's connections come from before choosing the value). Keep the list
+as narrow as possible: any peer inside it can choose the client IP the app sees.
+
+Rule (`app/web/auth.py`, `resolve_client_ip`):
+- The proxy must send `X-Forwarded-For` (nginx: `proxy_set_header X-Forwarded-For
+  $proxy_add_x_forwarded_for;`, which appends the connecting address). The RFC 7239
+  `Forwarded` header is not read.
+- Only when the direct peer is inside `TRUSTED_PROXIES` is the header used. The entries are read
+  from the right; entries that are themselves trusted proxies are skipped; the first one that is
+  not is the client IP. Entries to its left (which a client can write itself) are never used.
+- The direct peer is used instead when the header is missing or empty, when every entry is a
+  trusted proxy, or when that first untrusted entry is not a bare IP address (a port, brackets,
+  `unknown`, a hostname). A peer outside `TRUSTED_PROXIES` is always used as is, whatever
+  headers it sends.
+
+Lockout consequence of leaving it empty (the default) behind a proxy: every user shares the
+proxy's address, so the throttle key (IP, account) becomes just the account. Anyone who knows an
+email address can lock that account for everyone with ten wrong passwords every 15 minutes,
+and five wrong setup tokens delay (ten lock) the first-run wizard for the operator too. All
+users also share one per-IP budget (100 attempts per 15 minutes). Without a proxy, leave it
+empty: then forwarding headers are ignored, which is what you want when clients connect
+directly.
+
+uvicorn's own proxy-header handling is switched off in the image (`--no-proxy-headers` in the
+Dockerfile `CMD`), so `FORWARDED_ALLOW_IPS` has no effect and only `TRUSTED_PROXIES` decides.
+If you run uvicorn yourself behind a proxy (outside the image), pass `--no-proxy-headers` too:
+uvicorn's documented default (https://uvicorn.dev/settings/, checked 2026-11-13) enables proxy
+headers and trusts `127.0.0.1` and `::1` unless `FORWARDED_ALLOW_IPS` /
+`--forwarded-allow-ips` says otherwise, and it would then replace the peer address before the
+app sees it.
+
+## 8. PostgreSQL instead of SQLite (Docker Compose)
+
+`docker compose --profile postgres up -d` only starts the database. The app keeps using SQLite
+until you set `DATABASE_URL` in `.env` (see `.env.example`):
+
+```
+POSTGRES_PASSWORD=<your password>
+DATABASE_URL=postgresql://deliverability:<password>@postgres:5432/deliverability
+```
+
+`<password>` is the same `POSTGRES_PASSWORD`, percent-encoded if it contains special characters
+(`@ : / % ? #`). On first start the app may come up before PostgreSQL accepts connections
+(compose cannot order it after a profile-only service). Before migrating, the app waits for the
+database: it retries only "connection refused" and "the database system is starting up / not
+yet accepting connections", with backoff 0.5, 1, 2, then 4 s, for at most 60 s in total, logging
+one line per attempt (`database not ready (...), attempt N; retrying in ...`; no URL or
+password). A wrong password, an unknown database or an unresolvable host fail at once. After
+60 s the original error is raised and the container exits non-zero (then
+`restart: unless-stopped` applies). Check with
+`docker compose exec postgres psql -U deliverability -c '\dt'` that tables exist.

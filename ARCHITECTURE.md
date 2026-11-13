@@ -153,6 +153,18 @@ and DNS snapshots are kept longer.
   allowed (all selectors are probed) but results stream.
 - Optional worker mode: `ROLE=web|worker|all`, all state in the DB, so scaling
   later means pointing several workers at PostgreSQL.
+- Migrations are safe to run from several containers started together: on
+  PostgreSQL, `migrations/env.py` holds a session-level advisory lock
+  (`MIGRATION_LOCK_KEY`) for the whole upgrade, so the first replica migrates and
+  the others wait (no lock timeout) and then find the schema already at head.
+  SQLite takes no lock (single container).
+- Startup ordering (PostgreSQL profile): before taking the migration advisory lock,
+  `migrations/env.py` waits for the database for at most 60 s (backoff 0.5 s doubling
+  to a 4 s cap). It retries only connection refused and the server's starting-up
+  rejection (57P03, matched on the libpq message because psycopg reports connect
+  errors without a SQLSTATE). Authentication, unknown-database and DNS errors fail at
+  once; after the bound the original error ends the process and
+  `restart: unless-stopped` applies. SQLite and injected connections skip the wait.
 
 ## 7. DNS layer
 
@@ -201,6 +213,8 @@ dkim:
   selectors:
     - { name: s1, type: cname, target_pattern: "s1.dkim.*.esp.example.com" }
     - { name: k1, type: txt }
+  alternatives:                  # optional (M6-23): DKIM ok if `selectors` OR one set is fully present
+    - [{ name: k0, type: txt }]  # never used for detection; alternative txt must be a valid key
 return_path: { type: cname, optional: false, notes_key: esp.example_esp.return_path }
 tracking_domain: { type: cname, optional: true }
 pitfalls:                        # static advisory entries; no `when:` conditions
@@ -254,6 +268,11 @@ IP literals, IPv6 as `[::1]:5353`, default port 53),
 `BASE_URL`, `SMTP_*` for notifications, `LOG_LEVEL`,
 `SESSION_IDLE_TIMEOUT_MINUTES` (default 30) and `SESSION_ABSOLUTE_TIMEOUT_MINUTES`
 (default 720 = 12 h): both must be > 0 and idle <= absolute, otherwise startup fails.
+`TRUSTED_PROXIES` (R1-30; comma-separated IPv4/IPv6 addresses or CIDR networks, default empty):
+only a direct peer inside it may set the client IP via `X-Forwarded-For` (rightmost hop that is
+not a trusted proxy; `Forwarded` is not read); empty means the direct peer is the client IP.
+An invalid entry fails startup. uvicorn's own proxy-header rewriting is off in the image
+(`--no-proxy-headers`). Deployment details: docs/SETUP.md section 7.
 
 ## 12. Observability
 

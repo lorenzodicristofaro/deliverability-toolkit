@@ -311,6 +311,8 @@ def _trace_json(r: TraceReport) -> dict[str, Any]:
         "queries_sent": r.queries_sent,
         "elapsed_ms": _round(r.elapsed_ms),
         "detail_code": r.detail_code,
+        "cname_chain": [_record_json(x) for x in r.cname_chain],
+        "cname_target": r.cname_target,
     }
 
 
@@ -459,7 +461,7 @@ class TraceOut(_Out):
     name: str
     rdtype: str
     outcome: TraceOutcome
-    state: ResultState  # ok/nxdomain/nodata, else error
+    state: ResultState  # ok (outcomes ok and cname)/nxdomain/nodata, else error
     evaluated: bool
     hops: list[HopOut]
     answer: list[RecordOut]
@@ -468,6 +470,10 @@ class TraceOut(_Out):
     queries_sent: int
     elapsed_ms: float
     detail_code: str | None
+    # R1-07, additive: outcome ``cname`` only, else [] / null. The CNAME records at the query
+    # name, in chain order, and the last target (reported, never followed by the trace).
+    cname_chain: list[RecordOut]
+    cname_target: str | None
 
 
 class PropagationRowOut(_Out):

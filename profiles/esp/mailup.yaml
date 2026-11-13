@@ -13,6 +13,12 @@ dkim:
   selectors:
     - {name: ml01, type: cname, target_pattern: "ml01.dkim.musvc.com"}
     - {name: ml02, type: cname, target_pattern: "ml02.dkim.musvc.com"}
+  # Maintainer decision (2026-11-12), from MailUp platform knowledge, not from an official page:
+  # MailUp checks the ml01/ml02 CNAMEs and also a TXT record at ml00._domainkey; when the ml00
+  # TXT holds the DKIM key MailUp considers DKIM correct. The `sources` below do not state this.
+  # Never used for detection (a bare ml00 TXT is not evidence of MailUp).
+  alternatives:
+    - [{name: ml00, type: txt}]
 pitfalls:
   - {code: ESP_MAILUP_SPF_ONLY_IF_PUBLISHED, notes_key: esp.mailup.spf_only_if_published, severity: info}
   - {code: ESP_MAILUP_DKIM_TXT_ALTERNATIVE, notes_key: esp.mailup.dkim_txt_alternative, severity: info}

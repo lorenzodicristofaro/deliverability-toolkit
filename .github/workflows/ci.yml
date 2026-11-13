@@ -113,3 +113,9 @@ jobs:
   infra:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     uses: ./.github/workflows/ci-infra.yml
+
+  # Dependency audit (M6-24), defined in pip-audit.yml, which also runs weekly on its own. Behind
+  # the same docs-only skip as the test jobs (maintainer decision 2026-11-12): the weekly run
+  # covers new advisories on quiet weeks.
+  pip-audit:
+    uses: ./.github/workflows/pip-audit.yml

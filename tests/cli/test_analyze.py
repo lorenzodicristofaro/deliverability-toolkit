@@ -16,7 +16,10 @@ from app.cli import analyze as cli_analyze
 from app.cli.main import app
 from app.core import i18n
 from app.parsers.message import MAX_RAW_BYTES
+from app.services import message_analysis as ma
 from app.services.message_analysis import analyze_message
+from app.services.message_hops import HopTimeline
+from tests.services import test_message_hops as hops_fx
 
 runner = CliRunner()
 
@@ -255,3 +258,145 @@ def test_usage_errors_exit_64(tmp_path: Path, extra: list[str]) -> None:
 
 def test_missing_argument_is_usage_error() -> None:
     assert runner.invoke(app, ["analyze"]).exit_code == 64
+
+
+# --- F-01-02: per-hop authentication view -------------------------------------------------------
+
+
+def hop_message(*lines: str) -> bytes:
+    """Same message shape as the F-01-01 hop-view tests (tests/services/test_message_hops.py)."""
+    return ("\r\n".join(("From: a@example.com", *lines)) + "\r\n\r\nbody").encode()
+
+
+# A quoted authserv-id is accepted by the parser: markup, control characters and length all
+# reach the view model, which bounds the text and drops control characters (``excerpt``).
+HOSTILE_AUTHSERV = '"<script>alert(1)</script>\x1b[31m\x07' + "a" * 500 + '"'
+_MAL_TOP = (
+    hops_fx.ar("mx.top.example", "spf=fail; dkim=fail; arc=fail"),
+    hops_fx.rcv("m.example", 5),
+)
+
+# The F-01-01 scenarios: (name, raw message). Malformed fields from its MALFORMED table.
+HOP_SCENARIOS: list[tuple[str, bytes]] = [
+    ("forwarding", hop_message(*hops_fx.BREAK_CASES[0][0])),
+    ("mailing_list", hop_message(*hops_fx.BREAK_CASES[1][0])),
+    (
+        "forged_lower",
+        hop_message(
+            hops_fx.ar("mx.example.org", "spf=fail smtp.mailfrom=evil.example; dmarc=fail"),
+            hops_fx.rcv("mx.example.org", 5),
+            hops_fx.ar("mx.example.org", "dkim=pass header.d=example.com"),
+        ),
+    ),
+    (
+        "interleaved",
+        hop_message(
+            *hops_fx.arc_set(1, "none", "mx.final.example; arc=pass"),
+            hops_fx.ar("mx.final.example", "dkim=fail header.d=example.com"),
+            hops_fx.rcv("mx.final.example", 20),
+            *hops_fx.arc_set(2, "pass", "list.example; dkim=pass header.d=example.com"),
+            hops_fx.rcv("list.example", 10),
+            hops_fx.ar("list.example", "dkim=pass header.d=example.com"),
+            hops_fx.rcv("out.example.com", 1),
+        ),
+    ),
+    *(
+        (f"malformed_{i}", hop_message(*_MAL_TOP, line))
+        for i, (line, _expected) in enumerate(hops_fx.MALFORMED)
+    ),
+    (
+        "hostile_authserv",
+        hop_message(
+            hops_fx.ar("mx.top.example", "spf=fail"),
+            hops_fx.rcv("mx.example", 5),
+            hops_fx.ar(HOSTILE_AUTHSERV, "spf=pass"),
+        ),
+    ),
+]
+HOP_SCENARIO_IDS = [name for name, _ in HOP_SCENARIOS]
+
+
+def _hop_section(stdout: str, lang: str) -> list[str]:
+    after = stdout.split("\n" + i18n.t("message.section.hop_view", lang) + "\n", 1)[1]
+    return after.split("\n\n", 1)[0].splitlines()
+
+
+@pytest.mark.parametrize(("name", "raw"), HOP_SCENARIOS, ids=HOP_SCENARIO_IDS)
+@pytest.mark.parametrize("lang", ["en", "it"])
+def test_hop_view_text_follows_header_order(
+    tmp_path: Path, name: str, raw: bytes, lang: str
+) -> None:
+    a = analyze_message(raw)
+    assert a.hops is not None and a.hops.entries
+    r = runner.invoke(app, ["analyze", _file(tmp_path, raw), "--lang", lang])
+    assert r.exit_code == _expected_code(raw)
+    lines = _hop_section(r.stdout, lang)
+    assert len(lines) == len(a.hops.entries)
+    for line, e in zip(lines, a.hops.entries, strict=True):
+        kind = i18n.t(f"message.hop_view.kind.{e.kind}", lang)
+        assert line.startswith(f"  {e.order + 1}. {kind}")
+        if e.hop is not None:
+            assert f"({i18n.t('message.hop_view.col.hop', lang)} {e.hop + 1})" in line
+        if not e.parsed:
+            assert i18n.t("message.hop_view.unparsed", lang) in line
+            assert all(i in line for i in e.issues)
+        elif e.stated_not_verifiable:
+            stated = i18n.t("message.hop_view.stated", lang, authserv_id=e.authserv_id)
+            assert line.endswith(stated)
+        for res in e.results:
+            assert f"{res.method}=" in line and res.result in line
+    if name == "malformed_0":
+        assert any(i18n.t("message.hop_view.unparsed", lang) in line for line in lines)
+    assert "message.hop_view" not in r.stdout
+
+
+def test_hop_view_lower_field_label_in_both_languages(tmp_path: Path) -> None:
+    path = _file(tmp_path, dict(HOP_SCENARIOS)["forged_lower"])
+    en = runner.invoke(app, ["analyze", path]).stdout
+    it = runner.invoke(app, ["analyze", path, "--lang", "it"]).stdout
+    assert "stated by mx.example.org, not verifiable" in en
+    assert "dichiarato da mx.example.org, non verificabile" in it
+    assert i18n.t("message.section.hop_view", "it") in it
+    assert i18n.t("message.section.hop_view", "en") not in it
+
+
+def test_hop_view_hostile_authserv_id_is_bounded_and_clean(tmp_path: Path) -> None:
+    raw = dict(HOP_SCENARIOS)["hostile_authserv"]
+    r = runner.invoke(app, ["analyze", _file(tmp_path, raw)])
+    lower = [line for line in _hop_section(r.stdout, "en") if "not verifiable" in line]
+    assert len(lower) == 1
+    assert "\x1b" not in r.stdout and "\x07" not in r.stdout
+    assert "a" * 201 not in r.stdout
+    assert "<script>alert(1)</script>[31m" in lower[0]  # plain text: shown, never interpreted
+
+
+@pytest.mark.parametrize(("name", "raw"), HOP_SCENARIOS, ids=HOP_SCENARIO_IDS)
+def test_hop_view_does_not_change_exit_code(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str, raw: bytes
+) -> None:
+    path = _file(tmp_path, raw)
+    with_hops = runner.invoke(app, ["analyze", path])
+    monkeypatch.setattr(ma, "build_hop_view", lambda *_: HopTimeline((), False, False))
+    without = runner.invoke(app, ["analyze", path])
+    assert with_hops.exit_code == without.exit_code
+    assert i18n.t("message.hop_view.empty", "en") in without.stdout
+
+
+def test_hop_view_unavailable_and_truncated() -> None:
+    a = analyze_message(dict(HOP_SCENARIOS)["forwarding"])
+    assert a.hops is not None
+    gone = cli_analyze.render_text(a.model_copy(update={"hops": None}), "it")
+    assert _hop_section(gone, "it") == ["  " + i18n.t("message.section.unavailable", "it")]
+    cut = a.hops.model_copy(update={"received_truncated": True, "arc_truncated": True})
+    lines = _hop_section(cli_analyze.render_text(a.model_copy(update={"hops": cut}), "en"), "en")
+    assert lines[-2:] == [
+        "  " + i18n.t("message.hop_view.received_truncated", "en"),
+        "  " + i18n.t("message.hop_view.arc_truncated", "en"),
+    ]
+
+
+@pytest.mark.parametrize(("name", "raw"), HOP_SCENARIOS, ids=HOP_SCENARIO_IDS)
+def test_hop_view_json_is_byte_equal(tmp_path: Path, name: str, raw: bytes) -> None:
+    r = runner.invoke(app, ["analyze", _file(tmp_path, raw), "--format", "json"])
+    assert r.stdout == analyze_message(raw).model_dump_json() + "\n"
+    assert '"hops":{"entries":[' in r.stdout

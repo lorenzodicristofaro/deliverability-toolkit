@@ -5,7 +5,9 @@ assigned profiles. Read only: it never assigns anything. DNS goes through `ctx.r
 
 - SPF: the domain's SPF tree is the one the assigned-ESP part resolved (the caller hands it over
   as an `SpfView`, resolved at most once per run). A candidate's verified `spf.includes` host
-  found among the tree's `include:` / `redirect=` targets is a hit. Hosts that a verified
+  found among the tree's `include:` / `redirect=` targets is a hit; so is an `include:` written
+  after the first `all` of a record in the tree (R1-17: never evaluated by receivers and not
+  counted or queried, but it shows the operator meant to use the ESP). Hosts that a verified
   `spf.includes` of an assigned profile also names are not attributed to a candidate.
   Candidates with verified includes and no hit cannot be ruled out when the tree has a DNS
   failure or was truncated (`ESP_DNS_ERROR`, part `spf.includes`) or holds a record that

@@ -99,13 +99,15 @@ def _free_target(
     request: Request,
     auth: CurrentSession,
     db: DbDep,
-    name: Annotated[str, Query(max_length=MAX_NAME_LEN)] = "",
+    name: Annotated[str, Query()] = "",
 ) -> _Target:
     """401 anonymous, 404 no tenant, 403 without `dns.tools`, 422 invalid name."""
     ctx = tenant_ctx(auth)
     if not can(auth.principal, Action.DNS_TOOLS, TenantResource(ctx.tenant_id)):
         raise _forbidden(request)
     try:
+        if len(name) > MAX_NAME_LEN:
+            raise InvalidDomainName("too_long")
         to_dns_name(name, allow_underscore=False)
         target = _Target(to_ascii_domain(name), None, None, ProbeSelectors(None))
     except InvalidDomainName:

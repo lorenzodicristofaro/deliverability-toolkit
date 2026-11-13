@@ -40,7 +40,7 @@ from app.services.domains import (
     NotFound,
 )
 from app.web.deps import CurrentSession, DbDep, tenant_ctx
-from app.web.templating import read_form, render
+from app.web.templating import payload_too_large, read_form, render
 
 router = APIRouter()
 
@@ -218,7 +218,7 @@ async def create_domain(request: Request, web: WebDep) -> Response:
         return _denied(request, exc)
     form = await read_form(request)
     if form is None:
-        return Response(status_code=413)
+        return payload_too_large(request)
     name = clean_field(form, NAME_FIELD)
     if name is None:
         return _form_page(request, mode="add", status_code=422, error=InvalidRequest.key)
@@ -229,6 +229,13 @@ async def create_domain(request: Request, web: WebDep) -> Response:
             return _form_page(request, mode="add", status_code=exc.status, name=name, error=exc.key)
         return _denied(request, exc)
     return RedirectResponse("/", status_code=303)
+
+
+def _count_param(request: Request, name: str) -> str:
+    """A small count from the query string (the rename notice), as digits for the message;
+    empty (no notice) for zero, anything else that is not 1 to 4 ASCII digits."""
+    raw = request.query_params.get(name, "")
+    return raw.lstrip("0") if raw.isascii() and raw.isdigit() and len(raw) <= 4 else ""
 
 
 @router.get("/domains/{domain_id}", include_in_schema=False)
@@ -250,6 +257,8 @@ def domain_detail(request: Request, web: WebDep, domain_id: str) -> Response:
         logged_in=True,
         row=row,
         access_count=access_count,
+        esp_hosts_rewritten=_count_param(request, "esp_hosts"),
+        esp_hosts_unmatched=_count_param(request, "esp_unmatched"),
     )
 
 
@@ -274,21 +283,26 @@ async def rename_domain(request: Request, web: WebDep, domain_id: str) -> Respon
         return _denied(request, exc)
     form = await read_form(request)
     if form is None:
-        return Response(status_code=413)
+        return payload_too_large(request)
     name = clean_field(form, NAME_FIELD)
     if name is None:
         return _form_page(
             request, mode="rename", status_code=422, row=row, error=InvalidRequest.key
         )
     try:
-        web.service.rename(row.id, name)
+        renamed = web.service.rename(row.id, name)
     except DomainServiceError as exc:
         if exc.status in (409, 422):
             return _form_page(
                 request, mode="rename", status_code=exc.status, row=row, name=name, error=exc.key
             )
         return _denied(request, exc)
-    return RedirectResponse(f"/domains/{row.id}", status_code=303)
+    target_url = f"/domains/{row.id}"
+    if renamed.esp_hosts_rewritten or renamed.esp_hosts_unmatched:
+        target_url += (
+            f"?esp_hosts={renamed.esp_hosts_rewritten}&esp_unmatched={renamed.esp_hosts_unmatched}"
+        )
+    return RedirectResponse(target_url, status_code=303)
 
 
 def _check_delete(web: Web, domain_id: int | None) -> DomainRow:

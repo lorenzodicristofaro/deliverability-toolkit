@@ -189,6 +189,9 @@ def body_findings(facts: ContentStructure) -> SectionFindings:
     acc = _Acc()
     if facts.capped:
         acc.capped(f"body_{facts.cap_reason or 'unknown'}")
+    if facts.hidden_unevaluated:
+        # Over-long inline style: the hidden-text test was not run, so it is not "no hidden text".
+        acc.capped("body_style_length")
     if facts.has_html_part and not facts.has_plain_text_part:
         acc.add("CONTENT_MISSING_PLAIN_TEXT", "low")
     # Ratio and CSS share compare totals, which are not known for a capped body.

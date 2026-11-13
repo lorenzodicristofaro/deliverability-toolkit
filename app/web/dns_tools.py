@@ -40,7 +40,7 @@ from app.services.dns_tools import (
 )
 from app.web.deps import CurrentSession, tenant_ctx
 from app.web.domains import clean_field
-from app.web.templating import env, read_form, render
+from app.web.templating import env, payload_too_large, read_form, render
 
 router = APIRouter(prefix="/tools/dns")
 
@@ -154,7 +154,7 @@ async def dns_lookup_form(request: Request, auth: CurrentSession, backend: Backe
         return denied
     form = await read_form(request)
     if form is None:
-        return Response(status_code=413)
+        return payload_too_large(request)
     values = _values(form)
     if values is None or "name" not in values:
         return _page(
@@ -185,7 +185,7 @@ async def dns_reverse_form(request: Request, auth: CurrentSession, backend: Back
         return denied
     form = await read_form(request)
     if form is None:
-        return Response(status_code=413)
+        return payload_too_large(request)
     values = _values(form)
     if values is None or "ip" not in values:
         return _page(
@@ -277,7 +277,7 @@ async def dns_trace_form(request: Request, auth: CurrentSession, backend: Backen
         return denied
     form = await read_form(request)
     if form is None:
-        return Response(status_code=413)
+        return payload_too_large(request)
     values = _name_type(form)
     if values is None or "name" not in values:
         return _tool_page(
@@ -356,7 +356,7 @@ async def dns_propagation_form(
         return denied
     form = await read_form(request)
     if form is None:
-        return Response(status_code=413)
+        return payload_too_large(request)
     values = _name_type(form)
     ids = _resolver_ids(form)
     if values is None or ids is None or "name" not in values:

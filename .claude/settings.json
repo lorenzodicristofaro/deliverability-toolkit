@@ -25,7 +25,21 @@
       "Bash(gh release *)",
       "Bash(gh api *)",
       "Bash(gh repo *)",
-      "Bash(gh secret *)"
+      "Bash(gh secret *)",
+      "Bash(git push -d*)",
+      "Bash(git push * v*)",
+      "Bash(git * push*)",
+      "Bash(git tag *)",
+      "Edit(**/.claude/settings*.json)",
+      "Write(**/.claude/settings*.json)",
+      "Edit(**/.claude/agents/**)",
+      "Write(**/.claude/agents/**)",
+      "Edit(**/.claude/commands/**)",
+      "Write(**/.claude/commands/**)",
+      "Edit(**/.claude/skills/**)",
+      "Write(**/.claude/skills/**)",
+      "Edit(**/.claude/hooks/**)",
+      "Write(**/.claude/hooks/**)"
     ]
   }
 }

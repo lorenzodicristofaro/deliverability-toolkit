@@ -31,8 +31,9 @@ A concurrent add of the same pair surfaces as an IntegrityError at flush: the se
 back and the assign retried once on fresh state (it then finds the row and updates it); a second
 failure is a 409, never a 500.
 
-Renaming a domain does not re-check stored hosts (noted in the repository; the renaming ticket
-decides what to do with them).
+Renaming a domain rewrites the stored hosts to the new name in the same transaction
+(`DomainService.rename` through the repository's `rewrite_host_suffix`, R1-31); the hosts are
+never left under the old name.
 
 Profiles that cannot be loaded (`KnowledgeError`, of which `EspProfileError` is a subclass; the
 loader caches only successful loads, so every call retries) are logged as a warning and answer

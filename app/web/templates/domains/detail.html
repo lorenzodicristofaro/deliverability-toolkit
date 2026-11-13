@@ -4,6 +4,8 @@
 <p>{{ t("domain.detail.title") }}</p>
 <h1 data-testid="domain-name">{{ row.display_name }}</h1>
 {% include "domains/name_notes.html" %}
+{% if esp_hosts_rewritten %}<p role="status" data-testid="esp-hosts-rewritten">{{ t("domain.rename.esp_hosts_rewritten", count=esp_hosts_rewritten) }}</p>{% endif %}
+{% if esp_hosts_unmatched %}<p role="status" data-testid="esp-hosts-unmatched">{{ t("domain.rename.esp_hosts_unmatched", count=esp_hosts_unmatched) }}</p>{% endif %}
 <nav class="tabs" aria-label="{{ t('checks.tab.label') }}">
   {% if row.can_check %}<a href="/domains/{{ row.id }}/authentication" data-testid="tab-authentication">{{ t("checks.tab.authentication") }}</a>{% endif %}
   <a href="/domains/{{ row.id }}/esps" data-testid="tab-esps">{{ t("web.domain.esps.title") }}</a>

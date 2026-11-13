@@ -48,3 +48,16 @@ def test_dockerfile_copies_profiles() -> None:
     dockerfile = (PROFILES_DIR.parents[1] / "Dockerfile").read_text(encoding="utf-8")
     assert "WORKDIR /app\n" in dockerfile
     assert "\nCOPY profiles ./profiles\n" in dockerfile
+
+
+def test_mailup_dkim_txt_alternative() -> None:
+    """M6-23, maintainer decision 2026-11-12: ml01+ml02 CNAMEs OR a TXT key at ml00. The only
+    shipped alternative; any other profile gaining one needs its own decision or source."""
+    profiles = {p.id: p for p in read_esp_profiles(PROFILES_DIR)}
+    mailup = profiles["mailup"]
+    assert [s.name for s in mailup.dkim_selectors] == ["ml01", "ml02"]
+    assert [[(s.name, s.type) for s in alt] for alt in mailup.dkim_alternatives] == [
+        [("ml00", "txt")]
+    ]
+    assert mailup.is_verified("dkim.alternatives.ml00")
+    assert [p.id for p in profiles.values() if p.dkim_alternatives] == ["mailup"]

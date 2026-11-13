@@ -52,15 +52,27 @@
   {% endfor %}
   </ol>
   <h3>{{ t("tools.dns.trace.outcome") }}</h3>
-  {% set okind = "ok" if report.outcome.value == "ok" else ("absent" if report.outcome.value in ("nxdomain", "nodata") else "failure") %}
+  {% set okind = "ok" if report.outcome.value in ("ok", "cname") else ("absent" if report.outcome.value in ("nxdomain", "nodata") else "failure") %}
   <p class="dns-state dns-state-{{ okind }}" data-state="{{ report.state.value }}" data-kind="{{ okind }}"{% if okind == "failure" %} role="alert"{% endif %}>
-    {{ {"ok": t("tools.dns.trace.outcome.ok"), "nxdomain": t("tools.dns.trace.outcome.nxdomain"), "nodata": t("tools.dns.trace.outcome.nodata"), "loop": t("tools.dns.trace.outcome.loop"), "depth_exceeded": t("tools.dns.trace.outcome.depth_exceeded"), "all_failed": t("tools.dns.trace.outcome.all_failed"), "lame_delegation": t("tools.dns.trace.outcome.lame"), "query_limit": t("tools.dns.trace.outcome.query_limit"), "deadline": t("tools.dns.trace.outcome.deadline"), "no_allowed_server": t("tools.dns.trace.outcome.no_allowed_server"), "no_server_address": t("tools.dns.trace.outcome.no_server_address")}[report.outcome.value] }}
+    {{ {"ok": t("tools.dns.trace.outcome.ok"), "cname": t("tools.dns.trace.outcome.cname"), "nxdomain": t("tools.dns.trace.outcome.nxdomain"), "nodata": t("tools.dns.trace.outcome.nodata"), "loop": t("tools.dns.trace.outcome.loop"), "depth_exceeded": t("tools.dns.trace.outcome.depth_exceeded"), "all_failed": t("tools.dns.trace.outcome.all_failed"), "lame_delegation": t("tools.dns.trace.outcome.lame"), "query_limit": t("tools.dns.trace.outcome.query_limit"), "deadline": t("tools.dns.trace.outcome.deadline"), "no_allowed_server": t("tools.dns.trace.outcome.no_allowed_server"), "no_server_address": t("tools.dns.trace.outcome.no_server_address")}[report.outcome.value] }}
     {{ detail_label(report.detail_code) }}
   </p>
   <p class="dns-meta">{{ t("tools.dns.trace.queries") }}: {{ report.queries_sent }}
     {% if report.final_zone %} · {{ t("tools.dns.trace.zone") }}: <code>{{ report.final_zone|visible }}</code>{% endif %}
     {% if report.final_server %} · {{ t("tools.dns.trace.server") }}: <code>{{ report.final_server|visible }}</code>{% endif %}
     · {{ t("tools.dns.trace.elapsed") }}: {{ "%.0f"|format(report.elapsed_ms) }} ms</p>
+  {% if report.cname_chain %}
+  <table class="dns-records" data-testid="trace-cname-chain" data-target="{{ (report.cname_target or "")|visible }}">
+    <thead><tr>
+      <th scope="col">{{ t("tools.dns.col.name") }}</th>
+      <th scope="col">{{ t("tools.dns.col.ttl") }}</th>
+      <th scope="col">{{ t("tools.dns.col.rdata") }}</th>
+    </tr></thead>
+    <tbody>
+    {% for rec in report.cname_chain %}<tr><td class="dns-wrap">{{ rec.name|visible }}</td><td>{{ rec.ttl }}</td><td class="dns-wrap dns-rdata">{{ rec.rdtype }} {{ rec.rdata_text|visible }}</td></tr>{% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
   {% if report.answer %}
   <h3>{{ t("tools.dns.trace.final_answer") }}</h3>
   <table class="dns-records">

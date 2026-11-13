@@ -49,7 +49,7 @@ MSG_SPF_NOT_PASS                         high/    stated spf: fail -> high; othe
                                          low
 MSG_DKIM_NOT_PASS                        same     no stated dkim pass
 MSG_DMARC_NOT_PASS                       same     stated dmarc is not pass
-MSG_ALIGNMENT_FAIL                       high     computed: no identifier aligned
+MSG_ALIGNMENT_FAIL                       high     computed: no usable aligned pass
 MSG_ALIGNMENT_STATED_MISMATCH            medium   stated dmarc disagrees with computed
 MSG_UNVERIFIED_DKIM_SIGNATURE            low      DKIM-Signature with no stated result
 MSG_ARC_INVALID                          low      ARC chain structurally invalid
@@ -63,6 +63,12 @@ MSG_ENCODED_HEADER_BROKEN                low      undecodable RFC 2047 encoded-w
 MSG_MIME_TRUNCATED                       low      MIME walk stopped at a cap (detail)
 MSG_NO_TEXT_PART                         low      no text/plain part
 MSG_PARSER_LIMIT                         medium   input rejected or capped (error-class)
+MSG_AUTHRES_UNPARSED                     medium   Authentication-Results unusable (error-class)
+MSG_ALIGNMENT_NOT_EVALUATED              medium   no identifier to align (error-class)
+MSG_ALIGNMENT_LOWER_FIELD_NOT_USED       low      an aligned pass from a lower
+                                                  Authentication-Results field was not used
+MSG_AUTH_BROKE_AFTER_HOP                 info     a stated pass became a failure in a newer
+                                                  field (per-hop view, display only)
 ======================================== ======== =========================================
 
 ``MSG_DUPLICATE_SINGLETON_HEADER`` is reported for Subject, Date and Message-ID; a repeated
@@ -71,6 +77,8 @@ From is reported as ``MSG_MULTIPLE_FROM`` only (one finding per problem).
 Error-class conditions (``unevaluated``): ``date`` (invalid, or without a zone), ``received``
 (any unparsed hop), ``authres`` (an Authentication-Results field that could not be parsed),
 ``alignment`` (alignment not computable although Authentication-Results exist),
+``list_unsubscribe`` (a List-Unsubscribe field capped or unreadable, so One-Click is unknown;
+explained by ``MSG_PARSER_LIMIT`` with the ``list_unsubscribe`` limit),
 and ``parser`` (input rejected
 or capped).
 """
@@ -92,6 +100,7 @@ from app.parsers.authres import (
     AuthResParseError,
     parse_all_authentication_results,
 )
+from app.parsers.list_unsubscribe import analyze_list_unsubscribe
 from app.parsers.message import (
     ENCODED_WORD_INVALID,
     ENCODED_WORD_MALFORMED,
@@ -101,7 +110,8 @@ from app.parsers.message import (
 )
 from app.parsers.mime import MimeSummary
 from app.parsers.received import ReceivedChain, parse_received_values
-from app.services.message_alignment import AlignmentReport
+from app.services.message_alignment import LOWER_AUTHRES_FIELD, AlignmentReport
+from app.services.message_hops import HopTimeline, find_auth_breaks
 
 MAX_EXCERPT = 200
 MAX_DATE_SKEW = timedelta(hours=24)
@@ -147,6 +157,10 @@ CODES: tuple[str, ...] = (
     "MSG_MIME_TRUNCATED",
     "MSG_NO_TEXT_PART",
     "MSG_PARSER_LIMIT",
+    "MSG_AUTHRES_UNPARSED",
+    "MSG_ALIGNMENT_NOT_EVALUATED",
+    "MSG_ALIGNMENT_LOWER_FIELD_NOT_USED",
+    "MSG_AUTH_BROKE_AFTER_HOP",
 )
 
 
@@ -316,6 +330,13 @@ def _received_part(chain: ReceivedChain, acc: _Acc) -> None:
 
 
 def _topmost_results(headers: tuple[AuthResHeader, ...], method: str) -> list[str]:
+    """Stated results of ``method`` from the topmost field that states it.
+
+    That may be a lower field (R1-22 QA input, GM decision 2026-11-13): display only. It
+    selects the MSG_SPF_NOT_PASS / MSG_DKIM_NOT_PASS warnings and their wording and never
+    feeds ``computed_dmarc`` or the alignment pairs, which apply the topmost-field rule in
+    :mod:`app.services.message_alignment`. Behaviour unchanged, pinned by a test.
+    """
     for header in headers:
         found = header.by_method().get(method)
         if found:
@@ -337,7 +358,18 @@ def _auth_part(alignment: AlignmentReport, headers: tuple[AuthResHeader, ...], a
     if not headers:
         acc.add("MSG_AUTHRES_MISSING", "medium")
         return
-    if any(h.authserv_id is None or any(i.severity == "error" for i in h.issues) for h in headers):
+    unusable = [
+        h for h in headers if h.authserv_id is None or any(i.severity == "error" for i in h.issues)
+    ]
+    if unusable:
+        issue_codes = [i.code for h in unusable for i in h.issues if i.severity == "error"]
+        if any(h.authserv_id is None for h in unusable):
+            issue_codes.append("missing_authserv_id")
+        acc.add(
+            "MSG_AUTHRES_UNPARSED",
+            "medium",
+            {"issues": _joined(list(dict.fromkeys(issue_codes))), "count": len(unusable)},
+        )
         acc.skip("authres")
 
     ids: dict[str, str] = {}
@@ -394,6 +426,16 @@ def _alignment_part(alignment: AlignmentReport, have_authres: bool, acc: _Acc) -
             },
         )
     elif alignment.computed_dmarc == "not_evaluated" and have_authres:
+        reasons = [
+            p.reason
+            for p in alignment.pairs
+            if p.state in ("unknown", "not_evaluated") and p.reason
+        ]
+        acc.add(
+            "MSG_ALIGNMENT_NOT_EVALUATED",
+            "medium",
+            {"reasons": _joined(list(dict.fromkeys(reasons)))},
+        )
         acc.skip("alignment")
     if alignment.dmarc_mismatch:
         acc.add(
@@ -404,6 +446,17 @@ def _alignment_part(alignment: AlignmentReport, have_authres: bool, acc: _Acc) -
                 "computed": alignment.computed_dmarc,
             },
         )
+    # R1-22: say why a pair shown as aligned did not make the computed result pass.
+    lower = [p for p in alignment.pairs if p.state == "aligned" and p.reason == LOWER_AUTHRES_FIELD]
+    if lower and alignment.computed_dmarc != "pass":
+        acc.add(
+            "MSG_ALIGNMENT_LOWER_FIELD_NOT_USED",
+            "low",
+            {
+                "methods": _joined(list(dict.fromkeys(p.kind for p in lower))),
+                "domains": _joined(list(dict.fromkeys(p.identifier_domain or "" for p in lower))),
+            },
+        )
     unverified = [p.identifier_domain or "" for p in alignment.pairs if p.unverified_signature]
     if unverified:
         acc.add(
@@ -411,6 +464,27 @@ def _alignment_part(alignment: AlignmentReport, have_authres: bool, acc: _Acc) -
             "low",
             {"count": len(unverified), "domains": _joined([d for d in unverified if d])},
         )
+
+
+def _hop_part(hops: HopTimeline, acc: _Acc) -> None:
+    """MSG_AUTH_BROKE_AFTER_HOP, one per older/newer entry pair. Info only: derived from the
+    display-only per-hop view, it never changes a verdict."""
+    grouped: dict[tuple[int, int], list[tuple[str, str, int | None, str | None]]] = {}
+    for b in find_auth_breaks(hops):
+        grouped.setdefault((b.from_order, b.to_order), []).append(
+            (b.method, b.result, b.hop, b.authserv_id)
+        )
+    for items in grouped.values():
+        hop, authserv_id = items[0][2], items[0][3]
+        params: dict[str, object] = {
+            "results": ", ".join(f"{m}={r}" for m, r, _, _ in items),
+            "authserv_id": excerpt(authserv_id or ""),
+        }
+        if hop is not None:
+            # 1-based display number, same convention as MSG_HOP_DELAY_HIGH (index + 1); the
+            # 0-based Received index stays in the hops entries.
+            params["hop"] = hop + 1
+        acc.add("MSG_AUTH_BROKE_AFTER_HOP", "info", params, None if hop is not None else "no_hop")
 
 
 def _arc_part(arc: ArcChain, acc: _Acc) -> None:
@@ -469,9 +543,14 @@ def _other_part(block: HeaderBlock, alignment: AlignmentReport, acc: _Acc) -> No
     if not unsub:
         acc.add("MSG_LIST_UNSUBSCRIBE_MISSING", "info")
     else:
-        # RFC 8058 section 3.1: the one-click post header carries "List-Unsubscribe=One-Click".
-        posts = block.get_all("List-Unsubscribe-Post")
-        if not any("list-unsubscribe=one-click" in p.raw_value.lower() for p in posts):
+        # RFC 8058 section 3.1 / 5 verdict from the shared parser (same as the content analyzer).
+        # A capped or unreadable field only leaves One-Click unknown when the https answer is
+        # unknown (the parser stops at the first good https URI, as the content analyzer relies
+        # on) and the field is not duplicated (RFC 8058 needs exactly one, so never One-Click).
+        facts = analyze_list_unsubscribe(block)
+        if facts.https_uri_present is None and not facts.duplicated:
+            acc.skip("list_unsubscribe")
+        elif not facts.one_click_eligible:
             acc.add("MSG_LIST_UNSUBSCRIBE_NO_ONECLICK", "info")
     broken = [w for w in block.warnings if w.code in _ENCODED_WORD_CODES]
     if broken:
@@ -502,8 +581,10 @@ def build_message_findings(
     mime: MimeSummary | None,
     arc: ArcChain,
     alignment: AlignmentReport,
+    hops: HopTimeline | None = None,
 ) -> MessageFindings:
-    """Turn already parsed outputs into findings. ``mime`` None means it was not parsed."""
+    """Turn already parsed outputs into findings. ``mime`` None means it was not parsed;
+    ``hops`` None means the per-hop view was not built (no MSG_AUTH_BROKE_AFTER_HOP)."""
     acc = _Acc()
     limits: list[str] = []
     try:
@@ -518,7 +599,11 @@ def build_message_findings(
         _auth_part(alignment, headers, acc)
     _alignment_part(alignment, bool(headers), acc)
     _arc_part(arc, acc)
+    if hops is not None:
+        _hop_part(hops, acc)
     _other_part(block, alignment, acc)
+    if "list_unsubscribe" in acc.unevaluated:
+        limits.append("list_unsubscribe")
     if mime is not None:
         _mime_part(mime, acc)
 

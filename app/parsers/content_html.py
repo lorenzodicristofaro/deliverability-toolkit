@@ -11,8 +11,10 @@ partial facts gathered so far are returned, nothing is silently truncated.
 Hidden-text detection only looks at literal inline ``style`` values. It reports
 candidates, not proof: stylesheets are not evaluated. The off-screen rule (a negative
 ``left``/``top`` of at least 500 units on an absolutely/fixed positioned element, or a
-negative ``text-indent`` of that size) is a heuristic and `unverified`, like the Gmail
-clipping constant: no vendor documentation has been checked for it.
+negative ``text-indent`` of that size) is a heuristic and `unverified`; no vendor documentation
+has been checked for it.
+(The Gmail clipping constant is different: its value was confirmed by the maintainer on
+2026-11-12, not by Google documentation.)
 
 Default limits (2 MB input, 20k elements, depth 100, 100 attributes per element) are
 conservative bounds chosen to keep parsing cheap on hostile input while comfortably
@@ -31,8 +33,8 @@ from dataclasses import dataclass
 from html.parser import HTMLParser
 
 # Heuristic threshold from SPEC section 4.5 ("near 102 KB"), not a vendor guarantee.
-# unverified: the maintainer has not yet confirmed the Gmail clipping behaviour against
-# official Gmail documentation.
+# Value confirmed by the maintainer on 2026-11-12 from their own experience (source:
+# maintainer confirmation, not Google documentation).
 GMAIL_CLIP_THRESHOLD_BYTES = 102_400
 
 # Heuristic: a negative offset at least this large (px-like units) counts as off-screen.
@@ -86,6 +88,9 @@ class ContentLimits:
     max_elements: int = 20_000
     max_depth: int = 100
     max_attributes: int = 100  # per element
+    # Per inline ``style`` attribute (chars). Longer values are not tested for hidden text and
+    # are counted in ``hidden_unevaluated`` (R1-01): bounds the work per attribute.
+    max_style_chars: int = 10_000
 
 
 @dataclass(frozen=True)
@@ -116,12 +121,14 @@ class ContentStructure:
     inline_style_bytes: int = 0
     style_tag_bytes: int = 0
     hidden_candidates: tuple[HiddenCandidate, ...] = ()
+    # Inline styles over ``max_style_chars``: hidden-text test not run (error-class, never "none").
+    hidden_unevaluated: int = 0
     malformed: tuple[str, ...] = ()
     has_doctype: bool = False
     charset: str | None = None
     has_nul: bool = False
     gmail_clip_threshold_bytes: int = GMAIL_CLIP_THRESHOLD_BYTES
-    exceeds_gmail_clip_threshold: bool = False  # heuristic, unverified
+    exceeds_gmail_clip_threshold: bool = False  # 102,400 bytes: maintainer-confirmed 2026-11-12
 
 
 class _Capped(Exception):
@@ -130,16 +137,40 @@ class _Capped(Exception):
         self.reason = reason
 
 
+# R1-01: style values are attacker-controlled and analysed with plain string code, not
+# backtracking regexes (``\s*!important\s*$`` and ``0*\.?0+`` were quadratic in a run).
+_IMPORTANT = "!important"
+
+
 def _style_decls(style: str) -> dict[str, str]:
     out: dict[str, str] = {}
     for part in style.split(";"):
         name, sep, value = part.partition(":")
         if sep:
-            out[name.strip().lower()] = re.sub(r"\s*!important\s*$", "", value.strip().lower())
+            v = value.strip().lower()
+            if v.endswith(_IMPORTANT):
+                v = v[: -len(_IMPORTANT)].rstrip()
+            out[name.strip().lower()] = v
     return out
 
 
-_ZERO = re.compile(r"^[+-]?0*\.?0+(px|pt|em|rem|%|ex|pc|cm|mm|in)?$")
+# Longest first, so "rem" is not taken for "em".
+_ZERO_UNITS = ("rem", "px", "pt", "em", "ex", "pc", "cm", "mm", "in", "%")
+
+
+def _is_zero_length(value: str) -> bool:
+    """Optional sign, zeros with at most one dot ending in a zero, optional unit (linear)."""
+    num = value[1:] if value[:1] in ("+", "-") else value
+    for unit in _ZERO_UNITS:
+        if num.endswith(unit):
+            num = num[: -len(unit)]
+            break
+    return num.endswith("0") and num.count(".") <= 1 and not num.replace(".", "").replace("0", "")
+
+
+# Linear (measured in the R1-01 review, guarded by tests): anchored by match(), ``\s*`` is
+# followed by a digit and ``\d+`` by ``.``/unit/end, so a failed attempt backtracks each
+# position once with O(1) work.
 _NEG = re.compile(r"^-\s*(\d+(?:\.\d+)?)(px|pt|em|rem|ex|pc|cm|mm|in|%)?$")
 
 
@@ -150,7 +181,7 @@ def _hidden_reasons(style: str) -> list[str]:
         reasons.append("display_none")
     if d.get("visibility") in ("hidden", "collapse"):
         reasons.append("visibility_hidden")
-    if "font-size" in d and _ZERO.match(d["font-size"]):
+    if "font-size" in d and _is_zero_length(d["font-size"]):
         reasons.append("font_size_zero")
     bg = d.get("background-color") or d.get("background")
     fg = d.get("color")
@@ -181,6 +212,7 @@ class _Collector(HTMLParser):
         self.inline_style = 0
         self.style_tag = 0
         self.hidden: list[HiddenCandidate] = []
+        self.hidden_unevaluated = 0
         self.doctype = False
         self.charset: str | None = None
 
@@ -204,7 +236,10 @@ class _Collector(HTMLParser):
         style = a.get("style")
         if style is not None:
             self.inline_style += len(style.encode("utf-8", "replace"))
-            self.hidden.extend(HiddenCandidate(tag, r) for r in _hidden_reasons(style))
+            if len(style) > self.limits.max_style_chars:
+                self.hidden_unevaluated += 1
+            else:
+                self.hidden.extend(HiddenCandidate(tag, r) for r in _hidden_reasons(style))
         if tag == "img":
             self.images += 1
             if "alt" not in a:
@@ -215,6 +250,8 @@ class _Collector(HTMLParser):
             if a.get("charset", "").strip():
                 self.charset = a["charset"].strip().lower()
             elif a.get("http-equiv", "").lower() == "content-type":
+                # Linear: each "charset" match scans its whitespace runs once; backtracking a
+                # failed run costs O(1) per position (R1-01 review, guarded by a test).
                 m = re.search(r"charset\s*=\s*([^\s;\"']+)", a.get("content", ""), re.I)
                 if m:
                     self.charset = m.group(1).lower()
@@ -323,6 +360,7 @@ def parse_content(
         inline_style_bytes=c.inline_style,
         style_tag_bytes=c.style_tag,
         hidden_candidates=tuple(c.hidden),
+        hidden_unevaluated=c.hidden_unevaluated,
         malformed=tuple(malformed),
         has_doctype=c.doctype,
         charset=c.charset,

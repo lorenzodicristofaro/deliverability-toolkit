@@ -14,6 +14,7 @@ from urllib.parse import urlencode
 
 import pytest
 from fastapi.testclient import TestClient
+from markupsafe import escape
 
 from app.core import csrf, i18n
 from app.core.config import Settings
@@ -24,6 +25,7 @@ from app.parsers.message import MAX_RAW_BYTES
 from app.services import message_analysis
 from app.web import message as message_web
 from app.web.message import MAX_BODY_BYTES
+from tests.cli.test_analyze import HOP_SCENARIO_IDS, HOP_SCENARIOS
 from tests.support.socket_guard import db_endpoint, install
 from tests.web.test_domains_ui import CSRF_HEADER, KEY, World, _login, _seed, get, post
 
@@ -363,3 +365,114 @@ def test_nav_link_visibility(world: World, who: str, visible_link: bool) -> None
             continue  # redirect to login
         assert r.status_code in (200, 303)
         assert ('href="/tools/message"' in r.text) is visible_link, (who, path)
+
+
+# --- F-01-02: per-hop authentication view -------------------------------------------------------
+
+
+def _hop_html(html: str) -> str:
+    return html.split('data-testid="message-hop-view"', 1)[1].split("</section>", 1)[0]
+
+
+def _hop_rows(html: str) -> list[str]:
+    return _hop_html(html).split("<tr data-hop-entry=")[1:]
+
+
+def _scenario(name: str) -> str:
+    return dict(HOP_SCENARIOS)[name].decode()
+
+
+@pytest.mark.parametrize("who", [*ALLOWED, "anon"])
+def test_hop_view_only_for_allowed_roles(world: World, who: str) -> None:
+    r = analyze(world, who, _scenario("forwarding"))
+    assert r.status_code == ALLOWED.get(who, 401)
+    assert ('data-testid="message-hop-view"' in r.text) is (r.status_code == 200)
+
+
+def test_hop_view_absent_for_foreign_tenant(world: World) -> None:
+    r = analyze(world, "analyst", _scenario("forwarding"), tenant_id=world.tenant_b)
+    assert r.status_code == 404
+    assert 'data-testid="message-hop-view"' not in r.text
+
+
+@pytest.mark.parametrize(("name", "raw"), HOP_SCENARIOS, ids=HOP_SCENARIO_IDS)
+def test_hop_view_renders_in_header_order(world: World, name: str, raw: bytes) -> None:
+    r = analyze(world, "analyst", raw.decode())
+    assert r.status_code == 200
+    a = message_analysis.analyze_message(raw)
+    assert a.hops is not None
+    rows = _hop_rows(r.text)
+    assert len(rows) == len(a.hops.entries)
+    for row, e in zip(rows, a.hops.entries, strict=True):
+        assert row.startswith(f'"{e.order}" data-kind="{e.kind}" data-position="{e.position}"')
+        assert f"<td>{e.order + 1}</td>" in row
+        assert f"<td>{'-' if e.hop is None else e.hop + 1}</td>" in row
+        assert t(f"message.hop_view.kind.{e.kind}") in row
+        if not e.parsed:
+            assert t("message.hop_view.unparsed") in row
+        elif e.stated_not_verifiable:
+            assert str(escape(t("message.hop_view.stated", authserv_id=e.authserv_id))) in row
+        for res in e.results:
+            assert f"<code>{escape(res.result)}</code>" in row
+    positions = [e.position for e in a.hops.entries]
+    assert positions == sorted(positions, reverse=True)  # oldest (bottommost) first
+    for col in ("position", "hop", "kind", "source", "spf", "dkim", "dmarc", "arc", "note"):
+        assert t(f"message.hop_view.col.{col}") in _hop_html(r.text)
+
+
+@pytest.mark.parametrize("lang", ["en", "it"])
+def test_hop_view_lower_field_label(world: World, lang: str) -> None:
+    r = analyze(world, "analyst", _scenario("forged_lower"), **{"Accept-Language": lang})
+    section = _hop_html(r.text)
+    stated = t("message.hop_view.stated", lang, authserv_id="mx.example.org")
+    assert section.count(stated) == 1
+    assert t("message.section.hop_view", lang) in r.text
+    assert "message.hop_view" not in r.text
+
+
+def test_hop_view_hostile_authserv_id_is_escaped_and_bounded(world: World) -> None:
+    r = analyze(world, "analyst", _scenario("hostile_authserv"))
+    assert r.status_code == 200
+    section = _hop_html(r.text)
+    assert "<script>alert(1)" not in r.text
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in section
+    assert "&amp;lt;" not in section  # escaped exactly once
+    assert "\x1b" not in r.text and "\x07" not in r.text
+    assert "a" * 201 not in r.text
+    assert len([row for row in _hop_rows(r.text) if "not verifiable" in row]) == 1
+
+
+@pytest.mark.parametrize("name", [n for n in HOP_SCENARIO_IDS if n.startswith("malformed_")])
+def test_hop_view_malformed_renders_as_unparsed(world: World, name: str) -> None:
+    r = analyze(world, "analyst", _scenario(name))
+    assert r.status_code == 200
+    unparsed = [row for row in _hop_rows(r.text) if 'data-parsed="0"' in row]
+    assert len(unparsed) == 1
+    assert t("message.hop_view.unparsed") in unparsed[0]
+
+
+def test_hop_view_empty_unavailable_and_truncated(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    html = analyze(world, "analyst", "Subject: s\r\n\r\nb").text
+    assert t("message.hop_view.empty") in _hop_html(html)
+
+    real = message_analysis.analyze_message
+
+    def cut(raw: bytes) -> Any:
+        a = real(raw)
+        hops = a.hops.model_copy(update={"received_truncated": True, "arc_truncated": True})
+        return a.model_copy(update={"hops": hops})
+
+    monkeypatch.setattr(message_web, "analyze_message", cut)
+    section = _hop_html(analyze(world, "analyst", _scenario("forwarding")).text)
+    assert t("message.hop_view.received_truncated") in section
+    assert t("message.hop_view.arc_truncated") in section
+
+    def gone(raw: bytes) -> Any:
+        return real(raw).model_copy(update={"hops": None})
+
+    monkeypatch.setattr(message_web, "analyze_message", gone)
+    section = _hop_html(analyze(world, "analyst", _scenario("forwarding")).text)
+    assert t("message.section.unavailable") in section
+    assert "<tr data-hop-entry=" not in section
