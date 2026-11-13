@@ -25,7 +25,7 @@ from app.checks.dnsbl_engine import (
     interpret,
     parse_target,
 )
-from app.checks.dnsbl_schema import DnsblList, read_dnsbl_lists
+from app.checks.dnsbl_schema import DNSBL_FILE, DnsblList, parse_dnsbl_lists, read_dnsbl_lists
 from app.dns.egress import BlockReason, IPAddress, address_reason
 from app.dns.types import DnsQuestion, DnsRecord, DnsResult, ResultState
 from tests.support.dns_zones import FakeResolver, parse_zones
@@ -208,6 +208,144 @@ def test_evidence_is_bounded() -> None:
     got = interpret(BOTH, _res(OK, *answers))
     assert got.reason is Reason.unmapped_code
     assert len(got.codes) == MAX_EVIDENCE_CODES and got.codes_truncated
+
+
+# --- bitmask return codes (M7-03b) ---------------------------------------------------------------
+
+# Invented bitmask list: bits 2, 4, 16, 64 listed, 32 info, 1 refused; 8 and 128 unmapped.
+MASK = parse_dnsbl_lists(
+    {
+        "lists": [
+            {
+                "id": "mask",
+                "name": "Example bitmask list",
+                "zone": "multi.example.org",
+                "kind": "domain",
+                "return_code_mode": "bitmask",
+                "return_codes": [
+                    {"code": "127.0.0.1", "meaning": "refused"},
+                    {"code": "127.0.0.2", "meaning": "listed", "category": "spam_domain"},
+                    {"code": "127.0.0.4", "meaning": "listed", "category": "phishing"},
+                    {"code": "127.0.0.16", "meaning": "listed", "category": "malware"},
+                    {"code": "127.0.0.32", "meaning": "info", "category": "tracker"},
+                    {"code": "127.0.0.64", "meaning": "listed", "category": "abuse"},
+                    {"code": "127.255.255.254", "meaning": "refused"},
+                ],
+                "refused_networks": ["127.255.255.0/24"],
+                "verified_on": date(2026, 1, 1),
+                "sources": ["https://docs.example.org/multi"],
+                "status": "verified",
+            }
+        ]
+    },
+    date(2026, 11, 13),
+)[0]
+# The same table read as exact codes: sums are not decomposed (regression of M7-03 behaviour).
+MASK_EXACT = dataclasses.replace(MASK, return_code_mode="exact")
+
+
+@pytest.mark.parametrize(
+    ("lst", "answers", "outcome", "reason", "categories"),
+    [
+        # single bit
+        (MASK, ("127.0.0.2",), Outcome.listed, None, ("spam_domain",)),
+        (MASK, ("127.0.0.64",), Outcome.listed, None, ("abuse",)),
+        (MASK, ("127.0.0.32",), Outcome.info, None, ("tracker",)),
+        # summed bits: every category, listed wins over info
+        (MASK, ("127.0.0.80",), Outcome.listed, None, ("malware", "abuse")),
+        (MASK, ("127.0.0.6",), Outcome.listed, None, ("spam_domain", "phishing")),
+        (MASK, ("127.0.0.48",), Outcome.listed, None, ("malware", "tracker")),
+        (MASK, ("127.0.0.118",), Outcome.listed, None,
+         ("spam_domain", "phishing", "malware", "tracker", "abuse")),
+        (MASK, ("127.0.0.2", "127.0.0.80"), Outcome.listed, None,
+         ("spam_domain", "malware", "abuse")),
+        # unmapped bit, alone or in a sum, never listed
+        (MASK, ("127.0.0.8",), Outcome.error, Reason.unmapped_code, ()),
+        (MASK, ("127.0.0.128",), Outcome.error, Reason.unmapped_code, ()),
+        (MASK, ("127.0.0.10",), Outcome.error, Reason.unmapped_code, ()),
+        (MASK, ("127.0.0.144",), Outcome.error, Reason.unmapped_code, ()),
+        (MASK, ("127.0.0.2", "127.0.0.8"), Outcome.error, Reason.unmapped_code, ()),
+        (MASK, ("127.0.0.8", "127.0.0.1"), Outcome.error, Reason.unmapped_code, ()),
+        # refusal: alone, summed with bits, or next to listed answers
+        (MASK, ("127.0.0.1",), Outcome.error, Reason.refused, ()),
+        (MASK, ("127.255.255.254",), Outcome.error, Reason.refused, ()),
+        (MASK, ("127.255.255.200",), Outcome.error, Reason.refused, ()),  # refused network
+        (MASK, ("127.0.0.3",), Outcome.error, Reason.conflicting_codes, ()),
+        (MASK, ("127.0.0.65",), Outcome.error, Reason.conflicting_codes, ()),
+        (MASK, ("127.0.0.255",), Outcome.error, Reason.conflicting_codes, ()),  # +unmapped
+        (MASK, ("127.0.0.119",), Outcome.error, Reason.conflicting_codes, ()),
+        (MASK, ("127.0.0.80", "127.0.0.1"), Outcome.error, Reason.conflicting_codes, ()),
+        (MASK, ("127.0.0.4", "127.255.255.254"), Outcome.error, Reason.conflicting_codes, ()),
+        # zero and out-of-range octets
+        (MASK, ("127.0.0.0",), Outcome.error, Reason.unmapped_code, ()),
+        (MASK, ("127.0.1.2",), Outcome.error, Reason.answer_out_of_range, ()),
+        (MASK, ("127.1.0.80",), Outcome.error, Reason.answer_out_of_range, ()),
+        (MASK, ("127.0.0.2", "127.0.2.0"), Outcome.error, Reason.answer_out_of_range, ()),
+        # non-127 and malformed answers
+        (MASK, ("10.0.0.80",), Outcome.error, Reason.answer_out_of_range, ()),
+        (MASK, ("0.0.0.2",), Outcome.error, Reason.answer_out_of_range, ()),
+        (MASK, ("127.0.0.80", "192.0.2.4"), Outcome.error, Reason.answer_out_of_range, ()),
+        (MASK, ("127.0.0.256",), Outcome.error, Reason.malformed_answer, ()),
+        (MASK, ("127.0.0.0x50",), Outcome.error, Reason.malformed_answer, ()),
+        (MASK, ("",), Outcome.error, Reason.malformed_answer, ()),
+        # exact mode on the same table: sums stay unmapped, refusal handling unchanged
+        (MASK_EXACT, ("127.0.0.80",), Outcome.error, Reason.unmapped_code, ()),
+        (MASK_EXACT, ("127.0.0.6",), Outcome.error, Reason.unmapped_code, ()),
+        (MASK_EXACT, ("127.0.0.3",), Outcome.error, Reason.unmapped_code, ()),
+        (MASK_EXACT, ("127.0.0.16",), Outcome.listed, None, ("malware",)),
+        (MASK_EXACT, ("127.0.0.1",), Outcome.error, Reason.refused, ()),
+        (MASK_EXACT, ("127.0.0.16", "127.0.0.1"), Outcome.error, Reason.conflicting_codes, ()),
+        (MASK_EXACT, ("127.0.1.2",), Outcome.error, Reason.unmapped_code, ()),
+    ],
+)  # fmt: skip
+def test_interpret_bitmask(
+    lst: DnsblList,
+    answers: tuple[str, ...],
+    outcome: Outcome,
+    reason: Reason | None,
+    categories: tuple[str, ...],
+) -> None:
+    got = interpret(lst, _res(OK, *answers))
+    assert (got.outcome, got.reason, got.categories) == (outcome, reason, categories)
+    if reason is not Reason.malformed_answer:
+        assert got.codes == tuple(dict.fromkeys(answers))  # the raw answer is the evidence
+
+
+def test_bitmask_non_a_records_are_malformed() -> None:
+    got = interpret(MASK, _res(OK, "x.example.org", rdtype="CNAME"))
+    assert (got.outcome, got.reason) == (Outcome.error, Reason.malformed_answer)
+
+
+def test_bitmask_dns_states_unchanged() -> None:
+    assert interpret(MASK, _res(ResultState.nxdomain)).outcome is Outcome.not_listed
+    for state in ResultState:
+        if state not in (ResultState.ok, ResultState.nxdomain):
+            assert interpret(MASK, _res(state)).outcome is Outcome.error, state
+
+
+def test_every_bitmask_octet_is_never_clean() -> None:
+    """Exhaustive: every 127.0.0.x answer is listed/info only when all its bits are mapped."""
+    mapped = {2, 4, 16, 32, 64}
+    for octet in range(256):
+        got = interpret(MASK, _res(OK, f"127.0.0.{octet}"))
+        assert got.outcome is not Outcome.not_listed
+        bits = {1 << i for i in range(8) if octet & (1 << i)}
+        if bits and bits <= mapped:
+            assert got.outcome in (Outcome.listed, Outcome.info), octet
+        else:
+            assert got.outcome is Outcome.error, octet
+
+
+def test_shipped_bitmask_lists() -> None:
+    shipped = {x.id: x for x in read_dnsbl_lists(DNSBL_FILE)}
+    assert shipped["surbl-multi"].return_code_mode == "bitmask"
+    assert shipped["uribl-multi"].return_code_mode == "bitmask"
+    assert shipped["spamcop-bl"].return_code_mode == "exact"
+    assert not any(x.default_enabled for x in shipped.values())
+    got = interpret(shipped["surbl-multi"], _res(OK, "127.0.0.80"))
+    assert (got.outcome, got.categories) == (Outcome.listed, ("malware", "abuse"))
+    got = interpret(shipped["uribl-multi"], _res(OK, "127.0.0.3"))
+    assert (got.outcome, got.reason) == (Outcome.error, Reason.conflicting_codes)
 
 
 # --- engine runs ---------------------------------------------------------------------------------

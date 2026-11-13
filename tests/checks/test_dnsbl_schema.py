@@ -160,11 +160,86 @@ def test_valid_minimal() -> None:
             "duplicate entry",
         ),
         ({"name": " padded"}, "surrounding whitespace"),
+        # M7-03b: return_code_mode and default_enabled
+        ({"return_code_mode": "mask"}, "must be one of"),
+        ({"return_code_mode": "Bitmask"}, "must be one of"),
+        ({"return_code_mode": True}, "must be one of"),
+        ({"return_code_mode": None}, "must be one of"),
+        ({"return_code_mode": ["bitmask"]}, "must be one of"),
+        ({"default_enabled": "false"}, "true or false"),
+        ({"default_enabled": 0}, "true or false"),
+        ({"default_enabled": None}, "true or false"),
+        (
+            {
+                "return_code_mode": "bitmask",
+                "return_codes": [{"code": "127.0.0.3", "meaning": "listed", "category": "x"}],
+            },
+            "not a single bit",
+        ),
+        (
+            {
+                "return_code_mode": "bitmask",
+                "return_codes": [
+                    {"code": "127.0.0.2", "meaning": "listed", "category": "x"},
+                    {"code": "127.0.1.4", "meaning": "info"},
+                ],
+            },
+            "not a single bit",
+        ),
+        (
+            {
+                "return_code_mode": "bitmask",
+                "return_codes": [{"code": "127.0.0.0", "meaning": "listed", "category": "x"}],
+            },
+            "not a single bit",
+        ),
+        (
+            {"status": "unverified", "unverified_fields": ["return_code_mode"]},
+            "names no field",
+        ),
     ],
 )
 def test_invalid_list(changes: dict[str, Any], fragment: str) -> None:
     with pytest.raises(DnsblSchemaError, match=fragment):
         parse_dnsbl_lists(_doc(**changes), TODAY)
+
+
+def test_mode_and_enablement_defaults() -> None:
+    (lst,) = parse_dnsbl_lists(_doc(), TODAY)
+    assert lst.return_code_mode == "exact" and lst.default_enabled is True
+
+
+@pytest.mark.parametrize(
+    ("changes", "mode", "enabled"),
+    [
+        ({"return_code_mode": "exact"}, "exact", True),
+        ({"return_code_mode": "bitmask"}, "bitmask", True),
+        ({"default_enabled": False}, "exact", False),
+        ({"return_code_mode": "bitmask", "default_enabled": False}, "bitmask", False),
+        # a refused code need not be a single bit, and is matched exactly
+        (
+            {
+                "return_code_mode": "bitmask",
+                "return_codes": [
+                    {"code": "127.0.0.128", "meaning": "listed", "category": "x"},
+                    {"code": "127.0.0.255", "meaning": "refused"},
+                    {"code": "127.255.255.254", "meaning": "refused"},
+                ],
+            },
+            "bitmask",
+            True,
+        ),
+        (
+            {"return_code_mode": "bitmask", "status": "unverified",
+             "unverified_fields": ["return_code_mode"]},
+            "bitmask",
+            True,
+        ),
+    ],
+)  # fmt: skip
+def test_mode_and_enablement(changes: dict[str, Any], mode: str, enabled: bool) -> None:
+    (lst,) = parse_dnsbl_lists(_doc(**changes), TODAY)
+    assert (lst.return_code_mode, lst.default_enabled) == (mode, enabled)
 
 
 def test_unverified_paths_accepted() -> None:

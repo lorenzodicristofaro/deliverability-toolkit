@@ -17,7 +17,9 @@ Nothing about any real list (zone, return codes, policy) lives in code: it is al
           - {code: 127.0.0.10, meaning: info, category: policy}   # category optional for info
           - {code: 127.255.255.254, meaning: refused}             # no category
         refused_networks: [127.255.255.0/24]  # optional: the list's "query refused" convention
+        return_code_mode: exact           # optional: exact (default) | bitmask
         nodata_is_clean: false            # optional, default false (NODATA is then `error`)
+        default_enabled: true             # optional, default true (applied by M7-05, not here)
         usage_policy: free text           # optional, never invented numbers
         verified_on: 2026-11-01           # mandatory, never in the future
         sources: [https://docs.example.com/bl]  # mandatory, non-empty, https
@@ -30,6 +32,11 @@ Decisions:
 - `unverified_fields` names what the maintainer could not confirm; allowed paths are the
   optional/data keys plus `return_codes.<code>`, each naming something present. The engine
   treats an unverified list as a whole as unable to produce `listed` (M7-03 criteria).
+- `return_code_mode: bitmask` (M7-03b): the list documents its answers as bit sums in the last
+  octet of 127.0.0.x. Every `listed`/`info` code must then be a single bit (127.0.0.1, .2, .4,
+  ... .128); refused codes are still matched exactly. The engine decomposes the answer.
+- `default_enabled` is exposed for M7-05 (lists with restrictive usage policies ship disabled);
+  neither the loader nor the engine acts on it.
 - Zone length is capped so the longest query name (32 IPv6 nibbles or a 253-char domain is
   checked at query time) can still fit: IPv6 lists need a zone of at most 189 characters.
 """
@@ -69,10 +76,13 @@ IPV4_QUERY_PREFIX_LENGTH: Final = 16  # "255.255.255.255."
 
 KINDS: Final = ("ip", "domain")
 MEANINGS: Final = ("listed", "refused", "info")
+RETURN_CODE_MODES: Final = ("exact", "bitmask")
+BITMASK_NETWORK: Final = ipaddress.IPv4Network("127.0.0.0/24")
 ANSWER_NETWORK: Final = ipaddress.IPv4Network("127.0.0.0/8")
 
 Kind = Literal["ip", "domain"]
 Meaning = Literal["listed", "refused", "info"]
+ReturnCodeMode = Literal["exact", "bitmask"]
 
 _ID: Final = re.compile(r"[a-z0-9][a-z0-9-]{0,39}")
 _LABEL: Final = re.compile(r"[a-z0-9](?:[a-z0-9-]*[a-z0-9])?")
@@ -89,7 +99,16 @@ _LIST_REQUIRED: Final = {
     "status",
 }
 _LIST_OPTIONAL: Final = frozenset(
-    {"ipv4", "ipv6", "refused_networks", "nodata_is_clean", "usage_policy", "unverified_fields"}
+    {
+        "ipv4",
+        "ipv6",
+        "refused_networks",
+        "nodata_is_clean",
+        "usage_policy",
+        "unverified_fields",
+        "return_code_mode",
+        "default_enabled",
+    }
 )
 
 
@@ -120,6 +139,8 @@ class DnsblList:
     sources: tuple[str, ...]
     status: str
     unverified_fields: frozenset[str]
+    return_code_mode: ReturnCodeMode = "exact"
+    default_enabled: bool = True
 
     @property
     def verified(self) -> bool:
@@ -194,6 +215,20 @@ def _return_codes(
     return out
 
 
+def is_single_bit(code: ipaddress.IPv4Address) -> bool:
+    """True for 127.0.0.1, .2, .4, ... .128: one bit set in the last octet of 127.0.0.x."""
+    last = int(code) & 0xFF
+    return code in BITMASK_NETWORK and last != 0 and last & (last - 1) == 0
+
+
+def _check_bitmask(codes: Mapping[ipaddress.IPv4Address, ReturnCode], where: str) -> None:
+    for rc in codes.values():
+        if rc.meaning != "refused" and not is_single_bit(rc.code):
+            raise _fail(
+                where, f"{rc.meaning} code {rc.code} is not a single bit of 127.0.0.x (bitmask)"
+            )
+
+
 def _sources(value: object, where: str) -> tuple[str, ...]:
     urls = tuple(
         _https_url(u, f"{where}[{i}]")
@@ -243,6 +278,16 @@ def _parse_list(data: object, where: str, today: date) -> DnsblList:
         else ()
     )
     codes = _return_codes(d["return_codes"], f"{where}.return_codes", refused)
+    mode: ReturnCodeMode = (
+        _choice(d["return_code_mode"], f"{where}.return_code_mode", RETURN_CODE_MODES)  # type: ignore[assignment]
+        if "return_code_mode" in d
+        else "exact"
+    )
+    if mode == "bitmask":
+        _check_bitmask(codes, f"{where}.return_codes")
+    enabled = (
+        _bool(d["default_enabled"], f"{where}.default_enabled") if "default_enabled" in d else True
+    )
     nodata_clean = (
         _bool(d["nodata_is_clean"], f"{where}.nodata_is_clean") if "nodata_is_clean" in d else False
     )
@@ -254,7 +299,11 @@ def _parse_list(data: object, where: str, today: date) -> DnsblList:
     status = _status(d["status"], f"{where}.status")
 
     present = {"zone", "kind", "return_codes"} | {f"return_codes.{c}" for c in codes}
-    present.update(k for k in ("ipv4", "ipv6", "refused_networks", "nodata_is_clean") if k in d)
+    present.update(
+        k
+        for k in ("ipv4", "ipv6", "refused_networks", "nodata_is_clean", "return_code_mode")
+        if k in d
+    )
     if policy is not None:
         present.add("usage_policy")
     unverified: frozenset[str] = frozenset()
@@ -280,6 +329,8 @@ def _parse_list(data: object, where: str, today: date) -> DnsblList:
         sources=_sources(d["sources"], f"{where}.sources"),
         status=status,
         unverified_fields=unverified,
+        return_code_mode=mode,
+        default_enabled=enabled,
     )
 
 

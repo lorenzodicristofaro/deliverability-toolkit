@@ -8,6 +8,7 @@ lists:
     kind: ip
     ipv4: true
     ipv6: false
+    default_enabled: false
     return_codes:
       - {code: 127.0.0.2, meaning: listed, category: spam_source}
     usage_policy: >-
@@ -26,6 +27,8 @@ lists:
     name: SURBL multi (public free query service)
     zone: multi.surbl.org
     kind: domain
+    return_code_mode: bitmask
+    default_enabled: false
     return_codes:
       - {code: 127.0.0.4, meaning: listed, category: disposable_email}
       - {code: 127.0.0.8, meaning: listed, category: phishing}
@@ -51,6 +54,8 @@ lists:
     name: URIBL multi (public mirrors)
     zone: multi.uribl.com
     kind: domain
+    return_code_mode: bitmask
+    default_enabled: false
     return_codes:
       - {code: 127.0.0.2, meaning: listed, category: spam_domain}
       - {code: 127.0.0.4, meaning: listed, category: grey}
