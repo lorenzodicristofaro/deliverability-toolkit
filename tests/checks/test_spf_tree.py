@@ -471,3 +471,107 @@ async def test_malformed_root_records_never_raise(record: str) -> None:
     )
     tree = await resolve_spf(resolver, "m.test")
     assert tree.query_count <= MAX_QUERIES
+
+
+# --- R1-17: mechanisms after the first all are never tested (RFC 7208 5.1, 4.6) ---------------
+
+_ELEVEN = " ".join(f"include:i{i}.example.net" for i in range(11))
+_AFTER_ROOT = "after.example.com"
+
+
+def _after_all_zone(root: str) -> FakeResolver:
+    entries = [_txt(_AFTER_ROOT, root)]
+    entries += [_txt(f"i{i}.example.net", "v=spf1 ip4:192.0.2.1 -all") for i in range(11)]
+    entries += [
+        {"name": "sf.example.net", "type": "TXT", "state": "servfail", "rcode": 2},
+        {"name": "sfa.example.net", "type": "A", "state": "servfail", "rcode": 2},
+        _txt("pre.example.net", "v=spf1 -all include:sf.example.net a:sfa.example.net"),
+    ]
+    return _fake(entries)
+
+
+_ALL_KINDS_AFTER = (
+    "a:sfa.example.net mx:sfa.example.net exists:sfa.example.net ptr"
+    " include:sf.example.net include:void.example.net"
+)
+
+
+@pytest.mark.parametrize(
+    ("record", "lookups", "voids", "evaluated", "followed"),
+    [
+        # The finding: eleven includes after -all are never evaluated by a receiver.
+        (f"v=spf1 -all {_ELEVEN}", 0, 0, True, []),
+        (f"v=spf1 +all {_ELEVEN}", 0, 0, True, []),
+        (f"v=spf1 all {_ELEVEN}", 0, 0, True, []),
+        (f"v=spf1 ?all {_ELEVEN}", 0, 0, True, []),
+        (f"v=spf1 ~all {_ELEVEN}", 0, 0, True, []),
+        ("v=spf1 -ALL include:i0.example.net", 0, 0, True, []),
+        # Every lookup kind after all (failures and voids included): not counted, not queried.
+        (f"v=spf1 ~all {_ALL_KINDS_AFTER}", 0, 0, True, []),
+        (f"v=spf1 -all -all {_ALL_KINDS_AFTER}", 0, 0, True, []),
+        # Terms before all are still counted and followed exactly as before.
+        ("v=spf1 include:i0.example.net -all include:i1.example.net", 1, 0, True, ["i0"]),
+        ("v=spf1 include:void.example.net ~all include:void2.example.net", 1, 1, True, ["void"]),
+        ("v=spf1 include:sf.example.net -all include:i1.example.net", 1, 0, False, ["sf"]),
+        ("v=spf1 a:sfa.example.net -all include:i1.example.net", 1, 0, False, []),
+        # all inside an included record stops only that record's terms.
+        (
+            "v=spf1 include:pre.example.net include:i1.example.net -all",
+            2,
+            0,
+            True,
+            ["pre", "i1"],
+        ),
+        # redirect is ignored when an all is present, before or after it (RFC 7208 6.1).
+        ("v=spf1 -all redirect=i0.example.net", 0, 0, True, []),
+        ("v=spf1 redirect=i0.example.net -all", 0, 0, True, []),
+        # An all-like modifier is not the all mechanism: later terms still count.
+        ("v=spf1 all=x.example.net include:i0.example.net", 1, 0, True, ["i0"]),
+    ],
+)
+async def test_terms_after_all_not_counted_or_followed(
+    record: str, lookups: int, voids: int, evaluated: bool, followed: list[str]
+) -> None:
+    resolver = _after_all_zone(record)
+    tree = await resolve_spf(resolver, _AFTER_ROOT)
+    assert (tree.lookup_count, tree.void_count, tree.evaluated) == (lookups, voids, evaluated)
+    assert not tree.lookup_limit_exceeded
+    assert [c.domain.split(".")[0] for c in tree.root.children] == followed
+    assert len(tree.root.lookups) == lookups - sum(len(c.lookups) for c in tree.root.children)
+    asked = {q.name for q in resolver.questions}
+    # Nothing that appears only after the first all is ever queried.
+    never = {"i1.example.net", "i10.example.net", "void2.example.net"} - {
+        f"{f}.example.net" for f in followed
+    }
+    if record.startswith(("v=spf1 -all", "v=spf1 ~all", "v=spf1 +all", "v=spf1 ?all")):
+        never |= {"sf.example.net", "sfa.example.net", "void.example.net"}
+    assert not asked & never
+
+
+async def test_failure_after_all_in_included_record_not_queried() -> None:
+    resolver = _after_all_zone("v=spf1 include:pre.example.net -all")
+    tree = await resolve_spf(resolver, _AFTER_ROOT)
+    pre = _find(tree, "pre.example.net")
+    assert pre.lookups == () and tree.lookup_count == 1 and tree.evaluated
+    assert [q.name for q in resolver.questions] == [_AFTER_ROOT, "pre.example.net"]
+
+
+@pytest.mark.parametrize(
+    "record",
+    [
+        # An invalid all-like token is not an all: the record is a syntax error (4.6) and
+        # nothing in it is counted, whatever its position.
+        "v=spf1 -all/24 include:i0.example.net",
+        "v=spf1 -all:x.example.net include:i0.example.net",
+        "v=spf1 -allx include:i0.example.net",
+        # Terms after all are still syntax-checked: their errors make the record permerror.
+        "v=spf1 -all include:",
+        "v=spf1 -all ip4:999.0.0.1",
+        "v=spf1 -all include:i0.example.net redirect=",
+    ],
+)
+async def test_terms_after_all_still_syntax_checked(record: str) -> None:
+    resolver = _after_all_zone(record)
+    tree = await resolve_spf(resolver, _AFTER_ROOT)
+    assert tree.root.syntax_error and tree.lookup_count == 0
+    assert [q.name for q in resolver.questions] == [_AFTER_ROOT]

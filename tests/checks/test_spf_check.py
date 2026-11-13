@@ -13,6 +13,7 @@ from app.checks.registry import load_builtin_checks
 from app.checks.spf import (
     CODES,
     DNS_ANSWER_GUIDELINE,
+    MAX_AFTER_ALL_EVIDENCE,
     NEAR_LOOKUP_THRESHOLD,
     TXT_STRING_MAX,
     SpfCheck,
@@ -167,8 +168,8 @@ INLINE_CASES: list[tuple[str, list[dict[str, Any]], str, set[str]]] = [
     (
         "first_all_wins",
         [_txt("x.test", "v=spf1 ip4:192.0.2.1 -all +all")],
-        "ok",
-        set(),
+        "warn",
+        {"SPF_TERMS_AFTER_ALL"},  # R1-17: the unreachable +all is advisory only, not PLUS_ALL
     ),
     (
         "redirect_target_softfail",
@@ -448,6 +449,73 @@ async def test_every_failure_state_anywhere_is_error(
     assert _codes(r) == {"SPF_DNS_ERROR"}
     (f,) = r.findings
     assert (f.params["name"], f.params["rdtype"], f.params["state"]) == (name, rdtype, str(state))
+
+
+# --- R1-17: terms after the first all are never tested (RFC 7208 5.1) --------------------------
+
+_ELEVEN = " ".join(f"include:i{i}.test" for i in range(11))
+_INCLUDED = [_txt(f"i{i}.test", "v=spf1 ip4:192.0.2.1 -all") for i in range(11)]
+_SERVFAIL = {"name": "sf.example.net", "type": "TXT", "state": "servfail", "rcode": 2}
+
+
+@pytest.mark.parametrize(
+    ("record", "status", "codes", "lookups"),
+    [
+        (f"v=spf1 -all {_ELEVEN}", "warn", {"SPF_TERMS_AFTER_ALL"}, 0),
+        (
+            f"v=spf1 ~all {_ELEVEN}",
+            "warn",
+            {"SPF_TERMS_AFTER_ALL", "SPF_NEUTRAL_ALL_SOFTFAIL"},
+            0,
+        ),
+        (f"v=spf1 ?all {_ELEVEN}", "warn", {"SPF_TERMS_AFTER_ALL", "SPF_QUESTION_ALL"}, 0),
+        (f"v=spf1 +all {_ELEVEN}", "fail", {"SPF_TERMS_AFTER_ALL", "SPF_PLUS_ALL"}, 0),
+        # A SERVFAIL and a missing target behind all are not queried: no error, no permerror.
+        (
+            "v=spf1 -all include:sf.example.net include:nx.example.net",
+            "warn",
+            {"SPF_TERMS_AFTER_ALL"},
+            0,
+        ),
+        # The same terms before all keep today's results.
+        ("v=spf1 include:sf.example.net -all", "error", {"SPF_DNS_ERROR"}, None),
+        (f"v=spf1 {_ELEVEN} -all", "fail", {"SPF_TOO_MANY_LOOKUPS", "SPF_FLATTENING_HINT"}, 11),
+        # Modifiers after all are not unreachable mechanisms; redirect keeps its own finding.
+        ("v=spf1 -all exp=e.example.net", "ok", set(), 0),
+        ("v=spf1 -all redirect=i0.test", "warn", {"SPF_REDIRECT_WITH_ALL"}, 0),
+    ],
+)
+async def test_terms_after_all(
+    record: str, status: str, codes: set[str], lookups: int | None
+) -> None:
+    resolver = _fake([_txt("x.test", record), _SERVFAIL, *_INCLUDED])
+    r = await _check(resolver, "x.test")
+    assert (r.status, _codes(r)) == (status, codes)
+    if lookups is not None:
+        assert r.data["lookup_count"] == lookups
+    if record.startswith("v=spf1 -all"):
+        assert [q.name for q in resolver.questions] == ["x.test"]
+
+
+async def test_terms_after_all_aggregated_once_per_record_with_capped_evidence() -> None:
+    after = " ".join(f"ip4:192.0.2.{i}" for i in range(15))
+    resolver = _fake(
+        [
+            _txt("x.test", f"v=spf1 include:i0.test -all {after} -all"),
+            _txt("i0.test", "v=spf1 -all include:sf.example.net a"),
+            _SERVFAIL,
+        ]
+    )
+    r = await _check(resolver, "x.test")
+    found = [f for f in r.findings if f.code == "SPF_TERMS_AFTER_ALL"]
+    assert [(f.severity, f.params["name"], f.params["count"]) for f in found] == [
+        ("low", "x.test", 16),
+        ("low", "i0.test", 2),
+    ]
+    assert len(found[0].evidence) == MAX_AFTER_ALL_EVIDENCE
+    assert found[0].evidence[0] == "ip4:192.0.2.0"
+    assert found[1].evidence == ("include:sf.example.net", "a")
+    assert r.status == "warn" and r.data["lookup_count"] == 1
 
 
 @pytest.mark.parametrize("domain", ["a b.example.com", "a..b", "192.0.2.1", "x\x00.test"])

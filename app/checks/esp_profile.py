@@ -17,6 +17,10 @@ unverified with `EspProfile.is_verified`):
   Otherwise, a host not found while some record in the tree is a permerror that `resolve_spf`
   does not follow (several SPF records at one name, or a syntax error) is not evaluated either:
   state `permerror`, `ESP_SPF_PERMERROR` naming that record; never "missing".
+  A host present only as an `include:` after the first `all` of a record in the tree (R1-17,
+  RFC 7208 section 5.1: never evaluated, so not counted or followed) is reported as
+  `ESP_SPF_INCLUDE_AFTER_ALL` (include state `after_all`, part state `missing`) instead of
+  `ESP_SPF_INCLUDE_MISSING`; no DNS query is made for it.
   A profile with `spf.only_if_record` (M6-17) expects its includes only when the domain already
   publishes an SPF record: when the domain's TXT query completed (NXDOMAIN, NODATA, or TXT
   records none of which is SPF) the part is `no_record`, each include `not_required`, and no
@@ -111,7 +115,12 @@ from app.checks.dnsutil import classify, fetch_cname, fetch_txt
 from app.checks.esp_detection import SpfView, detect
 from app.checks.models import CheckContext, CheckResult, Finding, Severity, Target, finding
 from app.checks.spf import NEAR_LOOKUP_THRESHOLD
-from app.checks.spf_tree import LOOKUP_LIMIT, SpfTree, resolve_spf
+from app.checks.spf_tree import (
+    LOOKUP_LIMIT,
+    SpfTree,
+    include_targets_after_all,
+    resolve_spf,
+)
 from app.core.domain_names import InvalidDomainName, to_ascii_domain, to_dns_name
 from app.dns.types import DnsQuestion
 from app.esp.profile import DkimSelector, EspProfile, RecordExpectation
@@ -119,6 +128,7 @@ from app.parsers.dkim import parse_dkim_key
 
 CODES: tuple[str, ...] = (
     "ESP_SPF_INCLUDE_MISSING",
+    "ESP_SPF_INCLUDE_AFTER_ALL",
     "ESP_SPF_PERMERROR",
     "ESP_DKIM_RECORD_MISSING",
     "ESP_DKIM_TARGET_MISMATCH",
@@ -205,7 +215,8 @@ async def _spf_view(run: _Run) -> SpfView:
         failure = (name, rdtype, str(state))
     elif tree.truncated:
         failure = (run.domain, "TXT", "truncated")
-    return SpfView(frozenset(_spf_targets(tree)), failure, _broken_node(tree))
+    targets = _spf_targets(tree) | _after_all_targets(tree)
+    return SpfView(frozenset(targets), failure, _broken_node(tree))
 
 
 def _part(state: PartState, **extra: Any) -> dict[str, Any]:
@@ -221,6 +232,17 @@ def _spf_targets(tree: SpfTree) -> set[str]:
         for node in tree.nodes()
         for lk in node.lookups
         if lk.target is not None and lk.term.name in ("include", "redirect")
+    }
+
+
+def _after_all_targets(tree: SpfTree) -> set[str]:
+    """Include targets written after the first `all` of a record in the tree (R1-17): never
+    evaluated, counted or queried, only read from the records already fetched."""
+    return {
+        target
+        for node in tree.nodes()
+        if node.record is not None and not node.syntax_error
+        for target in include_targets_after_all(node.record)
     }
 
 
@@ -246,6 +268,7 @@ async def _spf(run: _Run, esp: EspProfile) -> dict[str, Any]:
             includes=[{"host": h, "state": "not_required"} for h in sorted(esp.spf_includes)],
         )
     targets = _spf_targets(tree)
+    after_all = _after_all_targets(tree)
     broken = _broken_node(tree)
     unknown: PartState | None = None
     if tree.errors or tree.truncated:
@@ -258,6 +281,12 @@ async def _spf(run: _Run, esp: EspProfile) -> dict[str, Any]:
             includes.append({"host": host, "state": "ok"})
         elif unknown is not None:
             includes.append({"host": host, "state": unknown})
+        elif host in after_all:
+            # Present but never evaluated: it comes after all (RFC 7208 section 5.1).
+            includes.append({"host": host, "state": "after_all"})
+            run.findings.append(
+                finding("ESP_SPF_INCLUDE_AFTER_ALL", "high", {"esp": esp.name, "host": host})
+            )
         else:
             includes.append({"host": host, "state": "missing"})
             run.findings.append(
@@ -282,7 +311,7 @@ async def _spf(run: _Run, esp: EspProfile) -> dict[str, Any]:
     state: PartState = "ok"
     if not_found and unknown is not None:
         state = unknown
-    elif any(i["state"] == "missing" for i in includes):
+    elif any(i["state"] in ("missing", "after_all") for i in includes):
         state = "missing"
     return _part(state, includes=includes)
 

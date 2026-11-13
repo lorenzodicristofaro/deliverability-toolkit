@@ -109,6 +109,7 @@ module's `CODES`; `tests/checks/test_acceptance_m3.py` requires en and it text f
 | `SPF_FLATTENING_HINT` | info | none (advisory; no addresses are generated) |
 | `SPF_DNS_ERROR` | medium (status `error`) | 4.4 |
 | `SPF_MX_TOO_MANY_HOSTS` | high | 4.6.4 |
+| `SPF_TERMS_AFTER_ALL` | low | 5.1 (mechanisms after the first `all` are never tested, so they are not counted or followed; still syntax-checked) |
 
 SPF tree targets (`include`, `redirect`, `a`, `mx`, `exists`) follow the RFC 7208 `domain-spec` rule
 the SPF parser applies plus DNS limits (visible ASCII labels such as `spf_c` or `x-`, 1-63 octets
@@ -251,6 +252,7 @@ No ESP assigned: `ESP_NONE_ASSIGNED` (info) plus any detection findings.
 | Code | Severity | Notes |
 |---|---|---|
 | `ESP_SPF_INCLUDE_MISSING` | high | include host not in the SPF tree |
+| `ESP_SPF_INCLUDE_AFTER_ALL` | high | include host present only after the first `all` of a record: never evaluated (RFC 7208 5.1, R1-17); replaces `ESP_SPF_INCLUDE_MISSING` for that host |
 | `ESP_SPF_PERMERROR` | high (status `error`) | include not found and a record in the tree is a permerror |
 | `ESP_DKIM_RECORD_MISSING` | high | selector name absent |
 | `ESP_DKIM_TARGET_MISMATCH` | medium | no CNAME in the chain fits `target_pattern`; `reason` `chain_end`, `loop`, `empty_target` or `hop_limit` |
