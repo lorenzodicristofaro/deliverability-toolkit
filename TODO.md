@@ -251,7 +251,9 @@ Decided 2026-11-13 (maintainer):
 - docs/CHECKS.md vs app/checks/dmarc.py: the doc was aligned to the code (failed external-authorization lookup gives `error` only when no critical/high finding is present; always reported as DMARC_EXTERNAL_AUTH_UNVERIFIED).
 
 ## Backlog (maintainer request 2026-11-13)
-- [ ] F-01 message analysis: authentication per hop view (Authentication-Results and ARC sets ordered among Received fields, info finding where pass turns to fail; display only, never feeds computed_dmarc) (opus; depends R1-22; ticket docs/tickets/F-01-auth-per-hop-view.md; analyzer extension, no SPEC scope change)
+- [ ] F-01 message analysis: authentication per hop view (Authentication-Results and ARC sets ordered among Received fields, info finding where pass turns to fail; display only, never feeds computed_dmarc) (opus; depends R1-22; ticket docs/tickets/F-01-auth-per-hop-view.md; analyzer extension, no SPEC scope change); split into:
+  - [ ] F-01-01 hop view service, MSG_AUTH_BROKE_AFTER_HOP info finding, R1-22 QA inputs, docs/HEADERS.md (opus; docs/tickets/F-01-01-hop-view-service.md)
+  - [ ] F-01-02 hop view in API JSON, web and CLI, i18n en+it, permission tests (opus; depends F-01-01; docs/tickets/F-01-02-hop-view-surfaces.md)
 
 ## M7 — Monitoring
 - [ ] Guarded outbound client (SSRF protection) + tests

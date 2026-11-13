@@ -1,0 +1,28 @@
+# F-01-01 Per-hop authentication view: service, info finding, R1-22 QA inputs
+Milestone: F-01 (backlog, child of docs/tickets/F-01-auth-per-hop-view.md)
+Branch: feature/f-01-01-hop-view-service
+Files in scope (coder confirms before coding): app/services/message_hops.py (new), app/services/message_analysis.py (new `hops` section on `MessageAnalysis`, view models, `_DEPENDENT_CODES` entry), app/services/message_findings.py (new finding MSG_AUTH_BROKE_AFTER_HOP; MSG_ALIGNMENT_FAIL wording; `_topmost_results` decision), app/parsers/ (read-only use of authres/arc/received/message; change only if header position is not already exposed, and then the smallest addition), docs/HEADERS.md, locales/en.json, locales/it.json (finding keys only), tests/services/test_message_hops.py (new), tests/services/test_message_findings.py, tests/services/test_message_analysis.py (schema/golden updates), tests/fixtures/messages/ (only if a sample is added, sanitized per docs/HEADERS.md)
+Out of scope: API route, web template/view, CLI text (F-01-02); cryptographic verification of DKIM or ARC; changing `computed_dmarc` rules (R1-22); changing MSG_ARC_INVALID / MSG_ARC_CV_FAIL; trust decisions on authserv-id; vendor-specific format claims
+Depends on: R1-22 (done)
+Parallel-safe: no (shares message_analysis, message_findings and locale files with other message tickets; F-01-02 depends on this)
+Model: opus
+Description:
+- New pure service `build_hop_view(block, received, auth_headers, arc)` (no clock, no network, never raises). It orders every Received field, every Authentication-Results field and every ARC set (AAR, AMS, AS, instance `i=`) by header position in the block (each MTA prepends, so position encodes hop order; RFC 8601 section 4.1, RFC 8617). Interleaving with Received fields is by the field's position in the block, not by type.
+- Per entry: kind (received / authres / arc_set), position/order, authserv-id (authres) or ARC domain and instance, and the spf/dkim/dmarc/arc results stated there. Unparsed or malformed fields appear as `parsed=false` entries with issue codes only, no raw echo beyond the existing bounded `excerpt`, control characters handled as elsewhere.
+- Authentication-Results fields below the topmost one carry a flag `stated_not_verifiable=true` with their authserv-id. Display only: nothing here feeds `computed_dmarc`, alignment pairs or any existing finding verdict.
+- New info finding MSG_AUTH_BROKE_AFTER_HOP: where a method's stated result goes from pass (older field) to fail/softfail/permerror/temperror-class non-pass (next newer field), report the hop number. Derived only from parsed entries; unparsed entries never produce it. Hop numbering matches the existing Received `index` (0 = oldest). Exact result-class wording is the coder's, verified against RFC 8601 section 2.7 result names.
+- R1-22 QA input 1: MSG_ALIGNMENT_FAIL text says "Neither the SPF nor a DKIM identifier is aligned" while a lower-field dkim pair shows aligned (message_findings.py:404-415). Reword (en + it) so it is true when the only aligned pass is in a lower field, or point to MSG_ALIGNMENT_LOWER_FIELD_NOT_USED. Verdict unchanged.
+- R1-22 QA input 2: `_topmost_results` (message_findings.py:325) still reads per-method results from lower fields for MSG_DKIM_NOT_PASS / MSG_SPF_NOT_PASS. Decision recorded by the GM: display-only, verdict unchanged (it can only add a warning). Coder pins this with a test and a code comment, and states it in docs/HEADERS.md; no behavior change.
+- docs/HEADERS.md: new section "Per-hop authentication view" citing RFC 8601 (sections 2.2, 2.5, 2.7, 4.1) and RFC 8617 (instance numbering, AAR/AMS/AS, cv values) by section. The coder verifies every claim against the RFC text before writing it; no vendor claims; extend the findings table and update the "A per-hop view is not part of this rule" sentence. ARC stays structural only (`verified` None, `crypto_checked` false).
+Unverified external facts: none expected; any RFC claim the coder cannot confirm in the RFC text is dropped or marked `unverified`.
+Acceptance criteria (table-driven, no network, ruff and mypy green):
+- Interleaved ordering: a message with Received, Authentication-Results and ARC sets interleaved yields the entries in header-position order; pinned by a test (including ARC set instances out of header order).
+- Forwarding: spf/dkim/dmarc pass in an older field, spf fail in a newer field after the forwarder -> MSG_AUTH_BROKE_AFTER_HOP (info) names the hop.
+- Mailing list: dkim pass then dkim fail after modification -> the same finding.
+- Forged lower field: a lower Authentication-Results field is flagged `stated_not_verifiable` with its authserv-id, and `computed_dmarc`, alignment pairs and all pre-existing findings are identical to the output before this ticket (test compares with the R1-22 fixtures).
+- Malformed fields (no authserv-id, truncated resinfo, bad ARC instance, oversized fields, empty values, duplicate instances): shown as unparsed, no exception, no MSG_AUTH_BROKE_AFTER_HOP derived from them; table-driven.
+- A failing hop-view section is isolated like the other sections (`MSG_PARSER_LIMIT`, `limits="hops_failed"`) and drops only its own finding; output stays deterministic (byte-identical `model_dump_json`).
+- MSG_ALIGNMENT_FAIL wording test for the lower-field-dkim-aligned case; `_topmost_results` behavior pinned by a test.
+- Existing message tests stay green (golden or schema updates only for the new section).
+New i18n keys (en + it; final names set by the coder): MSG_AUTH_BROKE_AFTER_HOP.title/detail/remediation; changed text of MSG_ALIGNMENT_FAIL.
+Status: todo
