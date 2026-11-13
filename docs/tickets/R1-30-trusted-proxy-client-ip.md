@@ -18,7 +18,7 @@ Acceptance criteria:
 - Docs: deployment behind a reverse proxy, the setting, and the lockout consequence of leaving it empty. Mark the TODO line as covered by R1-30.
 - ruff, mypy, relevant tests green.
 New i18n keys: none (log and config error text only; no user-facing string)
-Status: todo
+Status: done (QA APPROVE, branch 2a5f4e8; uvicorn 0.54.0 defaults checked in installed source and https://uvicorn.dev/settings/ (official per package metadata); Dockerfile CMD --no-proxy-headers; Forwarded not supported)
 
 ## Review details (copied from the code review of 2026-11-12, dev 06869fb; maintainer decision 2026-11-13: ticket created)
 - Location: `app/web/auth.py:70-73` (`_client_ip` is the direct peer), `app/web/auth.py:155`, `app/web/setup.py:202-205` (setup token attempts use the same IP with a fixed account key), `Dockerfile` CMD (`uvicorn ... --host 0.0.0.0`, no `--forwarded-allow-ips`), `app/services/login_throttle.py:10-14` (lockout at 10 failures for 15 minutes).
