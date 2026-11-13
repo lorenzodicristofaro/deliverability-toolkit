@@ -16,4 +16,4 @@ Acceptance criteria:
 6. docs/HEADERS.md states the rule: per-method findings report what the receiver (topmost field) stated; earlier hop results appear only in the hop view.
 7. ruff, mypy and the relevant tests green.
 New i18n keys: none
-Status: todo
+Status: done (dcca37e)
