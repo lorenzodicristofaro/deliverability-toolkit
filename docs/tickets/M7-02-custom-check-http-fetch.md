@@ -1,0 +1,17 @@
+# M7-02 Custom check kind http_fetch via the guarded client
+Milestone: M7
+Branch: feature/m7-02-http-fetch-kind
+Files in scope: app/core/custom_check_schema.py, app/checks/custom.py, app/services/custom_checks_admin.py (only if validation wiring needs it), tests/checks/test_custom.py, tests/checks/test_custom_schema.py, tests/api/test_custom_checks.py (extend), locales/en.json, locales/it.json, docs/CHECKS.md (custom checks section), ARCHITECTURE.md (line "http_fetch is a reserved kind ... until M7")
+Out of scope: new fetch code (use app/net/guarded_http.py only), UI editor changes beyond the kind being accepted, SPEC.md (not edited by the coder)
+Depends on: M7-01
+Parallel-safe: no (locale files, custom check schema)
+Model: opus (the evaluator handles untrusted remote responses and tenant-supplied URLs)
+Acceptance criteria:
+- Schema: `http_fetch` becomes an accepted kind (the M5-22 "not available yet" rejection and CUSTOM_KIND_UNAVAILABLE for it are removed; other reserved kinds, if any, unchanged). Fields: URL template (`{domain}` only, https default, http allowed only if the kind field says so; host must be the target domain or a subdomain of it by template construction, so a tenant cannot aim a check at an arbitrary host), expected status set (allowlist 100-599, max 10 entries), optional body match via `safe_regex.compile_checked` (same on every write path as `dns_matches`), optional max-body cap (<= client cap), optional header presence check (name allowlist or token-validated, value regex via safe_regex), severity, per-language remediation (en and it required). Unknown keys rejected, size cap applies.
+- Evaluator: all I/O through `app/net/guarded_http.fetch`; mapping: client error enum (blocked, dns_error, timeout, too_large, too_many_redirects, tls_error, connect_error) -> Check status `error` with a reason code (never ok, never swallowed); status mismatch or body/header mismatch -> finding with the configured severity; match runs on the capped body, decoded as UTF-8 with replacement, regex through safe_regex (timeout -> `error`).
+- Untrusted response handling: evidence is bounded (status, final host, truncated snippet capped, control characters stripped); the response body and headers never reach logs, i18n params or HTML unescaped; remediation text still comes from the definition and is escaped by renderers.
+- A tenant cannot reach internal addresses through this kind: tests with fake resolver for a template resolving to 127.0.0.1, 169.254.169.254 and a redirect to a private IP all give `error` (blocked), not a finding and not ok.
+- Tests table-driven, no network (fake client seam from M7-01): 200 match, 200 mismatch, 404, 500, redirect ok, redirect blocked, timeout, oversize, regex catastrophic, non-UTF-8 body, huge header, API create/update validation with permission tests unchanged (existing custom-check endpoints keep their tenancy/permission tests green; add one case per role for creating an http_fetch definition).
+- SPEC section 5 line "HTTP fetch matches" (SPEC.md line 145) already matches this scope; no wording change needed. Flag to the maintainer only if the coder finds the implemented scope differs (for example a restricted host rule is narrower than "HTTP fetch matches").
+New i18n keys: CUSTOM_HTTP_BLOCKED, CUSTOM_HTTP_UNREACHABLE, CUSTOM_HTTP_TOO_LARGE, CUSTOM_HTTP_STATUS_MISMATCH, CUSTOM_HTTP_BODY_MISMATCH (.title/.detail, remediation from the definition where a finding) (en + it); remove CUSTOM_KIND_UNAVAILABLE usage for http_fetch only if no other kind uses it
+Status: todo

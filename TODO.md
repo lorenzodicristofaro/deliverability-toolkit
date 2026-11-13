@@ -268,6 +268,28 @@ Decided 2026-11-13 (maintainer):
 - [ ] Scheduler, history, DNS snapshots + diff, trend charts
 - [ ] Alerts: email, webhook, Slack/Teams
 - Accept: scheduled runs respect rate limits; changes produce alerts exactly once.
+Tickets (docs/tickets/M7-*.md, split 2026-11-13; model in brackets):
+- [ ] M7-01 guarded outbound HTTP client + ARCHITECTURE decision record (opus)
+- [ ] M7-02 custom check kind http_fetch via guarded client (opus; depends M7-01)
+- [ ] M7-03 DNSBL/URIBL engine, refusal detection (opus)
+- [ ] M7-04 seeds/dnsbl.yaml + docs/DNSBL.md, unverified entries to the maintainer (sonnet; depends M7-03)
+- [ ] M7-05 dnsbl check registration, API, CLI, web (sonnet; depends M7-03, M7-04)
+- [ ] M7-06 monitor_targets model, migration, repository (sonnet)
+- [ ] M7-07 check_runs history model, migration, retention (sonnet; depends M7-06)
+- [ ] M7-08 DNS snapshots + diff (sonnet; depends M7-06)
+- [ ] M7-09 scheduler core: rate limits, jitter, concurrency, session purge (sonnet; depends M7-06, M7-07)
+- [ ] M7-10 scheduled run executor + change detection (sonnet; depends M7-05, M7-07, M7-08, M7-09)
+- [ ] M7-11 monitor target API + permissions (opus; depends M7-06)
+- [ ] M7-12 history and snapshot read API (sonnet; depends M7-07, M7-08, M7-11)
+- [ ] M7-13 monitoring page + SVG trend charts (sonnet; depends M7-11, M7-12)
+- [ ] M7-14 alert state, dedup, exactly-once design (opus; depends M7-10)
+- [ ] M7-14b secret encryption service, Fernet/MultiFernet, ARCHITECTURE §9 (opus; no deps)
+- [ ] M7-15 alert channel config, encrypted secrets, dispatcher (opus; depends M7-14, M7-14b, M7-11; alert.manage = owner, admin)
+- [ ] M7-16 alert channel email (sonnet; depends M7-15)
+- [ ] M7-17 alert channel generic webhook (sonnet; depends M7-15, M7-01)
+- [ ] M7-18 alert channel Slack, payload to verify in official docs (sonnet; depends M7-17)
+- [ ] M7-19 alert channel Teams, mechanism to verify in official docs (sonnet; depends M7-17)
+- [ ] M7-20 M7 acceptance tests + docs/MONITORING.md (sonnet; depends all channels, M7-02, M7-05, M7-13)
 
 ## M8 — DMARC aggregate reports
 - [ ] IMAP ingestion + HTTP endpoint, safe XML/zip/gz parsing
@@ -291,6 +313,7 @@ Maintainer decision 2026-11-12: moved from M9; no test domains or access yet, an
 - [ ] Microsoft SNDS — verify current access method first
 
 ## Follow-ups (post-M1)
+- [ ] (low, possible after M7) operator-level allowlist for private/internal webhook targets (self-hosted Mattermost, internal gateway); M7 keeps guarded-client rules unchanged (GM decision 2026-11-13).
 - Maintainer principle 2026-11-11 (ESP profiles): the known-record checks exist mainly to find which records a domain already has and associate them with an ESP; the seed/profile list is a convenient starting point for the best-known providers; whether a vendor marks a record required or optional matters little, because if a record is missing the client is told to add it. Vendor required/optional disputes are not escalated.
 - [ ] MAINTAINER (M6-09): MailUp SPF conflict DECIDED 2026-11-11 (include musvc.com only when the domain already has an SPF record; never create an SPF record containing only MailUp's include; DMARC unaffected because SPF for DMARC is evaluated on the return-path domain) — implemented by M6-17. `mailchef` (Emailchef, TXT) DKIM seed question DECIDED 2026-11-11: add it (-> M6-18). Italian wording of esp.mailup.* and esp.emailchef.* APPROVED as is by the maintainer 2026-11-12 (closed; the esp.mailup.dkim_txt_alternative text is reworded by M6-23 and its new Italian goes back for review). Contactlab/Experian, Agile Telecom, Aruba not evaluated (two-profile cap).
 - [ ] ESP schema gap (M6-08): DKIM selectors that are per-identity (Amazon SES, names shown in the console) or not documented (Mailgun) cannot be expressed; both profiles ship `selectors: []` plus a pitfall. Plan a schema extension (e.g. per-assignment selector names) in a later ticket. A future SES target pattern must not assume dkim.<region>.amazonses.com (hosted zone varies by Region and identity).
