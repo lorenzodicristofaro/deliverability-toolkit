@@ -249,6 +249,7 @@ No ESP assigned: `ESP_NONE_ASSIGNED` (info) plus any detection findings.
 | Code | Severity | Notes |
 |---|---|---|
 | `ESP_SPF_INCLUDE_MISSING` | high | include host not in the SPF tree |
+| `ESP_SPF_INCLUDE_AFTER_ALL` | high | include host present only after the first `all` of a record: never evaluated (RFC 7208 5.1, R1-17); replaces `ESP_SPF_INCLUDE_MISSING` for that host |
 | `ESP_SPF_PERMERROR` | high (status `error`) | include not found and a record in the tree is a permerror |
 | `ESP_DKIM_RECORD_MISSING` | high | selector name absent |
 | `ESP_DKIM_TARGET_MISMATCH` | medium | no CNAME in the chain fits `target_pattern`; `reason` `chain_end`, `loop`, `empty_target` or `hop_limit` |

@@ -127,6 +127,38 @@ CASES: list[tuple[str, Zone | dict[Any, Any], set[str], str, tuple[str, str] | N
         "fail",
         ("spf", "missing"),
     ),
+    # R1-17: present only after all -> never evaluated, distinct finding, still fail.
+    (
+        "spf_include_after_all",
+        {(D, "TXT"): ["v=spf1 -all include:spf.esp.example.com"]},
+        {"ESP_SPF_INCLUDE_AFTER_ALL"},
+        "fail",
+        ("spf", "missing"),
+    ),
+    (
+        "spf_include_after_all_nested",
+        {
+            (D, "TXT"): [f"v=spf1 include:_spf.{D} -all"],
+            (f"_spf.{D}", "TXT"): ["v=spf1 ~all include:spf.esp.example.com"],
+        },
+        {"ESP_SPF_INCLUDE_AFTER_ALL"},
+        "fail",
+        ("spf", "missing"),
+    ),
+    (
+        "spf_include_before_and_after_all",
+        {(D, "TXT"): ["v=spf1 include:spf.esp.example.com -all include:spf.esp.example.com"]},
+        set(),
+        "ok",
+        ("spf", "ok"),
+    ),
+    (
+        "spf_include_after_all_other_host_missing",
+        {(D, "TXT"): ["v=spf1 -all include:other.example.net"]},
+        {"ESP_SPF_INCLUDE_MISSING"},
+        "fail",
+        ("spf", "missing"),
+    ),
     (
         "spf_no_record_nxdomain",
         {(D, "TXT"): None},
@@ -431,6 +463,16 @@ async def test_mx_return_path_ok() -> None:
     zone = _apply({RP: None, (RP[0], "MX"): ["10 mx.esp.example.com."]})
     r, _ = await _run(zone, [p])
     assert _sec(r)["return_path"] == {"state": "ok", "host": RP[0]}
+
+
+async def test_spf_include_after_all_state_params_and_not_queried() -> None:
+    """R1-17: the include after all is reported as present but never evaluated."""
+    r, dns = await _run(_apply({(D, "TXT"): ["v=spf1 -all include:spf.esp.example.com"]}))
+    assert _sec(r)["spf"]["includes"] == [{"host": "spf.esp.example.com", "state": "after_all"}]
+    (f,) = [f for f in r.findings if f.code == "ESP_SPF_INCLUDE_AFTER_ALL"]
+    assert f.severity == "high"
+    assert dict(f.params) == {"esp": "Example ESP", "host": "spf.esp.example.com"}
+    assert ("spf.esp.example.com", "TXT") not in dns.questions
 
 
 @pytest.mark.parametrize(

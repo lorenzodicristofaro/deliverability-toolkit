@@ -157,7 +157,7 @@ def _node_findings(node: SpfNode) -> list[Finding]:
             out.append(finding("SPF_REDIRECT_WITH_ALL", "low", name))
         after = mechanisms_after_all(node.record)
         if after:
-            # Section 5.1: never tested, so not counted or queried (M3-07); reported once.
+            # Section 5.1: never tested, so not counted or queried (R1-17); reported once.
             params = {**name, "count": len(after)}
             evidence = [t.raw for t in after[:MAX_AFTER_ALL_EVIDENCE]]
             out.append(finding("SPF_TERMS_AFTER_ALL", "low", params, evidence))

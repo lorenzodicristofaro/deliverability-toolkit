@@ -347,6 +347,20 @@ def mechanisms_after_all(record: SpfRecord) -> tuple[SpfTerm, ...]:
     return () if first is None else mechanisms[first + 1 :]
 
 
+def include_targets_after_all(record: SpfRecord) -> tuple[str, ...]:
+    """Normalised targets of the macro-free ``include`` mechanisms after the first ``all``.
+
+    They are never evaluated, counted or queried; ESP association (R1-17) still reads them
+    from the record text because they show which services the operator meant to authorise."""
+    out: list[str] = []
+    for term in mechanisms_after_all(record):
+        if term.name == "include" and term.valid and not term.has_macro and term.value:
+            target = _spf_target(term.value)
+            if target is not None:
+                out.append(target)
+    return tuple(out)
+
+
 def _spf_label_ok(label: str) -> bool:
     return 0 < len(label) <= MAX_LABEL_LENGTH and all(
         "\x21" <= c <= "\x7e" and c != "\\" for c in label
