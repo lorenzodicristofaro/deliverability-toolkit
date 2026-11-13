@@ -26,4 +26,4 @@ Acceptance criteria:
 - ruff, mypy, relevant tests green, including the R1-28 concurrency test on local PostgreSQL.
 - Proof: the next dev CI infra run (postgres-profile smoke) is green; the GM checks it.
 New i18n keys: none (operator log only)
-Status: todo
+Status: done (QA APPROVE, branch cc94255; 7/17 tests fail on base; Docker smoke 3/3 coder + 1/1 QA)
