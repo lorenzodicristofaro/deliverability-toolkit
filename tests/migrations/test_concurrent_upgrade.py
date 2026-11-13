@@ -38,9 +38,21 @@ def _upgrade_worker(barrier: Any, errors: Any) -> None:
         raise
 
 
-@pytest.mark.skipif(not os.environ.get("TEST_DATABASE_URL"), reason=PG_SKIP_REASON)
+# Parametrised like `db_url` in tests/conftest.py, so `--db-backend` selects it and the
+# collection check in tests/support/test_collection_fixtures.py sees a "postgresql" parameter.
+@pytest.mark.parametrize(
+    "backend",
+    [
+        pytest.param(
+            "postgresql",
+            marks=pytest.mark.skipif(
+                not os.environ.get("TEST_DATABASE_URL"), reason=PG_SKIP_REASON
+            ),
+        )
+    ],
+)
 def test_two_concurrent_upgrades_from_empty_both_reach_head(
-    _postgres_session: str, monkeypatch: pytest.MonkeyPatch
+    backend: str, _postgres_session: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     url = _postgres_session
     _reset_postgres(url)
