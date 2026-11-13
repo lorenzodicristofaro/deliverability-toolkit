@@ -21,7 +21,7 @@ from app.checks.dnsbl_engine import (
     DnsblTarget,
     Outcome,
     Reason,
-    build_query_name,
+    _build_query_name,
     interpret,
     parse_target,
 )
@@ -59,7 +59,7 @@ V6_NIBBLES = "1.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.8.b.d.0.1.0.0.2"
     ],
 )
 def test_query_name(lst: DnsblList, raw: str, expected: str) -> None:
-    assert build_query_name(lst, parse_target(raw)) == expected
+    assert _build_query_name(lst, parse_target(raw)) == expected
 
 
 @pytest.mark.parametrize(
@@ -108,14 +108,14 @@ def test_invalid_target(raw: object, reason: str) -> None:
 )
 def test_query_name_rejected(lst: DnsblList, raw: str, reason: str) -> None:
     with pytest.raises(DnsblQueryError) as info:
-        build_query_name(lst, parse_target(raw))
+        _build_query_name(lst, parse_target(raw))
     assert info.value.reason == reason
 
 
 def test_ipv6_only_list_rejects_ipv4() -> None:
     v6only = dataclasses.replace(BOTH, ipv4=False)
     with pytest.raises(DnsblQueryError, match="ipv4_unsupported"):
-        build_query_name(v6only, parse_target("192.0.2.1"))
+        _build_query_name(v6only, parse_target("192.0.2.1"))
 
 
 # --- interpretation (pure) -----------------------------------------------------------------------
@@ -614,7 +614,7 @@ async def test_query_error_reason_is_kept(
     def boom(_lst: DnsblList, _target: DnsblTarget) -> str:
         raise DnsblQueryError(raised)
 
-    monkeypatch.setattr(engine_mod, "build_query_name", boom)
+    monkeypatch.setattr(engine_mod, "_build_query_name", boom)
     fake = _fake([])
     (res,) = (await _engine(fake, [BOTH]).run(_targets("192.0.2.1"))).results
     assert (res.outcome, res.reason) == (Outcome.error, reason)

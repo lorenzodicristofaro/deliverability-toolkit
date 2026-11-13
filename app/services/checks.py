@@ -14,6 +14,7 @@ import logging
 from collections.abc import Sequence
 from datetime import datetime
 
+from app.checks.dnsbl_engine import DnsblQueryError, parse_target
 from app.checks.models import CheckContext, CheckResult, Target, finding
 from app.checks.registry import CheckRegistry, load_builtin_checks
 from app.core.domain_names import InvalidDomainName, to_dns_name
@@ -51,7 +52,16 @@ def default_registry() -> CheckRegistry:
     return _default_registry
 
 
-def _target(name: str) -> Target:
+def _target(name: str, ids: Sequence[str] = (), allow_ip: bool = False) -> Target:
+    """The check target. An IP literal is accepted only with `allow_ip` and only when every
+    requested check is the DNSBL check (M7-05); anywhere else it is an invalid domain name."""
+    if allow_ip and ids and all(i == "dnsbl" for i in ids):
+        try:
+            parsed = parse_target(name)
+        except DnsblQueryError:
+            parsed = None
+        if parsed is not None and parsed.kind == "ip":
+            return Target(domain=parsed.value)
     try:
         return Target(domain=to_dns_name(name, allow_underscore=False))
     except InvalidDomainName as e:
@@ -131,11 +141,12 @@ async def run_check(
     *,
     registry: CheckRegistry | None = None,
     deadline_s: float = DEFAULT_DEADLINE_S,
+    allow_ip: bool = False,
 ) -> CheckResult:
     """Run one check. Raises ``UnknownCheck`` / ``InvalidTarget``; nothing else escapes."""
     reg = registry if registry is not None else default_registry()
     _require(reg, check_id)
-    return await _run(check_id, _target(name), ctx, reg, deadline_s)
+    return await _run(check_id, _target(name, [check_id], allow_ip), ctx, reg, deadline_s)
 
 
 async def run_checks(
@@ -146,12 +157,13 @@ async def run_checks(
     registry: CheckRegistry | None = None,
     deadline_s: float = DEFAULT_DEADLINE_S,
     concurrency: int = DEFAULT_CONCURRENCY,
+    allow_ip: bool = False,
 ) -> list[CheckResult]:
     """Run checks concurrently (bounded); results are in the order of ``ids``."""
     reg = registry if registry is not None else default_registry()
     for check_id in ids:
         _require(reg, check_id)
-    target = _target(name)
+    target = _target(name, ids, allow_ip)
     sem = asyncio.Semaphore(max(1, concurrency))
 
     async def one(check_id: str) -> CheckResult:

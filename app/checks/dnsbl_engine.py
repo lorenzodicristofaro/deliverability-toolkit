@@ -33,6 +33,11 @@ operator. Classification is `app.dns.egress.address_reason` (injectable for test
 points (e.g. a list's documented 127.0.0.2 entry) are not special-cased here; if needed they
 will come from list data later.
 
+`_build_query_name` is private on purpose (M7-05): it does not apply the address policy, only
+`DnsblEngine._one` calls it, after that check, so no caller can build a query name for a
+non-public IP. Disabled lists (M7-05) are filtered by the check (`not_applicable`/`list_disabled`,
+no query); the engine only provides the reason code.
+
 An unverified list is not queried (`list_unverified`) unless `include_unverified` is set; its
 results are then marked `unverified=True`.
 """
@@ -100,6 +105,7 @@ class Reason(StrEnum):
     # not applicable
     kind_mismatch = "kind_mismatch"
     non_public_address = "non_public_address"
+    list_disabled = "list_disabled"  # M7-05: default_enabled false and not enabled by the admin
     ipv4_unsupported = "ipv4_unsupported"
     ipv6_unsupported = "ipv6_unsupported"
 
@@ -174,7 +180,7 @@ def not_applicable_reason(lst: DnsblList, target: DnsblTarget) -> Reason | None:
     return None
 
 
-def build_query_name(lst: DnsblList, target: DnsblTarget) -> str:
+def _build_query_name(lst: DnsblList, target: DnsblTarget) -> str:
     """The owner name to query. Raises DnsblQueryError (`kind_mismatch`, `ipv4_unsupported`,
     `ipv6_unsupported`, `name_too_long`); nothing is queried in that case."""
     if (na := not_applicable_reason(lst, target)) is not None:
@@ -414,7 +420,7 @@ class DnsblEngine:
         if not lst.verified and not self._include_unverified:
             return self._skip(lst, target, Outcome.error, Reason.list_unverified)
         try:
-            name = build_query_name(lst, target)
+            name = _build_query_name(lst, target)
         except DnsblQueryError as exc:
             reason = Reason.name_too_long if exc.reason == "name_too_long" else Reason.invalid_name
             return self._skip(lst, target, Outcome.error, reason)

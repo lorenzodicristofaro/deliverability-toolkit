@@ -102,7 +102,7 @@ def test_default_runs_all_checks_as_array(monkeypatch: pytest.MonkeyPatch) -> No
     _use(monkeypatch, "dmarc_cases.yaml")
     r = runner.invoke(app, ["check", "healthy.example.com", "--format", "json"])
     arr = json.loads(r.stdout)
-    assert [x["check_id"] for x in arr] == ["dkim", "dmarc", "spf"]
+    assert [x["check_id"] for x in arr] == ["dkim", "dmarc", "dnsbl", "spf"]
 
 
 def test_error_never_exits_zero_with_other_ok(monkeypatch: pytest.MonkeyPatch) -> None:

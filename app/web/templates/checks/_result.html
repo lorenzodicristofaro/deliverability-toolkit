@@ -1,7 +1,7 @@
 {#- One CheckResult (the same object the API returns). Everything is autoescaped; DNS-sourced text
     additionally goes through `visible`. `error` is its own state ("could not evaluate"). -#}
 {% set status_text = {"ok": t("checks.status.ok"), "warn": t("checks.status.warn"), "fail": t("checks.status.fail"), "info": t("checks.status.info"), "error": t("checks.status.error")} %}
-{% set title_text = {"spf": t("checks.spf.title"), "dmarc": t("checks.dmarc.title"), "dkim": t("checks.dkim.title")} %}
+{% set title_text = {"spf": t("checks.spf.title"), "dmarc": t("checks.dmarc.title"), "dkim": t("checks.dkim.title"), "dnsbl": t("checks.dnsbl.title")} %}
 {% set severity_text = {"critical": t("checks.severity.critical"), "high": t("checks.severity.high"), "medium": t("checks.severity.medium"), "low": t("checks.severity.low"), "info": t("checks.severity.info")} %}
 <section class="check-result" data-testid="check-{{ result.check_id }}" data-status="{{ result.status }}">
   <h2>{{ title_text.get(result.check_id) or t("web.custom_checks.result_title") }}</h2>

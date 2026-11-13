@@ -293,7 +293,7 @@ def all_surfaces(
 
 # --- identical results ---------------------------------------------------------------------------
 
-REGISTERED = ("dkim", "dmarc", "spf")
+REGISTERED = ("dkim", "dmarc", "dnsbl", "spf")
 # The domain `all` of the API: the built-ins plus `esp` (M6-13), sorted.
 DOMAIN_ALL = tuple(sorted([*REGISTERED, "esp"]))
 
@@ -465,12 +465,17 @@ def test_every_registered_check_errors_on_every_surface(
     rig: Rig, monkeypatch: pytest.MonkeyPatch, state: str
 ) -> None:
     make = lambda: Scripted(POINTS_ZONE, everywhere=state)  # noqa: E731
+    # `dnsbl` (M7-05) sends no query while every shipped list is disabled by default, so a DNS
+    # failure cannot reach it: it reports `info` ("no list was queried"), see test_dnsbl_check.py.
     for check_id in default_registry().all_ids():
         text, code = all_surfaces(rig, monkeypatch, make, [check_id], mode="single")
-        assert json.loads(text)["status"] == "error", check_id
-        assert code == 2
+        expected = "info" if check_id == "dnsbl" else "error"
+        assert json.loads(text)["status"] == expected, check_id
+        assert code == (0 if check_id == "dnsbl" else 2)
     text, code = all_surfaces(rig, monkeypatch, make, [], mode="all")
-    assert {d["status"] for d in json.loads(text)} == {"error"} and code == 2
+    statuses = {d["check_id"]: d["status"] for d in json.loads(text)}
+    assert statuses.pop("dnsbl") == "info"
+    assert set(statuses.values()) == {"error"} and code == 2
 
 
 # --- SSE equals REST -----------------------------------------------------------------------------

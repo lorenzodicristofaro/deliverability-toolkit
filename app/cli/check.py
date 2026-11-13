@@ -149,7 +149,7 @@ def check_command(
         raise _fail("cli.check.error.config", EXIT_ERROR, lang, setting=e.key) from None
     ctx = CheckContext(resolver=resolver)
     try:
-        results = asyncio.run(run_checks(ids, domain, ctx, registry=registry))
+        results = asyncio.run(run_checks(ids, domain, ctx, registry=registry, allow_ip=True))
     except UnknownCheck as e:
         raise _fail("cli.check.error.unknown_check", EXIT_USAGE, lang, check=e.check_id) from None
     except InvalidTarget:
