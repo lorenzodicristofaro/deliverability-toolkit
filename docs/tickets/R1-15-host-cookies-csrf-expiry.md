@@ -15,7 +15,7 @@ Acceptance criteria:
 - Tests: https config issues `__Host-` cookies for session and csrf; a token older than the limit is refused (403 as today); http config unchanged; old-name cookie accepted on https during the transition; token with a tampered timestamp refused (MAC covers it).
 - No input echoed in failures. No network. ruff, mypy, relevant tests and the CSRF/auth suites green.
 New i18n keys: none
-Status: todo
+Status: in-progress
 
 ## Review details (copied from the code review of 2026-11-12, dev 06869fb)
 - Location: `app/core/security.py:36,163-173` (`dt_session`), `app/core/csrf.py:65` (`dt_csrf`), `:91-104` (token = nonce + MAC, no timestamp, no binding), `:112-121` (`check_token` accepts any validly signed pair), `:124-146` (`csrf_token_for`).

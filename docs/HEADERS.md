@@ -67,6 +67,10 @@ size check happens while streaming, so an oversized body is never buffered.
 - Broken RFC 2047 encoded-words are kept as text and flagged (`MSG_ENCODED_HEADER_BROKEN`).
 - `Authentication-Results`: method and result names are lowercased; `raw` keeps the original text.
   The obsolete pvalue `"x" @ example.com` (whitespace around `@`) is not joined.
+  An `Authentication-Results` field without an authserv-id is not counted as evaluated and gets
+  `MSG_AUTHRES_UNPARSED` (maintainer decision 2026-11-13, strict): the authserv-id is mandatory in the
+  RFC 8601 section 2.2 ABNF, and consumers SHOULD NOT interpret results whose authserv-id is not a
+  recognised one (sections 2.5 and 4.1).
 - `Received`: unknown or military zones are read as `-0000` with `date_zone_unknown`; a date
   without a zone gives no value, never UTC. 1-digit time fields are accepted (lenient). A keyword
   used as a value (`by id`) gives `missing_clause_value`.

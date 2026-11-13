@@ -14,7 +14,7 @@ Acceptance criteria:
 - Optional: a low finding for unreachable terms (en + it); if added, aggregate once per record, capped evidence.
 - No network. ruff, mypy, relevant tests green.
 New i18n keys: none unless the optional low finding is added (then `finding.<CODE>.title/detail/remediation` en + it)
-Status: todo
+Status: in-review
 
 ## Review details (copied from the code review of 2026-11-12, dev 06869fb)
 - Location: `app/checks/spf_tree.py:313-325` (`_lookups` counts and follows every valid lookup term in record order).

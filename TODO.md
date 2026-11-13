@@ -198,25 +198,32 @@ Tickets (docs/tickets/):
 - [x] R1-10 PARSE-03 error status always carries an explaining finding (sonnet; depends R1-09)
 - Lows, run only if budget allows:
 - [x] R1-11 AUTH-06 missing-i18n-key warning shows the key (sonnet)
-- [ ] R1-12 AUTH-07 default error bodies translated, no echo, no blank 413 (sonnet)
-- [ ] R1-13 AUTH-08 sync DB calls on the event loop in async web handlers (sonnet; depends R1-02)
-- [ ] R1-14 AUTH-09 purge expired and revoked sessions (opus)
+- [x] R1-12 AUTH-07 default error bodies translated, no echo, no blank 413 (sonnet)
+- [x] R1-13 AUTH-08 sync DB calls on the event loop in async web handlers (sonnet; depends R1-02)
+- [x] R1-14 AUTH-09 purge expired and revoked sessions (opus)
 - [ ] R1-15 AUTH-10 `__Host-` cookies on https, CSRF token expiry (opus; depends R1-04)
-- [ ] R1-16 AUTH-11 Cache-Control no-store centrally (sonnet) — PARKED in QA (usage limit), branch e88efe5
+- [x] R1-16 AUTH-11 Cache-Control no-store centrally (sonnet); keyed on the session cookie, see R1-32
 - [ ] R1-17 DNS-05 SPF terms after `all` not counted (opus)
 - [ ] R1-18 DNS-06 drop the 255-octet SPF_RECORD_TOO_LONG info branch (opus)
 - [x] R1-19 DNS-07 empty reply without RA is an error (sonnet; confidence low) — maintainer 2026-11-12: precautionary rule (a)
 - [x] R1-20 PARSE-04 `dtk check` escapes control characters (sonnet)
 - [ ] R1-21 PARSE-05 Received from_ip prefers the TCP-info comment (opus)
 - [ ] R1-22 PARSE-06 forged lower Authentication-Results field (opus; depends R1-09; design decision first)
-- [ ] R1-23 PARSE-07 message analyzer One-Click via the List-Unsubscribe parser (sonnet) — PARKED mid-fix (usage limit), reproduced (15 tests)
+- [x] R1-23 PARSE-07 message analyzer One-Click via the List-Unsubscribe parser (sonnet)
 - [x] R1-24 PARSE-08 To/Cc counts from raw values (sonnet)
 - [ ] R1-25 INFRA-03 postgres compose profile: URL, retry, CI smoke (sonnet; depends R1-04)
 - [ ] R1-26 INFRA-04 pin app image bases by digest, rebuild check (sonnet; digests need network)
 - [ ] R1-27 INFRA-05 run Docker jobs for app/ and locales/ changes (sonnet)
 - [ ] R1-28 INFRA-06 migration race between replicas (sonnet)
 - [ ] R1-29 INFRA-07 app container hardening (sonnet; related to the safe_regex orphan item below; depends R1-04)
+- [ ] R1-30 AUTH-04 TRUSTED_PROXIES setting: client IP from X-Forwarded-For/Forwarded only for a trusted peer; login throttle, setup wizard, .env.example, compose (opus; depends R1-03, R1-04); covers the item "Trusted-proxy setting for the client IP"
+- [ ] R1-31 AUTH-05 domain rename rewrites the ESP host suffixes in the same transaction, user notice en+it (sonnet)
+- [ ] R1-32 AUTH-11 follow-up: Cache-Control no-store on every response except /static/ and exactly /healthz, regardless of the cookie (sonnet; depends R1-16)
 Follow-ups:
+- R1-12 follow-up: comment at app/web/templating.py:37 and test docstring tests/web/test_default_error_bodies.py:210 miscompute the 4-byte worst case (8192 fits the browser 3-byte maxlength case, ~6.6 KB); test_framework_validation_error_has_no_input_for_api_clients (line 67) already passed before the fix.
+- R1-13 follow-up: AST guard tests/web/test_async_handlers_guard.py:22-37 only knows listed method names and 5 modules; glob app/web and flag db/service/repo_for receivers. Nit: stray comment app/web/rules.py:744-746. Also app/api/v1/content.py:170 sync db.rollback() (existing item below, one line).
+- R1-14 follow-up: the purge runs only at startup; a long-running process accumulates rows until the M7 scheduler calls purge_sessions with a policy; no test sends a purged cookie.
+- R1-23 follow-up: with two List-Unsubscribe fields (one over-long, one mailto-only) the message analyzer reports no One-Click while the content analyzer is silent; align optionally. Nit: a NUL-only unknown https value is called "safety limits".
 - R1-01 follow-up: an over-cap inline style also marks the links section not evaluated (content_analysis.py treats any body not-evaluated reason as incomplete); narrow it to body + rules. Timing tests in tests/parsers/test_content_html.py add ~25 s; consider a `slow` marker.
 - R1-03 follow-up: login throttle limits (IP_MAX_ATTEMPTS, MAX_CONCURRENT_VERIFICATIONS, VERIFICATION_WAIT) are module constants; behind a reverse proxy the per-IP budget is shared by all users until the trusted-proxy item lands; consider settings.
 - R1-04 follow-up: optional startup warning for a non-localhost http:// BASE_URL; parity test could also assert every forwarded Settings field is documented.
@@ -226,11 +233,11 @@ Follow-ups:
 - R1-09 follow-up: a stated dkim=none header.d=X still adds X to stated_ds, so a DKIM-Signature d=X is not reported as unverified (message_alignment.py:260-262); two spf resinfos with smtp.mailfrom: first wins (RFC 8601 silent).
 - R1-10 follow-up: MSG_AUTHRES_UNPARSED detail says the issue codes are 'listed in the finding data', but CLI/web do not show params unused by the text — add an {issues} placeholder (safe codes) or reword, en+it; property test could map each skipped area to its required code.
 Not ticketed — maintainer:
-- AUTH-04 (trusted proxy, remote lockout): folded into the existing item "Trusted-proxy setting for the client IP" in Follow-ups; no ticket.
-- INFRA-01 (push-policy deny rules, no server-side ruleset for tags and dev) and INFRA-02 (workflow file can raise its own token rights): touch `.claude/settings.json`, push and permission policy; maintainer decision.
-- AUTH-05: what a domain rename does to ESP hosts outside the new domain (clear, rewrite, or refuse the rename); maintainer decision.
-- PARSE-03 leniency question: should an Authentication-Results field without authserv-id whose resinfo list parsed cleanly count as evaluated? Not part of R1-10; maintainer decision (provider header formats unverified).
-- DNS open question: docs/CHECKS.md says every failed lookup gives `error`, but app/checks/dmarc.py:121-122 keeps `fail` when a high finding exists (deliberate per the code comment); maintainer confirms which rule holds, then the docs are aligned.
+- INFRA-01 (push-policy deny rules, no server-side ruleset for tags and dev) and INFRA-02 (workflow file can raise its own token rights): touch `.claude/settings.json`, push and permission policy; maintainer decision pending (maintainer is reviewing them; no ticket).
+Decided 2026-11-13 (maintainer):
+- AUTH-04: ticket R1-30. AUTH-05: ticket R1-31 (rewrite). AUTH-11 follow-up: ticket R1-32.
+- PARSE-03 leniency: STRICT. An Authentication-Results field without authserv-id is not counted as evaluated (RFC 8601 section 2.2 ABNF; sections 2.5 and 4.1). No code change; MSG_AUTHRES_UNPARSED (R1-10) explains it; sentence added to docs/HEADERS.md.
+- docs/CHECKS.md vs app/checks/dmarc.py: the doc was aligned to the code (failed external-authorization lookup gives `error` only when no critical/high finding is present; always reported as DMARC_EXTERNAL_AUTH_UNVERIFIED).
 
 ## M7 — Monitoring
 - [ ] Guarded outbound client (SSRF protection) + tests
@@ -365,7 +372,7 @@ Maintainer decision 2026-11-12: moved from M9; no test domains or access yet, an
 - [ ] Throttle the `last_seen_at` write in resolve_session
 - [ ] DB-backed login throttle for multi-process deployments
 - [x] Per-IP cap on throttle keys, plus a warning log when the table is full (a single IP can fill the table with locked keys and block new logins) (done in R1-03)
-- [ ] Trusted-proxy setting for the client IP (needed before any reverse-proxy deployment). Consequence added by the 2026-11-12 review: behind a proxy every client shares one throttle IP, so anyone who knows an email address can lock that account remotely (ten wrong passwords per 15 minutes) and can lock the setup wizard (five wrong setup tokens delay, ten lock it); the documented HTTPS path already implies a proxy; uvicorn `forwarded-allow-ips` default (127.0.0.1 only) is unverified, check the uvicorn documentation before designing (review AUTH-04)
+- [ ] (covered by R1-30) Trusted-proxy setting for the client IP (needed before any reverse-proxy deployment). Consequence added by the 2026-11-12 review: behind a proxy every client shares one throttle IP, so anyone who knows an email address can lock that account remotely (ten wrong passwords per 15 minutes) and can lock the setup wizard (five wrong setup tokens delay, ten lock it); the documented HTTPS path already implies a proxy; uvicorn `forwarded-allow-ips` default (127.0.0.1 only) is unverified, check the uvicorn documentation before designing (review AUTH-04)
 - [ ] `services.auth.rotate_session` helper (`_switch` reads the sessions row directly)
 - [ ] Dispose of the DB engine at shutdown via the lifespan
 - [ ] A breached-password corpus check, offline

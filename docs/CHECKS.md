@@ -39,6 +39,9 @@ A check is a class with a string `id` and `async run(ctx: CheckContext, target: 
   error) makes the lookup, and so the check, `error`. This covers every lookup: the SPF tree, the
   `_dmarc` record (and the organizational-domain fallback), the DMARC external authorization
   lookups at `<domain>._report._dmarc.<destination>`, and the DKIM selector probe.
+  One exception for the DMARC external authorization lookups: when one fails, the DMARC check is
+  `error` only if no `critical` or `high` finding is present; otherwise the status follows the
+  findings (`app/checks/dmarc.py`). The failure is always reported as `DMARC_EXTERNAL_AUTH_UNVERIFIED`.
 - **DKIM rule.** Selectors cannot be enumerated in DNS, so the check probes a seed list and never
   claims DKIM is absent. Failed selectors are always listed in `DKIM_PROBE_ERRORS`. If at least
   one selector is found, the status follows the findings. If none is found and any failed, the

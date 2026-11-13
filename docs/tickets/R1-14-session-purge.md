@@ -15,7 +15,8 @@ Acceptance criteria:
 - Works on SQLite and PostgreSQL (run PostgreSQL params if local PG is up).
 - ruff, mypy, relevant tests green.
 New i18n keys: none
-Status: todo
+Status: done
+Outcome: QA APPROVE; merged into dev (merge ff4cbe3).
 
 ## Review details (copied from the code review of 2026-11-12, dev 06869fb)
 - Location: `app/services/auth.py:166-195` (`create_session`), `:230-268` (revocation only sets `revoked_at`), `app/models/session.py:18-34`, `app/web/auth.py:118-138,203-229` (a row per login and per tenant switch).

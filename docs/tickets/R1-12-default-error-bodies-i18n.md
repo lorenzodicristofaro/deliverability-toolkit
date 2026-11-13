@@ -17,7 +17,8 @@ Acceptance criteria:
 - Tests: over-long SSE `name` -> translated 422 without the value; API 404/405 bodies in `it`; max-length CJK setup succeeds; oversized small form -> translated page (each small-form route table row); no input echoed anywhere in these responses.
 - en/it completeness green. No network. ruff, mypy, relevant tests green; existing 401/403/404 behaviour unchanged.
 New i18n keys: generic 422 validation message, 404/405 API messages, 413 page text (en + it); the coder lists exact names and reuses existing keys where they exist.
-Status: todo
+Status: done
+Outcome: QA APPROVE; merged into dev (merge d0af0e6).
 
 ## Review details (copied from the code review of 2026-11-12, dev 06869fb)
 - Location: `app/web/checks_stream.py:102` (`Query(max_length=...)` validated by FastAPI), `app/main.py:124-129` (only the HTML 404 is translated), `app/web/deps.py:189,208` and other bare `HTTPException(status_code=404)`, `app/web/templating.py:36,57-68` (`MAX_FORM_BYTES = 4096`), `Response(status_code=413)` at `app/web/auth.py:144,237`, `app/web/setup.py:195`, `app/web/templating.py:246`, `app/web/domains.py:221,277`, `app/web/dns_tools.py:157,188,280,359`.

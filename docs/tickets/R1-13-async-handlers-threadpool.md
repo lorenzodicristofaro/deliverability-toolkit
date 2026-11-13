@@ -15,7 +15,8 @@ Acceptance criteria:
 - 401/403/404 order unchanged: existing tenancy matrix and route tests green; add no behaviour change.
 - No network, no wall clock. ruff, mypy, relevant tests and tests/tenancy/test_matrix.py green.
 New i18n keys: none
-Status: todo
+Status: done
+Outcome: QA APPROVE; merged into dev (merge bcc231b).
 
 ## Review details (copied from the code review of 2026-11-12, dev 06869fb)
 - Location: as listed in the criteria.

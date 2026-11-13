@@ -14,7 +14,8 @@ Acceptance criteria:
 - Compare with the content analyzer (`CONTENT_NO_ONE_CLICK`) in a cross-check test using the same raw messages.
 - No network. ruff, mypy, relevant tests green.
 New i18n keys: none expected
-Status: in-progress (parked)
+Status: done
+Outcome: QA APPROVE; merged into dev (merge 3981ec5).
 
 ## Review details (copied from the code review of 2026-11-12, dev 06869fb)
 - Location: `app/services/message_findings.py:468-475`.
