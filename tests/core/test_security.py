@@ -181,4 +181,22 @@ def test_cookie_settings(base_url: str, secure: bool, monkeypatch: pytest.Monkey
     assert cookie.secure is secure
     assert cookie.path == "/"
     assert cookie.max_age == 3600
-    assert cookie.key == security.SESSION_COOKIE_NAME
+    # R1-15: the `__Host-` name exactly when the cookie is Secure (https BASE_URL)
+    assert cookie.key == ("__Host-dt_session" if secure else security.SESSION_COOKIE_NAME)
+
+
+@pytest.mark.parametrize(
+    ("cookies", "https", "expected"),
+    [
+        ({}, False, None),
+        ({}, True, None),
+        ({"dt_session": "old"}, False, "old"),
+        ({"__Host-dt_session": "new"}, False, None),  # http never reads the prefixed name
+        ({"dt_session": "old"}, True, "old"),  # migration: old name read on https
+        ({"__Host-dt_session": "new"}, True, "new"),
+        ({"__Host-dt_session": "new", "dt_session": "old"}, True, "new"),
+        ({"__host-dt_session": "x", "dt_session_": "y"}, True, None),  # names are exact
+    ],
+)
+def test_session_cookie_value(cookies: dict[str, str], https: bool, expected: str | None) -> None:
+    assert security.session_cookie_value(cookies, https) == expected

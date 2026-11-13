@@ -35,7 +35,13 @@ from starlette.concurrency import run_in_threadpool
 
 from app.core.config import Settings
 from app.core.i18n import t
-from app.core.security import DEFAULT_HASHER, SESSION_COOKIE_NAME, session_cookie_settings
+from app.core.security import (
+    DEFAULT_HASHER,
+    SESSION_COOKIE_NAME,
+    is_https,
+    session_cookie_settings,
+    session_cookie_value,
+)
 from app.models import UserSession
 from app.repositories import UserMembershipsRepository
 from app.repositories.base import parse_id
@@ -109,6 +115,7 @@ def _set_session_cookie(
         secure=base.secure,
         path=base.path,
     )
+    _clear_legacy_session_cookie(response, settings)
 
 
 def _login_page(
@@ -208,7 +215,12 @@ async def login(request: Request, db: DbDep, settings: SettingsDep) -> Response:
             logger.warning("login throttled", extra={"event": "auth.login_throttled"})
             return _throttled_page(request, wait, next_path, shown_email)
         issued = await run_in_threadpool(
-            _login, db, settings, email, password, request.cookies.get(SESSION_COOKIE_NAME)
+            _login,
+            db,
+            settings,
+            email,
+            password,
+            session_cookie_value(request.cookies, is_https(settings)),
         )
     finally:
         slots.release()
@@ -232,6 +244,22 @@ def _clear_session_cookie(response: Response, settings: Settings) -> None:
         httponly=base.httponly,
         samesite=base.samesite,
     )
+    _clear_legacy_session_cookie(response, settings)
+
+
+def _clear_legacy_session_cookie(response: Response, settings: Settings) -> None:
+    """R1-15 migration (remove with the `dt_session` fallback in `security.session_cookie_value`):
+    on https the cookie is written as `__Host-dt_session`; a pre-upgrade `dt_session` is cleared
+    whenever the session cookie is set or cleared, so it does not linger next to the new one."""
+    base = session_cookie_settings(settings)
+    if base.key != SESSION_COOKIE_NAME:
+        response.delete_cookie(
+            SESSION_COOKIE_NAME,
+            path=base.path,
+            secure=base.secure,
+            httponly=base.httponly,
+            samesite=base.samesite,
+        )
 
 
 def _logout(db: Session, session_id: int) -> None:

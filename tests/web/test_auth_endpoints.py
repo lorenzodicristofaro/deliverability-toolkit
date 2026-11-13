@@ -42,6 +42,9 @@ KEY = "k" * 40
 PASSWORD = "correct horse battery staple"
 FAST = PasswordHasher(time_cost=1, memory_cost=8, parallelism=1)
 PAGE = "t_auth_page.html"
+HTTPS_BASE = "https://dt.example.test"
+HOST_SESSION = "__Host-dt_session"
+HOST_CSRF = "__Host-dt_csrf"
 
 
 class Clock:
@@ -130,6 +133,17 @@ def _add_test_routes(application: FastAPI) -> None:
 
 @pytest.fixture
 def world(migrated_db_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[World]:
+    yield from _make_world(migrated_db_url, monkeypatch, "http://localhost:8000")
+
+
+@pytest.fixture
+def https_world(migrated_db_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[World]:
+    yield from _make_world(migrated_db_url, monkeypatch, HTTPS_BASE)
+
+
+def _make_world(
+    migrated_db_url: str, monkeypatch: pytest.MonkeyPatch, base_url: str
+) -> Iterator[World]:
     monkeypatch.setenv("DATABASE_URL", migrated_db_url)
     monkeypatch.setenv("SECRET_KEY", KEY)
     monkeypatch.setenv("ENCRYPTION_KEY", KEY)
@@ -146,13 +160,16 @@ def world(migrated_db_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[Wor
     db = create_session_factory(engine)()
     tenant_a, tenant_b, users = _seed(db)
     application = create_app(
-        Settings(database_url=migrated_db_url, secret_key=KEY, encryption_key=KEY)  # type: ignore[call-arg]
+        Settings(  # type: ignore[call-arg]
+            database_url=migrated_db_url, secret_key=KEY, encryption_key=KEY, base_url=base_url
+        )
     )
     _add_test_routes(application)
     clock = Clock()
     application.state.login_throttle = LoginThrottle(clock=clock)
+    client_base = "https://testserver" if base_url.startswith("https") else "http://testserver"
     try:
-        with TestClient(application, raise_server_exceptions=True) as client:
+        with TestClient(application, base_url=client_base, raise_server_exceptions=True) as client:
             yield World(client, application, db, clock, tenant_a, tenant_b, users)
     finally:
         env.loader = original_loader
@@ -429,6 +446,81 @@ def test_logout_revokes_session_and_clears_cookie(world: World) -> None:
     assert all(r.revoked_at is not None for r in _sessions(world, "alice"))
     _use_cookie(world, cookie)
     assert world.client.get("/t/whoami").status_code == 401
+
+
+# --- R1-15 (AUTH-10): __Host- cookie names on https -------------------------------------------
+
+
+def _attrs(set_cookie: str) -> list[str]:
+    return [p.strip().lower() for p in set_cookie.split(";")[1:]]
+
+
+def _host_only_secure(set_cookie: str) -> bool:
+    attrs = _attrs(set_cookie)
+    return (
+        "secure" in attrs and "path=/" in attrs and not any(a.startswith("domain") for a in attrs)
+    )
+
+
+def test_https_login_issues_host_prefixed_cookies(https_world: World) -> None:
+    w = https_world
+    page = w.client.get("/login")
+    token = _csrf(page.text)
+    csrf_cookie = page.headers["set-cookie"]
+    assert csrf_cookie.startswith(f"{HOST_CSRF}={token};") and _host_only_secure(csrf_cookie)
+    response = w.client.post(
+        "/login",
+        data={"email": "alice@example.com", "password": PASSWORD, "csrf_token": token},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    cookies = response.headers.get_list("set-cookie")
+    session = [c for c in cookies if c.startswith(f"{HOST_SESSION}=")]
+    assert len(session) == 1 and _host_only_secure(session[0])
+    assert not any(
+        c.startswith(f"{SESSION_COOKIE_NAME}=") and "max-age=0" not in c.lower() for c in cookies
+    )
+    assert w.client.get("/t/whoami").json()["user_id"] == w.users["alice"]
+
+
+def test_https_old_session_cookie_name_still_accepted(https_world: World) -> None:
+    w = https_world
+    _login(w, "alice@example.com")
+    value = w.client.cookies[HOST_SESSION]
+    w.client.cookies.delete(HOST_SESSION)
+    _use_cookie(w, value)  # the pre-R1-15 name, as a browser upgraded mid-session holds it
+    assert w.client.get("/t/whoami").json()["user_id"] == w.users["alice"]
+    response = w.client.post(
+        "/logout", data={"csrf_token": _session_token(w)}, follow_redirects=False
+    )
+    assert response.status_code == 303
+    cleared = response.headers.get_list("set-cookie")
+    for name in (HOST_SESSION, SESSION_COOKIE_NAME):
+        assert any(c.startswith(f'{name}=""') and "Max-Age=0" in c for c in cleared)
+    assert all(r.revoked_at is not None for r in _sessions(w, "alice"))
+
+
+def test_https_login_over_old_name_moves_to_new_name(https_world: World) -> None:
+    w = https_world
+    _login(w, "alice@example.com")
+    value = w.client.cookies[HOST_SESSION]
+    w.client.cookies.delete(HOST_SESSION)
+    _use_cookie(w, value)
+    response = _login(w, "carol@example.com")
+    assert response.status_code == 303
+    cookies = response.headers.get_list("set-cookie")
+    assert any(c.startswith(f"{HOST_SESSION}=") for c in cookies)
+    assert any(c.startswith(f'{SESSION_COOKIE_NAME}=""') and "Max-Age=0" in c for c in cookies)
+    # the presented old-name session was rotated out (revoked) by the new login
+    assert all(r.revoked_at is not None for r in _sessions(w, "alice"))
+
+
+def test_http_login_keeps_current_cookie_names(world: World) -> None:
+    page = world.client.get("/login")
+    assert page.headers["set-cookie"].startswith("dt_csrf=")
+    response = _login(world, "alice@example.com")
+    cookies = response.headers.get_list("set-cookie")
+    assert [c.split("=", 1)[0] for c in cookies] == [SESSION_COOKIE_NAME]
 
 
 def test_logout_requires_csrf(world: World) -> None:
