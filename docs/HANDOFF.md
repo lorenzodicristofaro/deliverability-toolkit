@@ -37,8 +37,19 @@ F-01 follow-ups (TODO.md): lower dkim=pass suppresses MSG_DKIM_NOT_PASS (behavio
 1-based on one page; detail_no_hop wording when Received is truncated; RFC 8617 4.2.1 qualifier; test fixture
 chaining; template kind label. All low.
 
+## CI status (read first)
+- 278bd34: CI green (incl. PostgreSQL tests for F-01), Secret scan green, **CI infra RED** (run 43429085815): step
+  "Compose up with postgres profile and wait for healthy" failed after 1 s, `app-1 is unhealthy`. App log: alembic
+  connection to postgres refused while postgres was still starting, so the container exited. Cause is R1-25's choice
+  (documented `restart: unless-stopped` retry, no wait): `compose up --wait` fails as soon as the app exits and does
+  not wait for the restart. 8ee174b passed by timing. Not related to F-01 (default-profile smoke on the same image
+  passed). Flaky by design until fixed.
+- Fix options (new ticket R1-25b, opus): (a) a short bounded DB wait in the container start before alembic when
+  DATABASE_URL is PostgreSQL (fixes real users too; Dockerfile CMD or small script); (b) CI starts postgres first
+  (`up -d --wait postgres`, then the app). Prefer (a), possibly plus (b). Workflow changes need the maintainer's push.
+  Do not promote dev to qa until CI infra is green.
+
 ## Next 3 steps
-1. Check dev CI for d2d5f40's docs commit (F-01-02 PG tests run there for the first time); if green, merge `dev`
-   into `qa`.
+1. R1-25b: fix the postgres-profile startup race (above), QA, merge; confirm CI infra green; then merge `dev` into `qa`.
 2. M7: read TODO.md, restate its acceptance criteria, `pm` splits it into tickets.
 3. Optionally a small ticket batch for the F-01 follow-ups (decision on MSG_DKIM_NOT_PASS first).
