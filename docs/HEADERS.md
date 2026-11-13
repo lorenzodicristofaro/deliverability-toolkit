@@ -107,12 +107,13 @@ size check happens while streaming, so an oversized body is never buffered.
   `MSG_ALIGNMENT_FAIL` and `MSG_ALIGNMENT_STATED_MISMATCH` although the receiver stated
   `dmarc=pass`. The per-hop view (section "Per-hop authentication view") is display only and
   does not change this rule.
-- `MSG_SPF_NOT_PASS` and `MSG_DKIM_NOT_PASS` (F-01-01, GM decision 2026-11-13, R1-22 QA input):
-  they read the results of the topmost field that states the method, which can be a lower
-  field. This is display only and unchanged: it selects these warnings and their wording, never
-  `computed_dmarc` or the alignment pairs. A lower field can therefore add `MSG_DKIM_NOT_PASS`
-  (for example a lower `dkim=fail` when the topmost field states only spf) or leave it out (a
-  lower `dkim=pass`); both cases are pinned by a test.
+- `MSG_SPF_NOT_PASS` and `MSG_DKIM_NOT_PASS` (F-01-03, maintainer decision 2026-11-13): they
+  report what the receiver stated, i.e. only the topmost `Authentication-Results` field. A
+  lower field never suppresses, adds or replaces them: when the topmost field does not state the
+  method, the finding uses the `not_stated` variant (severity low) even if a lower field states
+  `pass` or `fail`. Earlier hop results appear only in the per-hop view (and
+  `MSG_AUTH_BROKE_AFTER_HOP`); a message whose topmost field is not `pass` still counts as not
+  authenticated. `computed_dmarc` and the alignment pairs are unaffected.
 
 ## Findings
 

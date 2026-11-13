@@ -330,18 +330,17 @@ def _received_part(chain: ReceivedChain, acc: _Acc) -> None:
 
 
 def _topmost_results(headers: tuple[AuthResHeader, ...], method: str) -> list[str]:
-    """Stated results of ``method`` from the topmost field that states it.
+    """Stated results of ``method`` from the topmost Authentication-Results field only.
 
-    That may be a lower field (R1-22 QA input, GM decision 2026-11-13): display only. It
-    selects the MSG_SPF_NOT_PASS / MSG_DKIM_NOT_PASS warnings and their wording and never
-    feeds ``computed_dmarc`` or the alignment pairs, which apply the topmost-field rule in
-    :mod:`app.services.message_alignment`. Behaviour unchanged, pinned by a test.
+    Maintainer decision 2026-11-13 (F-01-03): the message's authentication outcome is what
+    the receiver stated, i.e. ``headers[0]``. A lower field never suppresses, adds or replaces
+    the MSG_SPF_NOT_PASS / MSG_DKIM_NOT_PASS findings; earlier hop results appear only in the
+    hop view (and MSG_AUTH_BROKE_AFTER_HOP). An empty list means the top field does not state
+    ``method`` (the ``not_stated`` variant).
     """
-    for header in headers:
-        found = header.by_method().get(method)
-        if found:
-            return [r.result for r in found]
-    return []
+    if not headers:
+        return []
+    return [r.result for r in headers[0].by_method().get(method, ())]
 
 
 def _not_pass_severity(results: list[str]) -> str:
