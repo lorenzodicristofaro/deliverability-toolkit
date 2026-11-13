@@ -5,8 +5,9 @@
 #     User and database are the POSTGRES_USER / POSTGRES_DB defaults below. Without that
 #     DATABASE_URL the app keeps writing to the SQLite volume and PostgreSQL stays empty.
 #     Startup order: depends_on cannot be conditional on a profile, so the app may start before
-#     PostgreSQL accepts connections; `alembic upgrade head` then fails, the container exits and
-#     `restart: unless-stopped` retries it until PostgreSQL is ready (no wait loop).
+#     PostgreSQL accepts connections; `alembic upgrade head` then waits for it (refused or
+#     starting up only, at most 60 s, migrations/env.py). Past that the container exits and
+#     `restart: unless-stopped` starts it again.
 #   docker compose --profile unbound up    adds a local validating resolver (own image)
 # Rule: no bind mounts of folders outside the project into containers.
 # Secrets come from the environment or a gitignored .env (see .env.example).

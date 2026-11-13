@@ -146,6 +146,12 @@ DATABASE_URL=postgresql://deliverability:<password>@postgres:5432/deliverability
 ```
 
 `<password>` is the same `POSTGRES_PASSWORD`, percent-encoded if it contains special characters
-(`@ : / % ? #`). The app may restart a few times on first start while PostgreSQL initialises
-(`restart: unless-stopped`); this is expected. Check with
+(`@ : / % ? #`). On first start the app may come up before PostgreSQL accepts connections
+(compose cannot order it after a profile-only service). Before migrating, the app waits for the
+database: it retries only "connection refused" and "the database system is starting up / not
+yet accepting connections", with backoff 0.5, 1, 2, then 4 s, for at most 60 s in total, logging
+one line per attempt (`database not ready (...), attempt N; retrying in ...`; no URL or
+password). A wrong password, an unknown database or an unresolvable host fail at once. After
+60 s the original error is raised and the container exits non-zero (then
+`restart: unless-stopped` applies). Check with
 `docker compose exec postgres psql -U deliverability -c '\dt'` that tables exist.
