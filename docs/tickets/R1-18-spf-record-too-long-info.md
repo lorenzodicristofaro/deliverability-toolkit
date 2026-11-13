@@ -15,7 +15,7 @@ Acceptance criteria:
 - Locale texts: the 255-specific wording removed or reworded in en + it only where the finding that remains mentions it; no unused keys left (the catalogue test must stay green).
 - docs/CHECKS.md updated. No network. ruff, mypy, relevant tests green.
 New i18n keys: none (text edits to the remaining finding at most; en + it)
-Status: todo
+Status: done (QA APPROVE, merged 6c1d0a7)
 
 ## Review details (copied from the code review of 2026-11-12, dev 06869fb)
 - Location: `app/checks/spf.py:157-168` (`_length_findings`, `longest > TXT_STRING_MAX`), `app/dns/types.py:76-80` (`join_txt_strings` concatenates the character-strings, so string boundaries are lost).

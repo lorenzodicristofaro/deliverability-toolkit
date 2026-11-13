@@ -14,7 +14,7 @@ Acceptance criteria:
 - Proposed ARCHITECTURE.md wording given in the summary; do not edit ARCHITECTURE.md.
 - ruff, mypy, relevant tests green (PostgreSQL params if local PG is up).
 New i18n keys: none
-Status: done (QA APPROVE round 2, merged; branch cc04ea9; round 1 CHANGES REQUESTED: PG test not parametrised. Reproduced on local PG: base env.py fails 3/3 with UniqueViolation, fix passes 3/3)
+Status: done (QA APPROVE round 2, merged 1ecb89c; branch cc04ea9; round 1 CHANGES REQUESTED: PG test not parametrised. Reproduced on local PG: base env.py fails 3/3 with UniqueViolation, fix passes 3/3)
 
 ## Review details (copied from the code review of 2026-11-12, dev 06869fb)
 - Location: `Dockerfile:50` (CMD), `migrations/env.py:19-29`, `ARCHITECTURE.md:154-155` (`ROLE=web|worker|all`, several workers on PostgreSQL).

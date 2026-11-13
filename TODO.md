@@ -201,10 +201,10 @@ Tickets (docs/tickets/):
 - [x] R1-12 AUTH-07 default error bodies translated, no echo, no blank 413 (sonnet)
 - [x] R1-13 AUTH-08 sync DB calls on the event loop in async web handlers (sonnet; depends R1-02)
 - [x] R1-14 AUTH-09 purge expired and revoked sessions (opus)
-- [ ] R1-15 AUTH-10 `__Host-` cookies on https, CSRF token expiry (opus; depends R1-04)
+- [x] R1-15 AUTH-10 `__Host-` cookies on https, CSRF token expiry (opus; depends R1-04)
 - [x] R1-16 AUTH-11 Cache-Control no-store centrally (sonnet); keyed on the session cookie, see R1-32
-- [ ] R1-17 DNS-05 SPF terms after `all` not counted (opus)
-- [ ] R1-18 DNS-06 drop the 255-octet SPF_RECORD_TOO_LONG info branch (opus; in-review)
+- [x] R1-17 DNS-05 SPF terms after `all` not counted (opus)
+- [x] R1-18 DNS-06 drop the 255-octet SPF_RECORD_TOO_LONG info branch (opus)
 - [x] R1-19 DNS-07 empty reply without RA is an error (sonnet; confidence low) — maintainer 2026-11-12: precautionary rule (a)
 - [x] R1-20 PARSE-04 `dtk check` escapes control characters (sonnet)
 - [x] R1-21 PARSE-05 Received from_ip prefers the TCP-info comment (opus; merged a349692, QA APPROVE round 2)
