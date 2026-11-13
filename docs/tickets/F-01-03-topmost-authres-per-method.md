@@ -1,7 +1,7 @@
 # F-01-03 Per-method findings use only the topmost Authentication-Results field
 Milestone: F-01 (backlog, child of docs/tickets/F-01-auth-per-hop-view.md)
 Branch: feature/f-01-03-topmost-authres-per-method
-Files in scope: app/services/message_findings.py (`_topmost_results` and its docstring only), tests/services/test_message_findings.py (replace TOPMOST_RESULTS_PIN and its test), docs/HEADERS.md (the paragraph stating the old lower-field rule), tests/services/test_message_analysis.py (only if a golden changes)
+Files in scope: app/services/message_findings.py (`_topmost_results` and its docstring only), tests/services/test_message_findings.py (replace TOPMOST_RESULTS_PIN and its test; GM 2026-11-13: R122_FINDINGS row 2 expects MSG_DKIM_NOT_PASS, a direct consequence of the decision), docs/HEADERS.md (the paragraph stating the old lower-field rule), tests/services/test_message_analysis.py (only if a golden changes)
 Out of scope: app/services/message_alignment.py (computed_dmarc and pairs unchanged), app/services/message_hops.py, MSG_AUTH_BROKE_AFTER_HOP, parsers, locales (no new keys; reuse the existing MSG_*_NOT_PASS keys and the existing "not_stated" variant)
 Depends on: F-01-01, F-01-02 (both done)
 Parallel-safe: no
