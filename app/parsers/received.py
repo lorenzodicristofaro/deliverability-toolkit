@@ -21,10 +21,17 @@ after a keyword is its value and comments after it belong to the clause. Extra w
 (additional clauses, multi-word protocols) are ignored with ``unexpected_token``.
 
 - ``from_host``: the ``from`` value, or None when it is an address literal.
-- ``from_ip``: the first bracketed address literal (``[192.0.2.1]``, ``[IPv6:2001:db8::1]``;
-  a bare IPv6 inside brackets is also accepted) in the ``from`` value or its comments,
-  validated with :mod:`ipaddress`. ``from_ip_reserved`` is ``not is_global`` (private,
-  loopback, documentation, ... ranges). Unbracketed addresses are not extracted.
+- ``from_ip``: a bracketed address literal (``[192.0.2.1]``, ``[IPv6:2001:db8::1]``; a bare
+  IPv6 inside brackets is also accepted), validated with :mod:`ipaddress`. The first valid
+  literal in the ``from`` comments (the TCP-info, "derived by server from TCP connection
+  not client EHLO", RFC 5321 section 4.4) is preferred; the literal in the ``from`` value
+  (what the client sent in HELO/EHLO) is used only when no comment has a valid one. A
+  comment literal directly after a ``helo=`` or ``ehlo=`` label (case-insensitive) is the
+  client's claim, not TCP-info: it is treated like the ``from`` value literal (fallback
+  only, after it). At most :data:`MAX_FROM_LITERALS` bracketed segments are examined per
+  hop.
+  ``from_ip_reserved`` is ``not is_global`` (private, loopback, documentation, ...
+  ranges) of the address chosen for ``from_ip``. Unbracketed addresses are not extracted.
 - ``by_host``, ``via``, ``with_protocol`` and ``id`` are kept as text; ``id`` is not
   interpreted.
 - ``for``: only its presence (``has_for``); the address is NOT retained in a field.
@@ -67,6 +74,10 @@ from app.parsers.spf import ParseIssue
 MAX_HOPS = 100
 MAX_HOP_BYTES = 8 * 1024
 MAX_ADDRESS_LITERAL = 64
+# Bracketed segments examined per hop for from_ip. Once the budget is used up, a later
+# valid comment literal is ignored and the HELO literal (if any) is used: acceptable for
+# hostile input, which is the only way to reach the cap.
+MAX_FROM_LITERALS = 32
 
 # Warning codes (stable, lowercase).
 EMPTY_RECEIVED = "empty_received"
@@ -319,6 +330,14 @@ def _address_literals(text: str) -> list[tuple[str, int]]:
     return found
 
 
+def _helo_labelled(text: str, offset: int) -> bool:
+    """True when the ``[`` at ``offset`` directly follows a ``helo=`` or ``ehlo=`` label."""
+    return text[max(0, offset - 5) : offset].lower() in _HELO_LABELS
+
+
+_HELO_LABELS = frozenset({"helo=", "ehlo="})
+
+
 def _parse_ip(literal: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
     if len(literal) > MAX_ADDRESS_LITERAL or "[" in literal:
         return None
@@ -434,15 +453,30 @@ def _parse_hop(value: str) -> ReceivedHop:
     from_ip_reserved: bool | None = None
     from_clause = clauses.get("from")
     if from_clause is not None:
-        sources = ([from_clause.value] if from_clause.value else []) + from_clause.comments
-        for source in sources:
+        # RFC 5321 4.4: the TCP-info comment is written by the receiving server, the
+        # literal in the ``from`` value is what the client sent in HELO/EHLO. The first
+        # valid comment literal wins; the HELO literal is only the fallback. A comment
+        # literal labelled ``helo=``/``ehlo=`` is the client's claim, so it is a fallback too.
+        helo: ipaddress.IPv4Address | ipaddress.IPv6Address | None = None
+        tcp_info: ipaddress.IPv4Address | ipaddress.IPv6Address | None = None
+        budget = MAX_FROM_LITERALS
+        sources = [(from_clause.value, True)] if from_clause.value else []
+        sources += [(comment, False) for comment in from_clause.comments]
+        for source, is_value in sources:
             for literal, offset in _address_literals(source.text):
+                if budget == 0:
+                    break
+                budget -= 1
                 address = _parse_ip(literal)
                 if address is None:
                     warnings.add(INVALID_IP_LITERAL, source.position + offset)
-                    continue
-                if from_ip is None:
-                    from_ip, from_ip_reserved = str(address), not address.is_global
+                elif is_value or _helo_labelled(source.text, offset):
+                    helo = helo or address
+                else:
+                    tcp_info = tcp_info or address
+        chosen = tcp_info or helo
+        if chosen is not None:
+            from_ip, from_ip_reserved = str(chosen), not chosen.is_global
         if from_host is not None and from_host.startswith("[") and from_host.endswith("]"):
             from_host = None
 

@@ -163,6 +163,206 @@ def test_clause_extraction(value: str, expected: dict[str, object], warning_code
     assert codes(h) == warning_codes
 
 
+# --- from_ip source: TCP-info comment over HELO literal (RFC 5321 4.4, PARSE-05) ---------
+
+FROM_IP_SOURCE_CASES = [
+    pytest.param(
+        "from [8.8.8.8] (unknown [10.1.2.3]) by mx.example.org with ESMTP id 1; "
+        "Tue, 10 Nov 2026 10:00:00 +0000",
+        "10.1.2.3",
+        True,
+        [],
+        id="helo-literal-vs-comment-literal",
+    ),
+    pytest.param(
+        f"from [198.51.100.7] (unknown [192.0.2.9]) by mx.example.com; {DATE}",
+        "192.0.2.9",
+        True,
+        [],
+        id="comment-wins-both-documentation",
+    ),
+    pytest.param(
+        f"from [198.51.100.7] (helo=client.example.com) by mx.example.com; {DATE}",
+        "198.51.100.7",
+        True,
+        [],
+        id="comment-without-literal-helo-used",
+    ),
+    pytest.param(
+        f"from client.example.com (client.example.com [203.0.113.5]) by mx.example.com; {DATE}",
+        "203.0.113.5",
+        True,
+        [],
+        id="hostname-plus-comment-literal",
+    ),
+    pytest.param(
+        f"from [IPv6:2001:db8::1] (unknown [IPv6:2001:db8::2]) by mx.example.com; {DATE}",
+        "2001:db8::2",
+        True,
+        [],
+        id="ipv6-both-positions",
+    ),
+    pytest.param(
+        f"from [192.0.2.1] (unknown [IPv6:2001:db8::2]) by mx.example.com; {DATE}",
+        "2001:db8::2",
+        True,
+        [],
+        id="ipv4-helo-ipv6-comment",
+    ),
+    pytest.param(
+        f"from [IPv6:2001:db8::1] (unknown [8.8.4.4]) by mx.example.com; {DATE}",
+        "8.8.4.4",
+        False,
+        [],
+        id="ipv6-helo-ipv4-comment-reserved-from-comment",
+    ),
+    pytest.param(
+        f"from [8.8.8.8] (unknown [192.0.2.300]) by mx.example.com; {DATE}",
+        "8.8.8.8",
+        False,
+        ["invalid_ip_literal"],
+        id="invalid-comment-literal-falls-back-to-helo",
+    ),
+    pytest.param(
+        f"from [8.8.8.8] (unknown [IPv6:192.0.2.1]) by mx.example.com; {DATE}",
+        "8.8.8.8",
+        False,
+        ["invalid_ip_literal"],
+        id="bad-ipv6-tag-in-comment-falls-back",
+    ),
+    pytest.param(
+        f"from [999.1.1.1] (unknown [192.0.2.4]) by mx.example.com; {DATE}",
+        "192.0.2.4",
+        True,
+        ["invalid_ip_literal"],
+        id="invalid-helo-valid-comment",
+    ),
+    pytest.param(
+        f"from [8.8.8.8] (helo=x.example.com) (unknown [192.0.2.4]) (z [198.51.100.1]) "
+        f"by mx.example.com; {DATE}",
+        "192.0.2.4",
+        True,
+        [],
+        id="multiple-comments-first-literal",
+    ),
+    pytest.param(
+        f"from [8.8.8.8] (unknown [192.0.2.4] [198.51.100.1]) by mx.example.com; {DATE}",
+        "192.0.2.4",
+        True,
+        [],
+        id="multiple-addresses-in-one-comment",
+    ),
+    pytest.param(
+        f"from [8.8.8.8] (unknown [192.0.2.4] port 25 helo x) by mx.example.com; {DATE}",
+        "192.0.2.4",
+        True,
+        [],
+        id="comment-literal-with-trailing-text",
+    ),
+    pytest.param(
+        f"from [8.8.8.8] ({'x' * 7000}) by mx.example.com; {DATE}",
+        "8.8.8.8",
+        False,
+        [],
+        id="over-long-comment-no-literal",
+    ),
+    pytest.param(
+        f"from [8.8.8.8] (helo=[10.1.2.3]) by mx.example.com; {DATE}",
+        "8.8.8.8",
+        False,
+        [],
+        id="helo-labelled-comment-literal-not-tcp-info",
+    ),
+    pytest.param(
+        f"from h.example.com (helo=[10.1.2.3] [8.8.8.8]) by mx.example.com; {DATE}",
+        "8.8.8.8",
+        False,
+        [],
+        id="helo-labelled-then-tcp-info-same-comment",
+    ),
+    pytest.param(
+        f"from h.example.com (helo=[10.1.2.3]) (unknown [8.8.8.8]) by mx.example.com; {DATE}",
+        "8.8.8.8",
+        False,
+        [],
+        id="helo-labelled-comment-then-tcp-info-comment",
+    ),
+    pytest.param(
+        f"from h.example.com ([8.8.8.8] helo=[10.1.2.3]) by mx.example.com; {DATE}",
+        "8.8.8.8",
+        False,
+        [],
+        id="tcp-info-then-helo-labelled-same-comment",
+    ),
+    pytest.param(
+        f"from [8.8.8.8] (HELO=[10.1.2.3]) by mx.example.com; {DATE}",
+        "8.8.8.8",
+        False,
+        [],
+        id="helo-label-upper-case",
+    ),
+    pytest.param(
+        f"from [8.8.8.8] (ehlo=[10.1.2.3]) by mx.example.com; {DATE}",
+        "8.8.8.8",
+        False,
+        [],
+        id="ehlo-label",
+    ),
+    pytest.param(
+        f"from h.example.com (EHLO=[10.1.2.3] [8.8.8.8]) by mx.example.com; {DATE}",
+        "8.8.8.8",
+        False,
+        [],
+        id="ehlo-label-upper-case-then-tcp-info",
+    ),
+    pytest.param(
+        f"from [8.8.8.8] (helo=[bad]) by mx.example.com; {DATE}",
+        "8.8.8.8",
+        False,
+        ["invalid_ip_literal"],
+        id="helo-labelled-invalid-falls-back-to-value",
+    ),
+    pytest.param(
+        f"from h.example.com (helo=[bad] [192.0.2.4]) by mx.example.com; {DATE}",
+        "192.0.2.4",
+        True,
+        ["invalid_ip_literal"],
+        id="helo-labelled-invalid-then-tcp-info",
+    ),
+    pytest.param(
+        f"from h.example.com (helo=[10.1.2.3]) by mx.example.com; {DATE}",
+        "10.1.2.3",
+        True,
+        [],
+        id="helo-labelled-only-literal-used-as-fallback",
+    ),
+    pytest.param(
+        f"from [8.8.8.8] (helo=[10.1.2.3]) (unknown) by mx.example.com; {DATE}",
+        "8.8.8.8",
+        False,
+        [],
+        id="value-literal-before-helo-labelled-fallback",
+    ),
+    pytest.param(
+        f"from [8.8.8.8] ({'[x] ' * 1500}[192.0.2.4]) by mx.example.com; {DATE}",
+        "8.8.8.8",
+        False,
+        ["invalid_ip_literal"],
+        id="many-bad-literals-capped-helo-kept",
+    ),
+]
+
+
+@pytest.mark.parametrize(("value", "from_ip", "reserved", "warning_codes"), FROM_IP_SOURCE_CASES)
+def test_from_ip_prefers_tcp_info_comment(
+    value: str, from_ip: str, reserved: bool, warning_codes: list[str]
+):
+    h = hop(value)
+    assert h.parsed is True
+    assert (h.from_ip, h.from_ip_reserved) == (from_ip, reserved)
+    assert codes(h) == warning_codes
+
+
 def test_for_address_not_retained_in_fields():
     h = hop(f"from a.example.com by b.example.com for <secret@example.com>; {DATE}")
     for name in ("from_host", "by_host", "via", "with_protocol", "id"):
