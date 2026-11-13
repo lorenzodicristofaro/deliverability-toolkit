@@ -1089,7 +1089,8 @@ def test_panel_holds_no_connection_and_leaves_the_event_loop(
     real = rules_module.run_in_threadpool
 
     async def recording(func: Any, *args: Any, **kwargs: Any) -> Any:
-        in_transaction.append(func.__self__._db.in_transaction())
+        if func.__name__ == "test_pattern":  # the other hops are permission checks and rollbacks
+            in_transaction.append(func.__self__._db.in_transaction())
         return await real(func, *args, **kwargs)
 
     monkeypatch.setattr(rules_module, "run_in_threadpool", recording)

@@ -539,7 +539,7 @@ async def _body_form(
     request: Request, db: Session, cap: int
 ) -> tuple[dict[str, list[str]] | None, int, str | None]:
     """(form, status, error key) of the request body; the connection is released first."""
-    db.rollback()  # no pooled connection is held while the body is read
+    await run_in_threadpool(db.rollback)  # no pooled connection is held while the body is read
     try:
         body = await _read_capped(request, cap)
     except _BodyTooLarge:
@@ -562,14 +562,23 @@ async def _save(
     permission (and the row's visibility), so the body is read only for an allowed caller."""
     form, status, problem = await _body_form(request, db, MAX_SAVE_BYTES)
     if form is None:
-        return _form_page(
-            request, service, db, auth, scope, target, status_code=status, plain_error=problem
+        return await run_in_threadpool(
+            _form_page,
+            request,
+            service,
+            db,
+            auth,
+            scope,
+            target,
+            status_code=status,
+            plain_error=problem,
         )
     data, echo, problem = _save_data(form, scope, test=False)
     del form
     if problem is not None:
         values = None if problem == INVALID_CHARS_KEY else echo  # never echo a NUL
-        return _form_page(
+        return await run_in_threadpool(
+            _form_page,
             request,
             service,
             db,
@@ -582,12 +591,13 @@ async def _save(
         )
     try:
         if target is None:
-            service.create(scope, data)
+            await run_in_threadpool(service.create, scope, data)
         else:
             data.pop("check_key")  # the key is fixed once created
-            service.update(scope, target, data)
+            await run_in_threadpool(service.update, scope, target, data)
     except CustomCheckFieldInvalid as exc:
-        return _form_page(
+        return await run_in_threadpool(
+            _form_page,
             request,
             service,
             db,
@@ -599,7 +609,8 @@ async def _save(
             error=_field_error(exc),
         )
     except CheckKeyConflict as exc:
-        return _form_page(
+        return await run_in_threadpool(
+            _form_page,
             request,
             service,
             db,
@@ -624,7 +635,7 @@ async def checks_create(
         return _not_found(request)
     service = _service(db, auth)
     try:  # permission first: a denied caller never has its body read
-        service.check_manage(parsed)
+        await run_in_threadpool(service.check_manage, parsed)
     except CustomChecksAdminError as exc:
         return _failure(request, exc)
     return await _save(request, service, db, auth, parsed, None)
@@ -647,26 +658,28 @@ async def checks_test(
         return _not_found(request)
     service = _service(db, auth)
     try:  # `rules.read` on the tenant first: a denied caller never has its body read
-        service.check_test()
+        await run_in_threadpool(service.check_test)
     except CustomChecksAdminError as exc:
         return _failure(request, exc)
 
-    def page(**extra: Any) -> Response:
-        return _form_page(request, service, db, auth, parsed, target, **extra)
+    async def page(**extra: Any) -> Response:
+        return await run_in_threadpool(
+            _form_page, request, service, db, auth, parsed, target, **extra
+        )
 
     form, status, problem = await _body_form(request, db, MAX_SAVE_BYTES)
     if form is None:
-        return page(status_code=status, plain_error=problem)
+        return await page(status_code=status, plain_error=problem)
     data, echo, problem = _save_data(form, parsed, test=True)
     del form
     if problem is not None:
-        return page(
+        return await page(
             values=None if problem == INVALID_CHARS_KEY else echo,
             status_code=422,
             plain_error=problem,
         )
     if not echo["domain_id"].strip():
-        return page(values=echo, status_code=422, plain_error=NO_DOMAIN_KEY)
+        return await page(values=echo, status_code=422, plain_error=NO_DOMAIN_KEY)
     domain = echo["domain_id"].strip()
     # The service wants an int id; anything else is passed on as text for it to refuse (404).
     data["domain_id"] = parse_id(domain) or domain
@@ -680,7 +693,7 @@ async def checks_test(
     try:
         dry = await run_in_threadpool(prepare)
     except CustomCheckFieldInvalid as exc:
-        return page(values=echo, status_code=422, error=_field_error(exc))
+        return await page(values=echo, status_code=422, error=_field_error(exc))
     except CustomChecksAdminError as exc:
         return _failure(request, exc)
     ctx = CheckContext(
@@ -689,7 +702,7 @@ async def checks_test(
     registry = CheckRegistry()
     registry.register(dry.check)
     result = await run_check(dry.check.id, dry.domain_name, ctx, registry=registry)
-    return page(values=echo, result=result)
+    return await page(values=echo, result=result)
 
 
 @router.post("/{custom_check_id}/edit", include_in_schema=False)
@@ -706,7 +719,7 @@ async def checks_update(
     service = _service(db, auth)
     target = parse_id(custom_check_id)
     try:  # permission and visibility of the row first
-        service.check_write(parsed, target)
+        await run_in_threadpool(service.check_write, parsed, target)
     except CustomChecksAdminError as exc:
         return _failure(request, exc)
     return await _save(request, service, db, auth, parsed, target)
@@ -729,19 +742,25 @@ async def checks_toggle(
     service = _service(db, auth)
     target = parse_id(custom_check_id)
     try:
-        service.check_write(parsed, target)
+        await run_in_threadpool(service.check_write, parsed, target)
     except CustomChecksAdminError as exc:
         return _failure(request, exc)
     form, status, problem = await _body_form(request, db, _FORM_OVERHEAD_BYTES)
     if form is None:
-        return _list_page(request, service, parsed, status_code=status, error=problem)
+        return await run_in_threadpool(
+            _list_page, request, service, parsed, status_code=status, error=problem
+        )
     enabled = _single(form, "enabled")
     if enabled not in ("0", "1"):
-        return _list_page(request, service, parsed, status_code=422, error=INVALID_FORM_KEY)
+        return await run_in_threadpool(
+            _list_page, request, service, parsed, status_code=422, error=INVALID_FORM_KEY
+        )
     try:
-        service.update(parsed, target, {"enabled": enabled == "1"})
+        await run_in_threadpool(service.update, parsed, target, {"enabled": enabled == "1"})
     except CustomCheckFieldInvalid as exc:
-        return _list_page(request, service, parsed, status_code=422, error=exc.key)
+        return await run_in_threadpool(
+            _list_page, request, service, parsed, status_code=422, error=exc.key
+        )
     except CustomChecksAdminError as exc:
         return _failure(request, exc)
     return _redirect(parsed, "enabled" if enabled == "1" else "disabled")
@@ -761,9 +780,9 @@ async def checks_delete(
     service = _service(db, auth)
     target = parse_id(custom_check_id)
     try:
-        service.check_write(parsed, target)
-        db.rollback()
-        service.delete(parsed, target)
+        await run_in_threadpool(service.check_write, parsed, target)
+        await run_in_threadpool(db.rollback)
+        await run_in_threadpool(service.delete, parsed, target)
     except CustomChecksAdminError as exc:
         return _failure(request, exc)
     return _redirect(parsed, "deleted")
