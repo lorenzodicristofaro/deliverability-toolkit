@@ -25,6 +25,8 @@ from tests.conftest import (
     SEEDLESS_MODULES,
     needs_postgres,
     pytest_collection_modifyitems,
+    refusal_reason,
+    worker_database_url,
 )
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -109,6 +111,44 @@ def test_needs_postgres_matches_every_postgresql_parameter(request: pytest.Fixtu
         != ("postgresql" in getattr(getattr(item, "callspec", None), "params", {}).values())
     ]
     assert mismatched == []
+
+
+# --- pytest-xdist: one PostgreSQL database per worker ------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("url", "worker", "expected"),
+    [
+        ("postgresql://u:p@h:5432/ci_test", None, "postgresql://u:p@h:5432/ci_test"),
+        ("postgresql://u:p@h:5432/ci_test", "", "postgresql://u:p@h:5432/ci_test"),
+        ("postgresql://u:p@h:5432/ci_test", "gw0", "postgresql://u:p@h:5432/ci_test_gw0"),
+        (
+            "postgresql://u:p@h/x_test?sslmode=disable",
+            "gw12",
+            "postgresql://u:p@h/x_test_gw12?sslmode=disable",
+        ),
+        (
+            "postgresql+psycopg://u:p%40w@h/ci_test",
+            "gw3",
+            "postgresql+psycopg://u:p%40w@h/ci_test_gw3",
+        ),
+    ],
+    ids=["no-xdist", "empty-worker", "gw0", "query-kept", "password-and-driver-kept"],
+)
+def test_worker_database_url(url: str, worker: str | None, expected: str) -> None:
+    result = worker_database_url(url, worker)
+    assert result == expected
+    assert refusal_reason(result, None) is None  # the worker name keeps "test"
+
+
+@pytest.mark.parametrize(
+    "worker",
+    ["master", "gw", "gw-1", "gw0; DROP DATABASE ci_test", 'gw0"', "GW0", "gw0\n"],
+    ids=["master", "no-number", "negative", "injection", "quote", "upper", "newline"],
+)
+def test_worker_database_url_refuses_a_malformed_worker_name(worker: str) -> None:
+    with pytest.raises(ValueError, match="PYTEST_XDIST_WORKER"):
+        worker_database_url("postgresql://u:p@h/ci_test", worker)
 
 
 # --- seedless modules ----------------------------------------------------------------------------

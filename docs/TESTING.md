@@ -14,8 +14,8 @@ two jobs on separate runners, selected by the `--db-backend` option (`tests/conf
 
 | Job | Command | Runs | Database |
 |-----|---------|------|----------|
-| `test-sqlite` | `uv run pytest --db-backend=sqlite` | every test except the PostgreSQL params: non-DB tests and the SQLite params | none |
-| `test-postgres` | `uv run pytest --db-backend=postgresql` | only the PostgreSQL params | `postgres:17` service |
+| `test-sqlite` | `uv run pytest -n auto --db-backend=sqlite` (two steps, see below) | every test except the PostgreSQL params: non-DB tests and the SQLite params | none |
+| `test-postgres` | `uv run pytest -n auto --db-backend=postgresql` | only the PostgreSQL params | `postgres:17` service |
 
 A test is a PostgreSQL param if it carries the skip marker with `PG_SKIP_REASON`, that is, exactly
 the tests that would be skipped without PostgreSQL. The two sides are disjoint and together are the
@@ -31,7 +31,8 @@ TEST_DATABASE_URL=postgresql://USER:PASSWORD@localhost:5432/ci_test uv run pytes
 Add `--db-backend=postgresql` for that side only. `TEST_DATABASE_URL` must point to a database
 with "test" in its name and different from `DATABASE_URL`: the suite drops its tables, and pytest
 refuses to start otherwise. Only one suite may use that database at a time, so do not run two
-PostgreSQL runs in parallel against it.
+PostgreSQL runs in parallel against it (an xdist run counts as one suite: its workers use separate
+databases).
 
 Changes that touch only root `*.md` files or the docs listed under `paths-ignore` in `ci.yml` skip
 that workflow entirely. A skipped workflow reports no result: a required check on it stays Pending
@@ -45,6 +46,43 @@ required check. `.github/codeql/codeql-config.yml` sets `paths-ignore: tests` be
 intentional ReDoS fixtures and HTML/URL assertions that CodeQL reports as high alerts, and the default
 setup cannot exclude paths. The maintainer must switch CodeQL from Default to Advanced setup in the
 repository settings, otherwise the upload is rejected.
+
+## Parallel runs (pytest-xdist, M7-00)
+
+Both test jobs run with `-n auto`: pytest-xdist starts one worker process per CPU available to the
+job (without psutil, `auto` is the CPU count the process may use, the same number `nproc` prints in
+the job log). Plain `uv run pytest` without `-n` still runs in a single process, unchanged.
+
+- SQLite: every worker has its own `tmp_path` base directory, so the migrated template and the
+  per-test database copies are per worker; migrations run once per worker.
+- PostgreSQL: `pytest_sessionstart` in `tests/conftest.py` gives each worker its own database on
+  the same server, `<name>_gwN` (for example `ci_test_gw0`), created on first use and left empty
+  at the end. It vets `TEST_DATABASE_URL` first (`refusal_reason`), derives the worker name from
+  `PYTEST_XDIST_WORKER` (only `gw` plus digits is accepted), and rewrites `TEST_DATABASE_URL` for
+  that worker process only, so every fixture, the tenancy world and spawned migration processes
+  use the worker database. Without xdist the database named in `TEST_DATABASE_URL` is used. The
+  role in `TEST_DATABASE_URL` needs the CREATEDB privilege (the CI service user and the
+  `postgres` image's default user have it).
+- Workers share no database, file or schema; the per-test isolation inside a worker is the same as
+  in a single-process run.
+
+pytest-xdist requires every worker to collect the same test ids. `tests/core/test_csrf.py` and
+`tests/core/test_security.py` build parameter ids from tokens generated at import time, which differ
+in every process, so the `test-sqlite` job runs them in a second, single-process step and the
+first step ignores them. Together the two steps run exactly the `--db-backend=sqlite` selection.
+The PostgreSQL side has no such parameters. A new test with process-dependent ids makes the xdist
+step fail with "Different tests were collected", never skip silently.
+
+Local runs (one PostgreSQL suite at a time against the throwaway container; the worker databases
+are `ci_test_gw0`, `ci_test_gw1`, ...):
+
+```
+TEST_DATABASE_URL=postgresql://USER:PASSWORD@localhost:5432/ci_test uv run pytest -q --tb=short -n auto --db-backend=postgresql
+uv run pytest -q --tb=short -n auto --db-backend=sqlite --ignore=tests/core/test_csrf.py --ignore=tests/core/test_security.py
+uv run pytest -q --tb=short --db-backend=sqlite tests/core/test_csrf.py tests/core/test_security.py
+```
+
+Use `-n 4` (or any number) to pick the worker count; `-n 0` disables xdist.
 
 ## Seed sync at app startup
 
