@@ -20,4 +20,5 @@ Acceptance criteria:
 - ARCHITECTURE.md section 9 rewritten as the decision record (what is blocked, how pinning works, limits table with defaults, the test seam, "SMTP: separate ticket, same policy").
 Unverified external facts: none to be asserted about vendors. The default limit values are project choices, not vendor facts; state them as such. Library behaviour (SNI/pinning API of the chosen HTTP library) must be checked against its current documentation by the coder; if the library cannot pin without a custom transport, say so in the PR.
 New i18n keys: none (error enum only; callers localise)
-Status: todo
+Status: done
+Outcome: merged into dev (QA APPROVE round 2; commits 021b3ff + 7fc980f). Scope extended with compose.yaml, pyproject.toml and uv.lock (compose parity test; httpx2 promoted from dev to runtime deps). Round 1 CHANGES REQUESTED (compose parity) fixed. Cross-origin 307/308 POST is refused; a percent-encoded host is treated as malformed.

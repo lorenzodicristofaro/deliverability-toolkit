@@ -262,7 +262,7 @@ Decided 2026-11-13 (maintainer):
   - [x] F-01-02 hop view in API JSON, web and CLI, i18n en+it, permission tests (opus; depends F-01-01; docs/tickets/F-01-02-hop-view-surfaces.md)
 
 ## M7 — Monitoring
-- [ ] Guarded outbound client (SSRF protection) + tests
+- [x] Guarded outbound client (SSRF protection) + tests
 - [ ] Custom check kind http_fetch via guarded client (SPEC §5 still lists HTTP custom checks and http_fetch is deferred to M7: maintainer decision 2026-11-11, leave the wording and review it when M7 starts)
 - [ ] DNSBL/URIBL engine with refusal detection, `dnsbl.yaml` seed
 - [ ] Scheduler, history, DNS snapshots + diff, trend charts
@@ -270,7 +270,8 @@ Decided 2026-11-13 (maintainer):
 - Accept: scheduled runs respect rate limits; changes produce alerts exactly once.
 Tickets (docs/tickets/M7-*.md, split 2026-11-13; model in brackets):
 - [ ] M7-00 CI test speed 3: pytest-xdist for both test jobs, target at most 50% duration, identical test ids (opus; serialized after M7-01; ci.yml push by maintainer)
-- [ ] M7-01 guarded outbound HTTP client + ARCHITECTURE decision record (opus)
+- [x] M7-01 guarded outbound HTTP client + ARCHITECTURE decision record (opus)
+- [ ] Follow-up (low): tests/parsers/test_message.py::test_fold_bomb_is_bounded_and_fast failed once in two local PostgreSQL full runs under load (timing test, flaky candidate)
 - [ ] M7-02 custom check kind http_fetch via guarded client (opus; depends M7-01)
 - [ ] M7-03 DNSBL/URIBL engine, refusal detection (opus)
 - [ ] M7-04 seeds/dnsbl.yaml + docs/DNSBL.md, unverified entries to the maintainer (sonnet; depends M7-03)
