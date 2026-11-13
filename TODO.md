@@ -277,7 +277,8 @@ Tickets (docs/tickets/M7-*.md, split 2026-11-13; model in brackets):
 - [x] M7-01 guarded outbound HTTP client + ARCHITECTURE decision record (opus)
 - [ ] Follow-up (low): tests/parsers/test_message.py::test_fold_bomb_is_bounded_and_fast failed once in two local PostgreSQL full runs under load (timing test, flaky candidate)
 - [ ] M7-02 custom check kind http_fetch via guarded client (opus; depends M7-01)
-- [ ] M7-03 DNSBL/URIBL engine, refusal detection (opus)
+- [x] M7-03 DNSBL/URIBL engine, refusal detection (opus)
+  - [ ] Follow-up (low): move the private loader helpers (_StrictLoader, _list, _text, ...) imported by app/checks/dnsbl_schema.py from app/esp/profile.py and app/dns/knowledge.py into a shared public module
 - [ ] M7-04 seeds/dnsbl.yaml + docs/DNSBL.md, unverified entries to the maintainer (sonnet; depends M7-03)
 - [ ] M7-05 dnsbl check registration, API, CLI, web (sonnet; depends M7-03, M7-04)
 - [ ] M7-06 monitor_targets model, migration, repository (sonnet)

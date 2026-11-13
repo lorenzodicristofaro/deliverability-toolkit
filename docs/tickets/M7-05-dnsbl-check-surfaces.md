@@ -12,5 +12,6 @@ Acceptance criteria:
 - Findings carry stable codes DNSBL_LISTED, DNSBL_LIST_ERROR, DNSBL_LIST_REFUSED, DNSBL_LIST_UNVERIFIED with remediation text from i18n; list name and return code appear as params, HTML-escaped by templates.
 - Permission: running it requires the existing `check.run` (tenant domains) or `dns.tools` (tenant-less), same as other checks; tenancy and permission tests copied per role including client viewer on unassigned domain -> 403/404 as existing checks do.
 - CLI prints findings with control characters escaped (existing helper); no network in tests (fake DNS backend).
+- `build_query_name` (app/checks/dnsbl_engine.py) must be made private, or apply the address policy (non-public check) inside itself, so no caller can skip the non-public IP check. Add a test that no public path builds a query name for a non-public IP.
 New i18n keys: DNSBL_LISTED, DNSBL_LIST_ERROR, DNSBL_LIST_REFUSED, DNSBL_LIST_UNVERIFIED (.title/.detail/.remediation) plus the check's display name key (en + it)
 Status: todo

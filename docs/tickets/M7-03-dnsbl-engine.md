@@ -15,4 +15,11 @@ Acceptance criteria:
 - Results carry evidence bounded in size; DNS failures are never swallowed.
 - Tests table-driven with a fake DNS backend, no network: each rcode/answer shape above, IPv6 nibble form, 127.255.255.x refusal, mixed answers, unverified list, blocked-resolver short-circuit, malformed schema files, hostile input names.
 New i18n keys: none (reason codes only; localised in M7-05)
-Status: todo
+Status: done (merged into dev; commits 6389d34 + 3ebadfb; QA APPROVE round 2)
+Outcome:
+- Extra outcomes beyond the spec: `info` and `not_applicable`.
+- Non-public target IPs -> `not_applicable` / `non_public_address`, no query sent (round 1 fix, privacy).
+- Name errors distinguished: `invalid_name` vs `name_too_long`.
+- Failing `acquire` hook -> `error` / `rate_limit_error`, without hanging.
+- `address_policy` is a test-only seam.
+- Unverified lists are not queried unless the include-unverified flag is set.
