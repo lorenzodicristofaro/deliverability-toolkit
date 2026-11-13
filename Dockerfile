@@ -1,14 +1,15 @@
-# syntax=docker/dockerfile:1
+# syntax=docker/dockerfile:1@sha256:4edf897a3ffa55b89f906fc8cc78afdb3f1834cc9c7083565e611a8a7d5fe99e
 # Single multi-arch image (linux/amd64 + linux/arm64). No arch-specific instructions:
 # the base images below are multi-arch manifests, buildx picks the right variant.
 
-# Tag verified 2026-11-04 with `docker buildx imagetools inspect` (exists, amd64 + arm64).
-FROM python:3.12-slim-trixie
+# Pinned by tag AND index digest (multi-arch image index, amd64 + arm64), read 2026-11-13 with
+# `docker buildx imagetools inspect python:3.12-slim-trixie`. Refresh rule: docs/DOCKER-PINS.md.
+FROM python:3.12-slim-trixie@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b
 
 # uv install pattern and version pin: docs.astral.sh/uv/guides/integration/docker/
-# (0.13.7 is the version shown there and the one used in development). Tag verified
-# 2026-11-04 with `docker buildx imagetools inspect` (exists, amd64 + arm64).
-COPY --from=ghcr.io/astral-sh/uv:0.13.7 /uv /uvx /bin/
+# (0.13.7 is the version shown there and the one used in development). Index digest read
+# 2026-11-13 with `docker buildx imagetools inspect ghcr.io/astral-sh/uv:0.13.7`.
+COPY --from=ghcr.io/astral-sh/uv:0.13.7@sha256:96f40d3904aad8d0bd010539001d36c8e2188b981e1334471a90c4a1d93bb490 /uv /uvx /bin/
 
 ENV UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
