@@ -53,6 +53,9 @@ def _reset_registry(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
 
     monkeypatch.setattr(cli_check, "resolver_factory", boom)
     monkeypatch.setattr(checks_service, "_default_registry", None)
+    # No database here: an instance with nothing enabled (M7-05c; an unreadable enablement is an
+    # error, covered in tests/api/test_dnsbl_enablement.py).
+    monkeypatch.setattr(cli_check, "dnsbl_enablement_loader", lambda: frozenset())
     yield
 
 

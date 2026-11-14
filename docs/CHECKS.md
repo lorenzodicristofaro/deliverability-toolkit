@@ -306,8 +306,9 @@ data `seeds/dnsbl.yaml` (`docs/DNSBL.md`). Registered in `load_builtin_checks`, 
   on every run path: the domain routes (`dnsbl` by id, in `ids` or in `all`), the free route and
   the CLI (`app.services.checks.with_dnsbl_enabled`). A disabled list is `not_applicable` /
   `list_disabled` and no DNS query is sent. The CLI reads the configured database; if it cannot
-  (no configuration, no schema, driver error) it prints a localized notice on stderr and runs the
-  default-enabled lists only, never more.
+  (no configuration, no schema, driver error) it prints a localized notice on stderr and the
+  `dnsbl` result is `error` with `DNSBL_ENABLEMENT_UNAVAILABLE` (reason `enablement_unavailable`,
+  no query sent, exit 2); there is no fallback list set. Other checks of the run are unaffected.
 - **Permissions.** Same as every check: `check.run` on a tenant domain, `dns.tools` on the free
   route; the CLI has none.
 

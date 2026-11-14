@@ -66,9 +66,10 @@ def ip_dnsbl_target(name: str, ids: Sequence[str]) -> str | None:
     return parsed.value if parsed.kind == "ip" else None
 
 
-def with_dnsbl_enabled(registry: CheckRegistry, enabled_ids: Iterable[str]) -> CheckRegistry:
+def with_dnsbl_enabled(registry: CheckRegistry, enabled_ids: Iterable[str] | None) -> CheckRegistry:
     """`registry` with its DNSBL check running `enabled_ids`, the instance's enabled lists read
-    for this request (M7-05c). The registered check's lists are kept. A registry without a
+    for this request (M7-05c); None (could not be read) makes the check `error`. The registered
+    check's lists are kept. A registry without a
     `DnsblCheck` under that id is returned unchanged."""
     try:
         current = registry.get(DnsblCheck.id)

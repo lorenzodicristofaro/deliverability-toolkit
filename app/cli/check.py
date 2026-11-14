@@ -4,7 +4,8 @@ Trust boundary: shell access to the instance. No TenantContext, no permission ch
 domain is never loaded. The only database read is the instance's DNSBL list enablement (M7-05c),
 when `dnsbl` runs: the configured database (DATABASE_URL) is opened for that one query. If it
 cannot be read (no configuration, no schema, driver error), a localized notice goes to stderr and
-only the lists enabled by default run, so a restrictive list is never queried by accident.
+the `dnsbl` result is `error` (`DNSBL_ENABLEMENT_UNAVAILABLE`, no query, exit 2); the other checks
+of the run are unaffected.
 The same runner as the API (``app.services.checks``) produces the results; ``--format json``
 prints exactly ``CheckResult.model_dump_json()`` (one object for one check id, an array in
 request order otherwise).
@@ -186,7 +187,7 @@ def check_command(
         enabled = dnsbl_enablement_loader()
         if enabled is None:
             typer.echo(t(DNSBL_ENABLEMENT_NOTICE_KEY, lang), err=True)
-        registry = with_dnsbl_enabled(registry, enabled or frozenset())
+        registry = with_dnsbl_enabled(registry, enabled)
     ctx = CheckContext(resolver=resolver)
     try:
         results = asyncio.run(run_checks(ids, domain, ctx, registry=registry, allow_ip=True))

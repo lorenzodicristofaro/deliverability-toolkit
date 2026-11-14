@@ -611,16 +611,22 @@ def test_cli_reads_the_instance_enablement(
     assert t("cli.check.notice.dnsbl_enablement_unavailable", "en") not in result.output
 
 
-def test_cli_without_readable_database_runs_default_lists_only(
+def test_cli_without_readable_database_is_an_error(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    """No fallback: the dnsbl result is `error` (enablement_unavailable), no query, exit 2."""
     use_lists(monkeypatch, opt_in("ip-both"))
     monkeypatch.setenv("SECRET_KEY", KEY)
     monkeypatch.setenv("ENCRYPTION_KEY", KEY)
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path / 'empty.db'}")  # no schema
     result, resolver = _cli(monkeypatch, "8.8.8.8")
-    assert result.exit_code == 0
+    assert result.exit_code == 2
     assert resolver.questions == []
+    body = json.loads(result.stdout)
+    assert body["status"] == "error"
+    assert _codes(body) == ["DNSBL_ENABLEMENT_UNAVAILABLE"]
+    assert body["findings"][0]["params"]["reason"] == "enablement_unavailable"
+    assert body["data"] == {"lists": [], "reason": "enablement_unavailable"}
     assert t("cli.check.notice.dnsbl_enablement_unavailable", "en") in result.stderr
     assert t("cli.check.notice.dnsbl_enablement_unavailable", "en") not in result.stdout
 
@@ -632,10 +638,36 @@ def test_cli_loader_seam(monkeypatch: pytest.MonkeyPatch, loaded: frozenset[str]
     result, resolver = _cli(monkeypatch, "8.8.8.8")
     queried = bool(loaded)
     assert [q.name for q in resolver.questions] == (["8.8.8.8.bl.example.com"] if queried else [])
-    assert result.exit_code == (1 if queried else 0)
+    expected = {None: (2, "error", ["DNSBL_ENABLEMENT_UNAVAILABLE"])}.get(
+        loaded,
+        (1, "warn", ["DNSBL_LISTED"]) if queried else (0, "info", ["DNSBL_NO_LISTS_APPLICABLE"]),
+    )
+    body = json.loads(result.stdout)
+    assert (result.exit_code, body["status"], _codes(body)) == expected
     assert (t("cli.check.notice.dnsbl_enablement_unavailable", "en") in result.stderr) is (
         loaded is None
     )
+
+
+def test_cli_unreadable_enablement_leaves_other_checks_alone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(cli_check, "dnsbl_enablement_loader", lambda: None)
+    resolver = parse_zones(
+        {
+            "zones": {
+                "default": [
+                    {"name": "example.com", "type": "TXT", "ttl": 60, "rdata": ["v=spf1 -all"]}
+                ]
+            }
+        }
+    ).resolver()
+    monkeypatch.setattr(cli_check, "resolver_factory", lambda: resolver)
+    args = ["check", "example.com", "--only", "spf,dnsbl", "--format", "json"]
+    result = runner.invoke(cli_app, args)
+    statuses = {r["check_id"]: r["status"] for r in json.loads(result.stdout)}
+    assert statuses["dnsbl"] == "error" and statuses["spf"] != "error"
+    assert result.exit_code == 2
 
 
 def test_cli_does_not_read_the_database_without_dnsbl(monkeypatch: pytest.MonkeyPatch) -> None:
