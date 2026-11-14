@@ -11,10 +11,11 @@ from __future__ import annotations
 
 import ast
 import asyncio
+import dataclasses
 import json
 import re
 from collections.abc import Callable, Iterator, Sequence
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -33,7 +34,10 @@ import app.services.checks as service_mod
 from app.api.v1 import checks as api_checks
 from app.api.v1.domain_esps import esp_profiles
 from app.checks.dkim_selectors import list_selectors
+from app.checks.dnsbl import DnsblCheck
+from app.checks.dnsbl_schema import read_dnsbl_lists
 from app.checks.models import CODE_RE, CheckContext, CheckResult
+from app.checks.registry import load_builtin_checks
 from app.cli import check as cli_check
 from app.cli.main import app as cli_app
 from app.core import i18n
@@ -42,6 +46,7 @@ from app.core.db import create_db_engine, create_session_factory
 from app.dns.types import DnsQuestion, DnsResult, ResultState
 from app.main import create_app
 from app.models import Membership
+from app.repositories import DnsblEnablementRepository
 from app.services.checks import default_registry, run_check, run_checks
 from tests.api.test_domains import KEY, World, _seed, call
 from tests.dns.conftest import _no_network_in_dns_tests  # noqa: F401
@@ -52,6 +57,7 @@ from tests.web.test_checks_stream import parse as parse_sse
 D = "assigned.example"
 CLOCK_NOW = datetime(2026, 1, 1, tzinfo=UTC)
 ZONES_DIR = Path(__file__).parent.parent / "fixtures" / "zones"
+DNSBL_FIXTURE = Path(__file__).parent / "fixtures" / "dnsbl_test_lists.yaml"
 runner = CliRunner()
 Zones = dict[str, list[dict[str, Any]]]
 HTML = {"Accept": "text/html"}
@@ -460,21 +466,37 @@ def test_failed_lookup_is_error_on_every_surface(
         assert json.loads(text)["status"] == "error", (check_id, name, rtype)
 
 
+def _enable_dnsbl_test_list(rig: Rig, monkeypatch: pytest.MonkeyPatch) -> str:
+    """An opt-in, verified domain list (test data, not a shipped list) enabled on every surface
+    (M7-05c): in the registry, because the service surface reads no database, and in the instance
+    table, which the API routes and the CLI read per request. Returns its query name for D."""
+    lst = dataclasses.replace(
+        {x.id: x for x in read_dnsbl_lists(DNSBL_FIXTURE, date(2026, 11, 13))}["dom"],
+        default_enabled=False,
+    )
+    registry = load_builtin_checks().replacing(DnsblCheck((lst,), enabled_ids={lst.id}))
+    monkeypatch.setattr(service_mod, "_default_registry", registry)
+    DnsblEnablementRepository(rig.world.db).enable(
+        lst.id, actor=None, policy_acknowledged=True, unverified_confirmed=False, now=CLOCK_NOW
+    )
+    rig.world.db.commit()
+    return f"{D}.{lst.zone}"
+
+
 @pytest.mark.parametrize("state", ["servfail", "timeout"])
 def test_every_registered_check_errors_on_every_surface(
     rig: Rig, monkeypatch: pytest.MonkeyPatch, state: str
 ) -> None:
     make = lambda: Scripted(POINTS_ZONE, everywhere=state)  # noqa: E731
-    # `dnsbl` (M7-05) sends no query while every shipped list is disabled by default, so a DNS
-    # failure cannot reach it: it reports `info` ("no list was queried"), see test_dnsbl_check.py.
+    dnsbl_query = _enable_dnsbl_test_list(rig, monkeypatch)
     for check_id in default_registry().all_ids():
         text, code = all_surfaces(rig, monkeypatch, make, [check_id], mode="single")
-        expected = "info" if check_id == "dnsbl" else "error"
-        assert json.loads(text)["status"] == expected, check_id
-        assert code == (0 if check_id == "dnsbl" else 2)
+        assert json.loads(text)["status"] == "error", check_id
+        assert code == 2
+    assert dnsbl_query in {q.name for q in rig.queries}  # the enabled list really was queried
     text, code = all_surfaces(rig, monkeypatch, make, [], mode="all")
     statuses = {d["check_id"]: d["status"] for d in json.loads(text)}
-    assert statuses.pop("dnsbl") == "info"
+    assert set(statuses) == set(REGISTERED)
     assert set(statuses.values()) == {"error"} and code == 2
 
 

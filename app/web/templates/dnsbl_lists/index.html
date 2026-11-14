@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block title %}{{ t("web.dnsbl_lists.title") }} · {{ app_name }}{% endblock %}
+{% block content %}
+<h1>{{ t("web.dnsbl_lists.title") }}</h1>
+<p>{{ t("web.dnsbl_lists.intro") }}</p>
+{% if flash %}<p class="dns-state dns-state-ok" role="status" data-testid="dnsbl-flash">{{ t(flash) }}</p>{% endif %}
+{% if error %}<p class="form-error" role="alert" data-testid="dnsbl-error">{{ t(error) }}</p>{% endif %}
+<table data-testid="dnsbl-lists">
+  <thead><tr>
+    <th scope="col">{{ t("web.dnsbl_lists.col.list") }}</th>
+    <th scope="col">{{ t("web.dnsbl_lists.col.verification") }}</th>
+    <th scope="col">{{ t("web.dnsbl_lists.col.policy") }}</th>
+    <th scope="col">{{ t("web.dnsbl_lists.col.enabled") }}</th>
+    <th scope="col">{{ t("web.dnsbl_lists.col.actions") }}</th>
+  </tr></thead>
+  <tbody>
+  {% for v in views %}
+    {% set l = v.entry %}
+    <tr data-list="{{ l.id }}">
+      <td class="dns-wrap">
+        <strong>{{ l.name|visible }}</strong><br>
+        <code>{{ l.id|visible }}</code><br>
+        {{ t("web.dnsbl_lists.zone") }}: <code>{{ l.zone|visible }}</code><br>
+        {{ t("web.dnsbl_lists.kind.ip") if l.kind == "ip" else t("web.dnsbl_lists.kind.domain") }}
+      </td>
+      <td class="dns-wrap">
+        {% if l.verified %}<span data-testid="badge-verified">{{ t("web.dnsbl_lists.badge.verified") }}</span>
+        {% else %}<strong data-testid="badge-unverified">{{ t("web.dnsbl_lists.badge.unverified") }}</strong>
+        {% if l.unverified_fields %}<br>{{ t("web.dnsbl_lists.unverified_fields") }}: {% for f in l.unverified_fields|sort %}<code>{{ f|visible }}</code>{% if not loop.last %}, {% endif %}{% endfor %}{% endif %}
+        {% endif %}
+        <br>{{ t("web.dnsbl_lists.verified_on") }}: {{ l.verified_on.isoformat() }}
+        <br>{{ t("web.dnsbl_lists.sources") }}: {% for s in l.sources %}<code>{{ s|visible }}</code>{% if not loop.last %}, {% endif %}{% endfor %}
+      </td>
+      <td class="dns-wrap">
+        {% if l.usage_policy %}<span data-testid="dnsbl-policy">{{ l.usage_policy|visible }}</span>
+        {% else %}<em data-testid="dnsbl-no-policy">{{ t("web.dnsbl_lists.no_policy") }}</em>{% endif %}
+      </td>
+      <td>
+        {% if l.default_enabled %}<span data-testid="dnsbl-state">{{ t("web.dnsbl_lists.enabled.default") }}</span>
+        {% elif v.enabled %}<span data-testid="dnsbl-state">{{ t("web.dnsbl_lists.enabled.yes") }}</span>
+        {% else %}<span data-testid="dnsbl-state">{{ t("web.dnsbl_lists.enabled.no") }}</span>{% endif %}
+        {% if v.record %}<br><small>{{ t("web.dnsbl_lists.enabled_at", at=v.record.enabled_at.isoformat()) }}</small>{% endif %}
+      </td>
+      <td>
+        {% if not l.default_enabled %}
+        {% if v.enabled %}
+        <form class="inline" method="post" action="/dnsbl-lists/{{ l.id }}/disable">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button type="submit" data-testid="dnsbl-disable">{{ t("web.dnsbl_lists.action.disable") }}</button>
+        </form>
+        {% else %}
+        <form method="post" action="/dnsbl-lists/{{ l.id }}/enable">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <label><input type="checkbox" name="policy_acknowledged" value="1" required> {{ t("web.dnsbl_lists.ack.policy") }}</label>
+          {% if not l.verified %}<br><label><input type="checkbox" name="unverified_confirmed" value="1" required data-testid="dnsbl-confirm-unverified"> {{ t("web.dnsbl_lists.ack.unverified") }}</label>{% endif %}
+          <br><button type="submit" data-testid="dnsbl-enable">{{ t("web.dnsbl_lists.action.enable") }}</button>
+        </form>
+        {% endif %}
+        {% endif %}
+      </td>
+    </tr>
+  {% else %}
+    <tr><td colspan="5" class="empty-state">{{ t("web.dnsbl_lists.empty") }}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

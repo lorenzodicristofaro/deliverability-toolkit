@@ -1,0 +1,6 @@
+{% extends "base.html" %}
+{% block title %}{{ t("web.dnsbl_lists.denied") }} · {{ app_name }}{% endblock %}
+{% block content %}
+<h1 data-testid="forbidden">{{ t("web.dnsbl_lists.denied") }}</h1>
+<p><a href="/">{{ t("ui.nav.home") }}</a></p>
+{% endblock %}

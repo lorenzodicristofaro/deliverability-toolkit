@@ -437,6 +437,7 @@ _EXTRA_ID_COLUMNS = {"created_by"}
 # `*_id` columns that are not row ids, with the reason (keys are (table, column)).
 _TEXT_ID_COLUMNS = {
     ("domain_esps", "esp_id"): "ESP profile slug; profiles live in YAML, not in a table",
+    ("dnsbl_list_enablements", "list_id"): "DNSBL list slug; lists live in YAML, not in a table",
 }
 
 
@@ -483,6 +484,7 @@ def test_every_id_column_of_the_migrated_schema_is_integer(world: World) -> None
 NON_NUMERIC_PATH_PARAMS = {
     "check_id": "name of a registered check ('spf', 'all'), never a row",
     "esp_id": "ESP profile slug ('example-esp'), never a row",
+    "list_id": "DNSBL list slug of seeds/dnsbl.yaml ('spamcop-bl'), never a row",
 }
 # The functions that apply MAX_ID to text. `_domain_id` delegates to `parse_id` in both layers
 # (test_parse_id runs them through the same table).
@@ -499,6 +501,7 @@ KNOWN_INT_CALLS = {
     ("app/web/content.py", "_read_capped"),  # Content-Length
     ("app/web/custom_checks.py", "_read_capped"),  # Content-Length
     ("app/web/dkim_selectors.py", "_read_capped"),  # Content-Length
+    ("app/web/dnsbl_lists.py", "_read_capped"),  # Content-Length
     ("app/web/message.py", "_read_capped"),  # Content-Length
     ("app/web/rules.py", "_read_capped"),  # Content-Length
     ("app/web/rules.py", "_weight"),  # rule weight, 0 to 100

@@ -19,7 +19,14 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2] / "app" / "web"
-MODULES = ("domain_esps", "authentication", "custom_checks", "rules", "dkim_selectors")
+MODULES = (
+    "domain_esps",
+    "authentication",
+    "custom_checks",
+    "rules",
+    "dkim_selectors",
+    "dnsbl_lists",
+)
 
 # Methods of the admin/domain services and of the Session that touch the database.
 SYNC_METHODS = frozenset(

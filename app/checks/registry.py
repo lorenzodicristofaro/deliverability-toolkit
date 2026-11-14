@@ -41,6 +41,16 @@ class CheckRegistry:
             registry.register(check)
         return registry
 
+    def replacing(self, check: Check) -> CheckRegistry:
+        """A new registry with `check` in place of the registered check of the same id (one run's
+        configured copy, e.g. the DNSBL check with the instance's enabled lists, M7-05c). This
+        registry is unchanged; an id that is not registered raises ``KeyError``."""
+        self.get(check.id)
+        registry = CheckRegistry()
+        for check_id in self.all_ids():
+            registry.register(check if check_id == check.id else self._checks[check_id])
+        return registry
+
 
 def load_builtin_checks(registry: CheckRegistry | None = None) -> CheckRegistry:
     """Register every built-in check (explicit list; empty until concrete checks land)."""

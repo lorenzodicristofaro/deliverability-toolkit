@@ -7,6 +7,9 @@ domain's MX/A records resolve to are not checked (out of scope, docs/CHECKS.md).
 
 Enablement: a list with `default_enabled: false` runs only if its id is in `enabled_ids` (the
 instance-admin setting). A disabled list is `not_applicable` (`list_disabled`): no query is sent.
+The registered check has no enabled ids; every run path (API domain and free routes, CLI) loads the
+instance's ids per request (M7-05c, `app.services.checks.with_dnsbl_enabled`) and runs a copy made
+by `with_enabled`, which keeps the lists of the registered check.
 
 Status mapping (never `ok` when any list could not be evaluated):
 - any list `error` -> status `error` AND a finding naming the list: `DNSBL_LIST_REFUSED`
@@ -84,6 +87,10 @@ class DnsblCheck:
     ) -> None:
         self._lists = lists
         self._enabled = frozenset(enabled_ids)
+
+    def with_enabled(self, enabled_ids: Iterable[str]) -> DnsblCheck:
+        """A copy over the same lists with `enabled_ids` in place of this check's ids."""
+        return DnsblCheck(self._lists, enabled_ids)
 
     async def run(self, ctx: CheckContext, target: Target) -> CheckResult:
         started = ctx.clock()

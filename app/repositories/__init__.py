@@ -15,6 +15,9 @@ Entry points:
   instance-admin entry point for global DKIM selectors (admin service and seed sync only).
 - `GlobalCustomCheckRepository` (app.repositories.custom_checks) is the same kind of
   instance-admin entry point for global custom checks (admin service only).
+- `DnsblEnablementRepository` (app.repositories.dnsbl_enablement) holds the instance-level DNSBL
+  list enablement (M7-05c): written only by the instance-admin service, its enabled ids read by
+  every DNSBL check run. Not part of `repo_for` (no tenant data).
 
 Cross-tenant ids behave exactly like missing ids (None/False), so upstream maps them to 404.
 """
@@ -30,6 +33,7 @@ from app.repositories.base import TenantScopedRepository, TenantScopeError
 from app.repositories.content_rules import ContentRuleRepository, GlobalContentRuleRepository
 from app.repositories.custom_checks import CustomCheckRepository, GlobalCustomCheckRepository
 from app.repositories.dkim_selectors import DkimSelectorRepository, GlobalDkimSelectorRepository
+from app.repositories.dnsbl_enablement import DnsblEnablementRepository
 from app.repositories.domain import DomainRepository
 from app.repositories.domain_access import DomainAccessRepository
 from app.repositories.domain_esps import DomainEspRepository
@@ -75,6 +79,7 @@ __all__ = [
     "CurrentTenantRepository",
     "CustomCheckRepository",
     "DkimSelectorRepository",
+    "DnsblEnablementRepository",
     "DomainAccessRepository",
     "DomainEspRepository",
     "DomainRepository",

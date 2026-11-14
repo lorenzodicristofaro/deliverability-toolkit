@@ -300,11 +300,14 @@ data `seeds/dnsbl.yaml` (`docs/DNSBL.md`). Registered in `load_builtin_checks`, 
   `DNSBL_LIST_UNVERIFIED`; the list name, return code, category and reason are params (templates
   escape them; the CLI escapes control characters). `DNSBL_NO_LISTS_APPLICABLE` (info) says that
   nothing was queried (every list disabled or not applicable), so that is never shown as clean.
-- **Enablement.** A list with `default_enabled: false` (all three shipped lists today) runs only if
-  its id is in the check's `enabled_ids` (the instance-admin setting). A disabled list is
-  `not_applicable` / `list_disabled` and no DNS query is sent. The persisted admin setting, its
-  endpoint and the usage-policy confirmation screen are NOT implemented yet (they need a
-  migration and an admin route, outside the M7-05 file scope): until then `enabled_ids` is empty.
+- **Enablement (M7-05c).** A list with `default_enabled: false` (all three shipped lists today)
+  runs only if its id is in the check's `enabled_ids`. The instance admin sets them
+  (`docs/DNSBL.md`, "Enablement"); they are stored in `dnsbl_list_enablements` and read per request
+  on every run path: the domain routes (`dnsbl` by id, in `ids` or in `all`), the free route and
+  the CLI (`app.services.checks.with_dnsbl_enabled`). A disabled list is `not_applicable` /
+  `list_disabled` and no DNS query is sent. The CLI reads the configured database; if it cannot
+  (no configuration, no schema, driver error) it prints a localized notice on stderr and runs the
+  default-enabled lists only, never more.
 - **Permissions.** Same as every check: `check.run` on a tenant domain, `dns.tools` on the free
   route; the CLI has none.
 

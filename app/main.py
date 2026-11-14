@@ -29,6 +29,7 @@ from app.web.custom_checks import router as custom_checks_router
 from app.web.deps import _session_factory
 from app.web.dkim_selectors import router as dkim_selectors_router
 from app.web.dns_tools import router as dns_tools_router
+from app.web.dnsbl_lists import router as dnsbl_lists_router
 from app.web.domain_esps import router as domain_esps_router
 from app.web.domains import router as domains_router
 from app.web.health import router as health_router
@@ -152,6 +153,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     web_app.include_router(rules_router)
     web_app.include_router(dkim_selectors_router)
     web_app.include_router(custom_checks_router)
+    web_app.include_router(dnsbl_lists_router)
     web_app.include_router(checks_stream_router)
     web_app.include_router(api_router)
     web_app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")

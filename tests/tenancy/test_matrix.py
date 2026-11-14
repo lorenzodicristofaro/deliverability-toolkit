@@ -271,6 +271,25 @@ def _toggle(_w: World, _role: str) -> dict[str, Any]:
     return {"enabled": "0"}
 
 
+# DNSBL list enablement (M7-05c) is instance-level: only the instance admin flag passes, whatever
+# the active tenant (so a session in tenant B gets the same answers), every tenant role gets 403.
+# `{list_id}` is a list that does not exist, so the instance admin stops at 404 after the
+# permission and nothing is stored; the enable/disable round trip is in
+# tests/api/test_dnsbl_enablement.py.
+_INSTANCE_ONLY = {role: 403 for role in ROLES} | {"instance_admin": 200}
+_INSTANCE_ONLY_MISSING = {role: 403 for role in ROLES} | {"instance_admin": 404}
+_DNSBL_404 = "api.dnsbl_lists.error.not_found"
+MISSING_DNSBL_LIST = "no-such-list"
+
+
+def _dnsbl_ack(_w: World, _role: str) -> dict[str, Any]:
+    return {"policy_acknowledged": True, "unverified_confirmed": True}
+
+
+def _dnsbl_ack_form(_w: World, _role: str) -> dict[str, Any]:
+    return {"policy_acknowledged": "1", "unverified_confirmed": "1"}
+
+
 MATRIX: dict[tuple[str, str], Entry] = {
     # session / tenant switch (app.web.auth)
     ("POST", "/logout"): Entry(Kind.SESSION),
@@ -407,6 +426,33 @@ MATRIX: dict[tuple[str, str], Entry] = {
         Kind.RULE, body=_toggle, own=_RULE_WRITE_ON_B
     ),
     ("POST", "/dkim-selectors/{selector_id}/delete"): Entry(Kind.RULE, own=_RULE_WRITE_ON_B),
+    # DNSBL list enablement (app.api.v1.dnsbl_lists, app.web.dnsbl_lists): instance admin only.
+    ("GET", "/api/v1/dnsbl-lists"): Entry(
+        Kind.COLLECTION, own=_INSTANCE_ONLY, b_session=_INSTANCE_ONLY
+    ),
+    ("POST", "/api/v1/dnsbl-lists/{list_id}/enable"): Entry(
+        Kind.COLLECTION,
+        body=_dnsbl_ack,
+        smuggle=_INSTANCE_ONLY_MISSING,
+        b_session=_INSTANCE_ONLY_MISSING,
+        not_found=_DNSBL_404,
+    ),
+    ("POST", "/api/v1/dnsbl-lists/{list_id}/disable"): Entry(
+        Kind.COLLECTION,
+        smuggle=_INSTANCE_ONLY_MISSING,
+        b_session=_INSTANCE_ONLY_MISSING,
+        not_found=_DNSBL_404,
+    ),
+    ("GET", "/dnsbl-lists"): Entry(Kind.COLLECTION, own=_INSTANCE_ONLY, b_session=_INSTANCE_ONLY),
+    ("POST", "/dnsbl-lists/{list_id}/enable"): Entry(
+        Kind.COLLECTION,
+        body=_dnsbl_ack_form,
+        smuggle=_INSTANCE_ONLY_MISSING,
+        b_session=_INSTANCE_ONLY_MISSING,
+    ),
+    ("POST", "/dnsbl-lists/{list_id}/disable"): Entry(
+        Kind.COLLECTION, smuggle=_INSTANCE_ONLY_MISSING, b_session=_INSTANCE_ONLY_MISSING
+    ),
     # custom checks UI (app.web.custom_checks): same permissions as the content rules UI; the dry
     # run (`/test`) needs `rules.read`, so permitted roles stop at 422 (no domain in the body).
     # The global tab is covered by tests/web/test_custom_checks_ui.py.
@@ -746,6 +792,8 @@ def _path(w: World, case: Case) -> str:
         return case.leaf.path.replace("{rule_id}", str(b_rule(w).id))
     if "{selector_id}" in case.leaf.path:
         return case.leaf.path.replace("{selector_id}", str(b_selector(w).id))
+    if "{list_id}" in case.leaf.path:
+        return case.leaf.path.replace("{list_id}", MISSING_DNSBL_LIST)
     if "{esp_id}" in case.leaf.path:
         case_path = case.leaf.path.replace("{esp_id}", b_esp(w).esp_id)
     else:
