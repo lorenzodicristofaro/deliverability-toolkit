@@ -17,4 +17,12 @@ Acceptance criteria:
 - QA nit: tests/checks/test_acceptance_m3.py:468-478 inject an enabled list so "servfail everywhere" asserts `error` on every surface.
 - QA nit: one shared helper for the IP-target rule, used by app/api/v1/checks.py:170-176 and app/services/checks.py:55-64; behavior unchanged, existing tests pass.
 New i18n keys: admin page title, list columns, enable/disable actions, policy acknowledgement text, unverified second-confirmation text, error messages (en + it)
-Status: todo
+Status: done
+Outcome: merged into dev (commits 5e70100 + ff73bb9), QA APPROVE round 2.
+- instance.manage only (list/enable/disable); policy acknowledgement required, plus a second confirmation for unverified lists.
+- Migration 0010 (integer id + unique list_id).
+- No audit facility exists: enable/disable are logged as structured events.
+- Round 1 CHANGES REQUESTED: CLI with unreadable enablement now gives error DNSBL_ENABLEMENT_UNAVAILABLE, exit 2 (no fallback).
+- Both M7-05 QA nits closed.
+- Files added beyond scope: enablement service, app/main.py, ARCHITECTURE.md, tenancy/id-range/async-guard test registrations, tests/cli/test_check_dnsbl.py loader stub.
+Follow-up (low): no nav link to the /dnsbl-lists admin page yet.
