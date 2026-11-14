@@ -11,9 +11,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from datetime import datetime
 
+from app.checks.dnsbl import DnsblCheck
 from app.checks.dnsbl_engine import DnsblQueryError, parse_target
 from app.checks.models import CheckContext, CheckResult, Target, finding
 from app.checks.registry import CheckRegistry, load_builtin_checks
@@ -52,16 +53,38 @@ def default_registry() -> CheckRegistry:
     return _default_registry
 
 
+def ip_dnsbl_target(name: str, ids: Sequence[str]) -> str | None:
+    """The IP-target rule (M7-05), shared by this runner and the free API route: the canonical IP
+    literal when `name` is one and every requested check (at least one) is the DNSBL check, else
+    None. Whether an IP is allowed at all is the caller's (`allow_ip`)."""
+    if not ids or any(i != DnsblCheck.id for i in ids):
+        return None
+    try:
+        parsed = parse_target(name)
+    except DnsblQueryError:
+        return None
+    return parsed.value if parsed.kind == "ip" else None
+
+
+def with_dnsbl_enabled(registry: CheckRegistry, enabled_ids: Iterable[str] | None) -> CheckRegistry:
+    """`registry` with its DNSBL check running `enabled_ids`, the instance's enabled lists read
+    for this request (M7-05c); None (could not be read) makes the check `error`. The registered
+    check's lists are kept. A registry without a
+    `DnsblCheck` under that id is returned unchanged."""
+    try:
+        current = registry.get(DnsblCheck.id)
+    except KeyError:
+        return registry
+    if not isinstance(current, DnsblCheck):
+        return registry
+    return registry.replacing(current.with_enabled(enabled_ids))
+
+
 def _target(name: str, ids: Sequence[str] = (), allow_ip: bool = False) -> Target:
     """The check target. An IP literal is accepted only with `allow_ip` and only when every
     requested check is the DNSBL check (M7-05); anywhere else it is an invalid domain name."""
-    if allow_ip and ids and all(i == "dnsbl" for i in ids):
-        try:
-            parsed = parse_target(name)
-        except DnsblQueryError:
-            parsed = None
-        if parsed is not None and parsed.kind == "ip":
-            return Target(domain=parsed.value)
+    if allow_ip and (ip := ip_dnsbl_target(name, ids)) is not None:
+        return Target(domain=ip)
     try:
         return Target(domain=to_dns_name(name, allow_underscore=False))
     except InvalidDomainName as e:

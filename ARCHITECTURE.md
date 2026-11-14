@@ -138,6 +138,11 @@ from `profiles/esp/*.yaml`.
 loaded profile. Optional `return_path_host` / `tracking_host` must be the domain or a
 subdomain of it. `DomainEspRepository.add` is idempotent and never changes stored hosts
 (use `update_hosts`).
+`dnsbl_list_enablements` (M7-05c): instance-level (no tenant_id), one row per DNSBL list the
+instance admin enabled (unique `list_id`, a `seeds/dnsbl.yaml` slug with no FK; the row carries
+the usage-policy acknowledgement). Written only by the instance-admin service through
+`DnsblEnablementRepository` (not part of `repo_for`); its ids are read per request by every
+`dnsbl` run (API and CLI). Details in `docs/DNSBL.md`.
 
 Retention: raw `check_results` are pruned by configurable policy; aggregates
 and DNS snapshots are kept longer.

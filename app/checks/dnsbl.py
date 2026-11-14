@@ -7,6 +7,12 @@ domain's MX/A records resolve to are not checked (out of scope, docs/CHECKS.md).
 
 Enablement: a list with `default_enabled: false` runs only if its id is in `enabled_ids` (the
 instance-admin setting). A disabled list is `not_applicable` (`list_disabled`): no query is sent.
+The registered check has no enabled ids; every run path (API domain and free routes, CLI) loads the
+instance's ids per request (M7-05c, `app.services.checks.with_dnsbl_enabled`) and runs a copy made
+by `with_enabled`, which keeps the lists of the registered check. When the caller could not read
+the enablement (`enabled_ids=None`, the CLI with an unreadable database), the check sends no query
+and is `error` with `DNSBL_ENABLEMENT_UNAVAILABLE` (reason `enablement_unavailable`): which lists
+should run is unknown, so neither a fallback set nor "nothing applicable" is reported.
 
 Status mapping (never `ok` when any list could not be evaluated):
 - any list `error` -> status `error` AND a finding naming the list: `DNSBL_LIST_REFUSED`
@@ -36,6 +42,7 @@ from app.checks.dnsbl_schema import DnsblList, load_dnsbl_lists
 from app.checks.models import CheckContext, CheckResult, Finding, Severity, Target, finding
 
 CODES: tuple[str, ...] = (
+    "DNSBL_ENABLEMENT_UNAVAILABLE",
     "DNSBL_LISTED",
     "DNSBL_LIST_ERROR",
     "DNSBL_LIST_REFUSED",
@@ -62,6 +69,7 @@ CATEGORY_SEVERITY: Final[dict[str, Severity]] = {
 DEFAULT_SEVERITY: Final[Severity] = "medium"
 _RANK: Final[dict[str, int]] = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
 
+ENABLEMENT_UNAVAILABLE: Final = "enablement_unavailable"
 _REFUSED_REASONS: Final = frozenset({Reason.refused, Reason.rcode_refused, Reason.blocked_resolver})
 
 
@@ -80,10 +88,15 @@ class DnsblCheck:
     def __init__(
         self,
         lists: tuple[DnsblList, ...] | None = None,
-        enabled_ids: Iterable[str] = (),
+        enabled_ids: Iterable[str] | None = (),
     ) -> None:
         self._lists = lists
-        self._enabled = frozenset(enabled_ids)
+        self._enabled = None if enabled_ids is None else frozenset(enabled_ids)
+
+    def with_enabled(self, enabled_ids: Iterable[str] | None) -> DnsblCheck:
+        """A copy over the same lists with `enabled_ids` in place of this check's ids; None means
+        the enablement could not be read (the run is then `error`)."""
+        return DnsblCheck(self._lists, enabled_ids)
 
     async def run(self, ctx: CheckContext, target: Target) -> CheckResult:
         started = ctx.clock()
@@ -92,9 +105,26 @@ class DnsblCheck:
             parsed = parse_target(target.domain)
         except DnsblQueryError:
             raise ValueError("invalid DNSBL target") from None
+        if self._enabled is None:
+            return CheckResult.build(
+                check_id=self.id,
+                target=target.domain,
+                findings=[
+                    finding(
+                        "DNSBL_ENABLEMENT_UNAVAILABLE",
+                        "medium",
+                        {"target": parsed.value, "reason": ENABLEMENT_UNAVAILABLE},
+                    )
+                ],
+                evaluated=False,
+                started_at=started,
+                duration_ms=int((time.monotonic() - t0) * 1000),
+                data={"lists": [], "reason": ENABLEMENT_UNAVAILABLE},
+            )
+        enabled = self._enabled
         lists = self._lists if self._lists is not None else load_dnsbl_lists()
         by_id = {lst.id: lst for lst in lists}
-        active = [lst for lst in lists if is_enabled(lst, self._enabled)]
+        active = [lst for lst in lists if is_enabled(lst, enabled)]
         results: list[DnsblResult] = [
             DnsblResult(
                 list_id=lst.id,
@@ -105,7 +135,7 @@ class DnsblCheck:
                 unverified=not lst.verified,
             )
             for lst in lists
-            if not is_enabled(lst, self._enabled)
+            if not is_enabled(lst, enabled)
         ]
         if active:
             report = await DnsblEngine(ctx.resolver, active).run([parsed])

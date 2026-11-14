@@ -1,9 +1,14 @@
 """``check`` command (M3-18): a tenant-less free check on a domain NAME.
 
-Trust boundary: shell access to the instance. No TenantContext, no permission check, no database
-access, and a tenant domain is never loaded. The same runner as the API (``app.services.checks``)
-produces the results; ``--format json`` prints exactly ``CheckResult.model_dump_json()`` (one
-object for one check id, an array in request order otherwise).
+Trust boundary: shell access to the instance. No TenantContext, no permission check, and a tenant
+domain is never loaded. The only database read is the instance's DNSBL list enablement (M7-05c),
+when `dnsbl` runs: the configured database (DATABASE_URL) is opened for that one query. If it
+cannot be read (no configuration, no schema, driver error), a localized notice goes to stderr and
+the `dnsbl` result is `error` (`DNSBL_ENABLEMENT_UNAVAILABLE`, no query, exit 2); the other checks
+of the run are unaffected.
+The same runner as the API (``app.services.checks``) produces the results; ``--format json``
+prints exactly ``CheckResult.model_dump_json()`` (one object for one check id, an array in
+request order otherwise).
 
 Exit codes: 0 all ok/info, 1 any warn/fail, 2 any ``error`` (could not evaluate), 64 usage error.
 """
@@ -15,25 +20,32 @@ from collections.abc import Callable, Sequence
 from typing import Annotated
 
 import typer
+from sqlalchemy import inspect
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.checks.dkim import DkimCheck
 from app.checks.dkim_selectors import list_selectors
+from app.checks.dnsbl import DnsblCheck
 from app.checks.finding_text import display_params
 from app.checks.models import CheckContext, CheckResult
 from app.checks.registry import CheckRegistry
 from app.cli._text import visible
 from app.core import i18n
 from app.core.config import ConfigError, Settings
+from app.core.db import create_session_factory, engine_from_settings
 from app.core.i18n import t
 from app.dns.cache import CachingResolver
 from app.dns.factory import build_resolver
 from app.dns.types import Resolver
+from app.models.dnsbl_enablement import DnsblListEnablement
 from app.services.checks import (
     InvalidTarget,
     UnknownCheck,
     default_registry,
     run_checks,
+    with_dnsbl_enabled,
 )
+from app.services.dnsbl_admin import enabled_list_ids
 
 EXIT_OK = 0
 EXIT_WARN = 1
@@ -50,6 +62,30 @@ def _default_resolver() -> Resolver:
 
 # The seam tests replace (the API's equivalent is the ``dns_backend`` dependency).
 resolver_factory: Callable[[], Resolver] = _default_resolver
+
+DNSBL_ENABLEMENT_NOTICE_KEY = "cli.check.notice.dnsbl_enablement_unavailable"
+
+
+def _database_enabled_dnsbl() -> frozenset[str] | None:
+    """The instance's enabled DNSBL list ids from the configured database; None if unreadable.
+    Logs nothing and prints nothing: the caller prints the localized notice."""
+    try:
+        engine = engine_from_settings(Settings())
+    except (ConfigError, SQLAlchemyError, ImportError, ValueError):
+        return None
+    try:
+        with create_session_factory(engine)() as db:
+            if not inspect(db.connection()).has_table(DnsblListEnablement.__tablename__):
+                return None
+            return enabled_list_ids(db)
+    except SQLAlchemyError:
+        return None
+    finally:
+        engine.dispose()
+
+
+# The seam tests replace: the instance DNSBL enablement, or None when it cannot be read.
+dnsbl_enablement_loader: Callable[[], frozenset[str] | None] = _database_enabled_dnsbl
 
 
 def exit_code(results: Sequence[CheckResult]) -> int:
@@ -147,6 +183,11 @@ def check_command(
         resolver = resolver_factory()
     except ConfigError as e:
         raise _fail("cli.check.error.config", EXIT_ERROR, lang, setting=e.key) from None
+    if DnsblCheck.id in ids:
+        enabled = dnsbl_enablement_loader()
+        if enabled is None:
+            typer.echo(t(DNSBL_ENABLEMENT_NOTICE_KEY, lang), err=True)
+        registry = with_dnsbl_enabled(registry, enabled)
     ctx = CheckContext(resolver=resolver)
     try:
         results = asyncio.run(run_checks(ids, domain, ctx, registry=registry, allow_ip=True))

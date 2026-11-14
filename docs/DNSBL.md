@@ -19,13 +19,38 @@ produce `listed` (M7-03); the maintainer decides what to confirm.
   categories. Never guessed, always `error`: a bit with no mapping or the answer 127.0.0.0
   (`unmapped_code`), a refusal bit summed with other bits (`conflicting_codes`, e.g. 127.0.0.3),
   an answer outside 127.0.0.0/24 (`answer_out_of_range`). Refusal codes are still matched exactly.
-- `default_enabled: bool` (optional, default `true`). Read only by M7-05 (per-tenant enablement);
-  the loader and the engine do not act on it.
+- `default_enabled: bool` (optional, default `true`). Read only by the `dnsbl` check (M7-05) and the
+  instance enablement (M7-05c); the loader and the engine do not act on it.
 
 Maintainer decisions 2026-11-14: the SURBL and URIBL official pages state that their multi zones
 are bitmasked, so both are `bitmask`. Lists with restrictive usage policies are disabled by
 default: SURBL and URIBL (usage policy above), SpamCop pending maintainer verification of its
 policy (its Policies and Disclaimers page was not read).
+
+## Enablement (M7-05c)
+
+A list with `default_enabled: false` is queried only after the instance admin enables it. The
+setting is instance-wide (every tenant's runs read it), stored in `dnsbl_list_enablements`
+(migration 0010: list id, enabled_by, enabled_at, policy_acknowledged, policy_acknowledged_at,
+unverified_confirmed; a row means enabled, disabling deletes it) and reached only through
+`DnsblEnablementRepository`. Rules live in `app/services/dnsbl_admin.py`.
+
+- Who: only the instance admin flag (`instance.manage`). Every tenant role, client viewer
+  included, gets 403; anonymous 401 (a page load redirects to the login).
+- API: `GET /api/v1/dnsbl-lists` (each list with its usage-policy text, sources, status,
+  unverified fields, verified_on and enabled state), `POST /api/v1/dnsbl-lists/{id}/enable` with
+  `{"policy_acknowledged": true}` and, for a list whose status is not `verified`,
+  `"unverified_confirmed": true` too (422 without either), `POST /api/v1/dnsbl-lists/{id}/disable`.
+  An id not in the seed file is 404; a `default_enabled: true` list cannot be toggled (409).
+- Page: `/dnsbl-lists` shows the same data with one checkbox for the policy acknowledgement and a
+  second one for an unverified list. It is not linked from the navigation yet.
+- Shown text comes only from this file: `usage_policy` verbatim, or "the list data has no usage
+  policy text" when the field is absent. Nothing about a list's policy is written in code.
+- Enabling an unverified list does not make it produce `listed`: the engine still reports it as
+  `DNSBL_LIST_UNVERIFIED` (status `error`) until the maintainer confirms its data.
+- Audit: there is no audit log table yet; enable and disable are logged as structured events
+  (`dnsbl_lists.enabled` / `dnsbl_lists.disabled`, actor and list id), like the other admin
+  services.
 
 ## Why unverified
 - SpamCop: pages state no query limits, commercial terms or resolver rules, and no IPv6 support

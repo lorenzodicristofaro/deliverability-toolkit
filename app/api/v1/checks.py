@@ -13,6 +13,11 @@ Routes (all POST, so the CSRF rules are those of `/api/v1/domains`):
 - `/checks/free`: body `{"name": ..., "ids": [...]}`, no tenant data. `name` may be an IP literal
   only when `ids` is exactly the DNSBL check (M7-05); non-public IPs are never queried.
 
+DNSBL enablement (M7-05c): whenever `dnsbl` runs (by id or in `all`, domain or free route), the
+instance's enabled list ids are read for this request (`app.services.dnsbl_admin.enabled_list_ids`,
+instance-level, no tenant data) and handed to the check; a list left disabled stays
+`not_applicable` and is never queried.
+
 The response body is the `CheckResult` wire JSON of the M3-02 service, byte for byte
 (`model_dump_json`), so the API and the CLI print the same thing. A single check answers with one
 object; `all` and `ids` answer with an array of objects in request order (`all`: the built-in
@@ -50,7 +55,7 @@ from app.api.v1.dns_tools import Backend
 from app.api.v1.domain_esps import esp_profiles
 from app.api.v1.domains import _domain_id
 from app.checks.dkim import DkimCheck
-from app.checks.dnsbl_engine import DnsblQueryError, parse_target
+from app.checks.dnsbl import DnsblCheck
 from app.checks.models import CheckContext, CheckResult
 from app.checks.registry import CheckRegistry
 from app.core.domain_names import InvalidDomainName, to_dns_name
@@ -61,11 +66,14 @@ from app.services.checks import (
     InvalidTarget,
     UnknownCheck,
     default_registry,
+    ip_dnsbl_target,
     run_check,
     run_checks,
+    with_dnsbl_enabled,
 )
 from app.services.custom_checks_admin import run_checks_for
 from app.services.dkim_probe_selectors import registry_for, resolve_probe_selectors
+from app.services.dnsbl_admin import enabled_list_ids
 from app.services.domain_esps import ESP_CHECK_ID, ProfileSource, resolve_esp_run
 from app.services.domains import DomainService, DomainServiceError, DomainView
 from app.web.deps import CurrentSession, DbDep, tenant_ctx
@@ -167,15 +175,6 @@ def _validate_ids(request: Request, ids: Sequence[str], *, esp: bool = False) ->
     return list(ids)
 
 
-def _is_ip_dnsbl(name: str, ids: Sequence[str]) -> bool:
-    """Free route only: an IP literal is a valid target when the request is the DNSBL check alone
-    (M7-05); everything else about the name is validated by the service."""
-    try:
-        return all(i == "dnsbl" for i in ids) and parse_target(name).kind == "ip"
-    except DnsblQueryError:
-        return False
-
-
 _MANY: dict[int | str, dict[str, Any]] = {200: {"model": list[CheckResult]}}
 
 
@@ -197,12 +196,14 @@ def _context(
 def _prepare(
     access: _CheckTarget, db: Session, ids: Sequence[str], profiles: ProfileSource
 ) -> CheckRegistry | None:
-    """The registry of a domain run (None: no DKIM and no ESP, the default one); ends the
-    transaction."""
+    """The registry of a domain run (None: no DKIM, no DNSBL and no ESP, the default one); ends
+    the transaction."""
     try:
         registry = None
         if DkimCheck.id in ids:
             registry = registry_for(resolve_probe_selectors(access.ctx, db))
+        if DnsblCheck.id in ids:
+            registry = with_dnsbl_enabled(registry or default_registry(), enabled_list_ids(db))
         if ESP_CHECK_ID in ids:
             esp = resolve_esp_run(access.ctx, db, access.view.id, profiles)
             registry = (registry or default_registry()).with_checks([esp.check])
@@ -214,18 +215,30 @@ def _prepare(
 def _prepare_all(
     access: _CheckTarget, db: Session, profiles: ProfileSource
 ) -> tuple[CheckRegistry, list[str]]:
-    """The registry and ids of `all`: built-ins (DKIM on the tenant's selectors, `esp` with
-    detection, M6-13) plus the tenant's custom checks; ends
+    """The registry and ids of `all`: built-ins (DKIM on the tenant's selectors, DNSBL on the
+    instance's enabled lists, `esp` with detection, M6-13) plus the tenant's custom checks; ends
     the transaction. The ESP assignments are read last, so a failure there cannot affect the
     other reads."""
     try:
         registry = registry_for(resolve_probe_selectors(access.ctx, db))
+        registry = with_dnsbl_enabled(registry, enabled_list_ids(db))
         custom = run_checks_for(access.ctx, db)
         esp = resolve_esp_run(access.ctx, db, access.view.id, profiles)
         registry = registry.with_checks([esp.check])
     finally:
         db.rollback()
     return registry.with_checks(custom), [*registry.all_ids(), *(c.id for c in custom)]
+
+
+def _prepare_free(db: Session, ids: Sequence[str]) -> CheckRegistry | None:
+    """The registry of a free run (None: the default one, no DNSBL requested); ends the
+    transaction, so none is held during DNS. No tenant rows are read here."""
+    try:
+        if DnsblCheck.id not in ids:
+            return None
+        return with_dnsbl_enabled(default_registry(), enabled_list_ids(db))
+    finally:
+        db.rollback()
 
 
 async def _run_many(
@@ -303,10 +316,12 @@ async def run_free_checks(
 ) -> Response:
     payload = _parse(request, FreeIn, body)
     ids = _validate_ids(request, payload.ids)
-    if not _is_ip_dnsbl(payload.name, ids):
+    if ip_dnsbl_target(payload.name, ids) is None:
         try:
             to_dns_name(payload.name, allow_underscore=False)
         except InvalidDomainName:
             raise _invalid(request) from None
-    await run_in_threadpool(db.rollback)  # no tenant rows here: just hold no transaction during DNS
-    return await _run_many(request, ids, payload.name, _context(resolver), allow_ip=True)
+    registry = await run_in_threadpool(_prepare_free, db, ids)
+    return await _run_many(
+        request, ids, payload.name, _context(resolver), registry=registry, allow_ip=True
+    )
