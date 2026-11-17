@@ -54,6 +54,7 @@ from app.repositories.custom_checks import CustomCheckRecord
 from app.repositories.dkim_selectors import DkimSelectorRecord
 from app.repositories.domain_esps import DomainEspRecord
 from app.repositories.monitor_targets import MonitorTargetRecord
+from app.services.dns_diff import build_entry, build_snapshot, to_stored
 from app.web import deps
 from tests.tenancy.conftest import (
     A_DOMAINS,
@@ -520,6 +521,19 @@ MATRIX: dict[tuple[str, str], Entry] = {
         Kind.DOMAIN, body=_monitor_patch, not_found=_MONITOR_404
     ),
     ("DELETE", "/api/v1/domains/{domain_id}/monitor"): Entry(Kind.DOMAIN, not_found=_MONITOR_404),
+    # History read API (app.api.v1.history, M7-12): `monitor.read` on the domain after
+    # `domain.read`; every role gets 404 on a foreign or unassigned domain, whatever the query.
+    # Tenant B's run and snapshot (`b_history`) carry its secret name and must never show up.
+    ("GET", "/api/v1/domains/{domain_id}/history/runs"): Entry(Kind.DOMAIN, not_found=_MONITOR_404),
+    ("GET", "/api/v1/domains/{domain_id}/history/trend"): Entry(
+        Kind.DOMAIN, not_found=_MONITOR_404
+    ),
+    ("GET", "/api/v1/domains/{domain_id}/history/snapshots"): Entry(
+        Kind.DOMAIN, not_found=_MONITOR_404
+    ),
+    ("GET", "/api/v1/domains/{domain_id}/history/snapshots/diff"): Entry(
+        Kind.DOMAIN, not_found=_MONITOR_404
+    ),
 }
 
 # Public routes by (method, path): a new method on an exempt path is NOT exempt. Keep this
@@ -813,6 +827,35 @@ def b_esp(w: World) -> DomainEspRecord:
     return created
 
 
+def b_history(w: World) -> None:
+    """Tenant B's run and snapshot on its secret domain (the secret name is in the run's finding
+    params), created on first use. The world baseline does not cover history."""
+    w.db.expire_all()
+    repos = repo_for(TenantContext(w.tenants["b"], w.users["b_owner"]), w.db)
+    secret = w.domains["secret"]
+    if repos.check_runs.latest_per_check(secret):
+        return
+    name = B_DOMAINS["secret"]
+    at = datetime(2030, 1, 1, tzinfo=UTC)
+    run = repos.check_runs.record(
+        secret,
+        check_id="spf",
+        status="fail",
+        started_at=at,
+        duration_ms=1,
+        source="manual",
+        findings=[{"code": "B_PRIVATE", "params": {"name": name}}],
+    )
+    assert run is not None
+    snap = build_snapshot([build_entry("@", "TXT", "ok", [f"v=spf1 include:{name} -all"])])
+    stored, truncated = to_stored(snap)
+    saved = repos.dns_snapshots.record(
+        secret, taken_at=at, content_hash=snap.content_hash, entries=stored, truncated=truncated
+    )
+    assert saved is not None
+    w.db.commit()
+
+
 def b_monitor(w: World) -> MonitorTargetRecord:
     """Tenant B's monitor target on its secret domain, created on first use. The world baseline
     does not cover monitor targets."""
@@ -898,6 +941,8 @@ def _check_case(world: World, logs: pytest.LogCaptureFixture, case: Case) -> Non
     )
     esp_before = b_esp(world) if "/esps" in case.leaf.path else None
     monitor_before = b_monitor(world) if "/monitor" in case.leaf.path else None
+    if "/history/" in case.leaf.path:
+        b_history(world)
     tenant = "b" if case.target.startswith("b_session") else "a"
     fresh = entry.kind in (Kind.SESSION, Kind.SWITCH)  # these consume/rotate the session
     body = entry.body(world, case.role) if entry.body is not None else None

@@ -16,9 +16,7 @@ shows a translated key, never the validator text or the offending value.
 from __future__ import annotations
 
 import asyncio
-import unicodedata
 from dataclasses import dataclass
-from typing import Final
 
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, Response
@@ -26,6 +24,7 @@ from fastapi.responses import HTMLResponse, Response
 from app.api.v1.dns_tools import REQUEST_DEADLINE_S, Backend
 from app.core.domain_names import InvalidDomainName, to_dns_name
 from app.core.permissions import Action, Principal, TenantResource, can
+from app.core.text import visible as visible  # re-exported: other web modules import it from here
 from app.dns.knowledge import list_public_resolvers
 from app.dns.trace import DEFAULT_LIMITS, TraceReport, trace
 from app.dns.types import ALLOWED_RDTYPES, DnsQuestion
@@ -44,23 +43,9 @@ from app.web.templating import env, payload_too_large, read_form, render
 
 router = APIRouter(prefix="/tools/dns")
 
-_CONTROL: Final = frozenset({"Cc", "Cs", "Cf", "Co", "Cn", "Zl", "Zp"})
-
 
 def dns_tools_allowed(principal: Principal, tenant_id: int | None) -> bool:
     return tenant_id is not None and can(principal, Action.DNS_TOOLS, TenantResource(tenant_id))
-
-
-def visible(value: object) -> str:
-    """`value` with control/format/unassigned characters replaced by visible escapes."""
-    out: list[str] = []
-    for ch in str(value):
-        if unicodedata.category(ch) in _CONTROL:
-            code = ord(ch)
-            out.append(f"\\x{code:02x}" if code < 0x100 else f"\\u{code:04x}")
-        else:
-            out.append(ch)
-    return "".join(out)
 
 
 env.filters["visible"] = visible

@@ -14,6 +14,7 @@ from app.api.v1.dns_tools import router as dns_tools_router
 from app.api.v1.dnsbl_lists import router as dnsbl_lists_router
 from app.api.v1.domain_esps import router as domain_esps_router
 from app.api.v1.domains import router as domains_router
+from app.api.v1.history import router as history_router
 from app.api.v1.message import router as message_router
 from app.api.v1.monitors import router as monitors_router
 from app.api.v1.rules import router as rules_router
@@ -30,5 +31,6 @@ api_router.include_router(custom_checks_router)
 api_router.include_router(domain_esps_router)
 api_router.include_router(dnsbl_lists_router)
 api_router.include_router(monitors_router)
+api_router.include_router(history_router)
 
 __all__ = ["api_router"]
