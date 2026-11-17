@@ -13,5 +13,19 @@ Acceptance criteria:
 - Tests table-driven, no network: TXT multi-string equality, record reordering, SPF change, DMARC removed vs lookup error, NS change, huge value truncated, hostile values.
 - Repository via TenantContext; cross-tenant tests; migration up/down SQLite and PostgreSQL. Retention: snapshots kept longer than runs per ARCHITECTURE section 5; setting with bounds, fake-clock test.
 New i18n keys: none
-Status: todo
-Note: the migration chain head is now 0012 (check_runs, M7-07); the new revision follows it.
+Status: done (05cd067, QA APPROVE round 2)
+Note: the migration chain head was 0012 (check_runs, M7-07); this ticket added 0013, which is now the head.
+
+Round 1 (Sonnet code) findings, fixed by an Opus coder:
+- False NUL rejection of a literal `\u0000` TXT (checked the JSON escape text instead of real NULs).
+- Quoted TXT was unquoted, hiding a broken quoted SPF.
+- Whitespace/control folding in hashes hid an NBSP-broken SPF.
+- Changes across an error snapshot were lost; now documented and handled by the pure helper `carry_forward` in app/services/dns_diff.py.
+
+Files outside the original scope (GM-approved):
+- migrations/versions 0013 (dns_snapshots) and tests/migrations/test_0013_dns_snapshots.py
+- app/core/config.py: DNS_SNAPSHOT_HEARTBEAT_HOURS (default 24, 1..720); DNS_SNAPSHOT_RETENTION_DAYS (default 365, 1..3650; effective value = max with CHECK_RUN_RETENTION_DAYS)
+- ARCHITECTURE.md sections 5 and 11
+- app/services/retention.py and its tests (snapshot retention never deletes a domain's newest snapshot)
+
+Known limitations (see TODO.md low follow-ups): DMARC tag case kept as-is (RFC 7489 case rules unverified); SPF lowercasing hides a %{l} -> %{L} macro change.

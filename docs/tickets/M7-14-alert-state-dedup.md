@@ -17,4 +17,5 @@ Acceptance criteria:
 - Tenant isolation tests on repository; migration up/down SQLite and PostgreSQL; fake clock, no network.
 New i18n keys: ALERT_RECORD_CHANGED, ALERT_NEW_LISTING, ALERT_LISTING_CLEARED, ALERT_POLICY_REGRESSION, ALERT_CHECK_ERROR (.title/.detail) (en + it); locale files touched, so serialize
 Status: todo
-Note: the migration chain head is now 0012 (check_runs, M7-07); the new revision follows it (or a later head if M7-08 merges first).
+Note: the migration chain head is now 0013 (dns_snapshots, M7-08, merged 05cd067); the new revision follows it (or a later head if another migration merges first).
+Note (from M7-08): consumers of DNS diffs must compare each entry against its last non-error state. Call app/services/dns_diff.carry_forward(baseline, current) before diff_snapshots, otherwise changes across a transient error are reported only as inconclusive. A valid SPF becoming quoted/broken SPF shows as `removed`.

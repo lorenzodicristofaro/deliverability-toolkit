@@ -16,4 +16,5 @@ Acceptance criteria:
 New i18n keys: none
 Status: todo
 Note (from M7-07, merged 4628d94): run history repository is repo_for(ctx).check_runs; findings stored as {code, params} only. Schedule the system method app/services/retention.prune_check_runs(session, now, policy) in the scheduler/retention job defined here (setting CHECK_RUN_RETENTION_DAYS).
+Note (from M7-08, merged 05cd067): snapshot pruning goes through app/services/retention (setting DNS_SNAPSHOT_RETENTION_DAYS, effective = max with CHECK_RUN_RETENTION_DAYS); it never deletes a domain's newest snapshot. .env.example rows for DNS_SNAPSHOT_HEARTBEAT_HOURS and DNS_SNAPSHOT_RETENTION_DAYS are a TODO.md follow-up and fit this ticket's .env.example/SETUP.md scope.
 Note (from M7-06): `MonitorSchedulerRepository(session).due_targets(now, limit)` returns DueTarget records carrying tenant_id. check_ids are validated only at write time, so if a check id is no longer in the registry the scheduler must report it as `error`, not skip it.

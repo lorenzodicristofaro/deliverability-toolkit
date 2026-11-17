@@ -14,4 +14,5 @@ Acceptance criteria:
 - Tests with fake checks and fake DNS (no network): first run has no events (baseline), unchanged run none, change, revert, listing appears/disappears, error in the middle, exception in a check isolated, tenant context correctness.
 New i18n keys: none
 Status: todo
+Note (from M7-08, merged 05cd067): take snapshots via app/services/dns_snapshot (repo_for(ctx).dns_snapshots); the heartbeat (store in full only on change or after DNS_SNAPSHOT_HEARTBEAT_HOURS) is handled there. For record_changed, compare each entry against its last non-error state: use app/services/dns_diff.carry_forward(baseline, current) before diff_snapshots, otherwise changes across a transient error are reported only as inconclusive. Valid SPF -> quoted/broken SPF shows as `removed`.
 Note (from M7-07, merged 4628d94): write runs through repo_for(ctx).check_runs; findings stored as {code, params} only (no rendered text); check_id column width is 96.
