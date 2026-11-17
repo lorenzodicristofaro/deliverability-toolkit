@@ -167,3 +167,46 @@ settings, both optional; an invalid value stops the app at startup:
 | `OUTBOUND_HTTP_MAX_REDIRECTS` | `3` | Redirects followed per request, 0 to 5 (5 is a hard maximum). |
 
 The defaults are project choices. `compose.yaml` forwards both variables (same defaults).
+
+## 10. ENCRYPTION_KEY and key rotation
+
+Secrets the app stores for later use (SMTP passwords, webhook tokens, API keys) are encrypted
+with Fernet (ARCHITECTURE section 9). `ENCRYPTION_KEY` holds one or more Fernet keys.
+
+**Generate a key** (44 characters, URL-safe base64), with either:
+
+```
+uv run python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+docker compose run --rm --no-deps app python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+```
+
+Put it in `.env` as `ENCRYPTION_KEY=<key>`. Use a different key per environment (section 4).
+Any other value (for example a random 40-character password, which older `.env` files may
+have) is refused with `SecretsConfigError` the first time a secret is encrypted or decrypted.
+While no secret has been stored yet, simply replace such a value with a generated key.
+
+**Syntax.** One key, or several separated by commas, primary first:
+
+```
+ENCRYPTION_KEY=<new key>,<old key>
+```
+
+Spaces around commas are ignored; an empty entry (`a,,b`, a trailing comma) or any entry that
+is not a Fernet key is refused. The first key encrypts every new secret; every listed key can
+decrypt.
+
+**Rotation.**
+
+1. Generate a new key and prepend it: `ENCRYPTION_KEY=<new>,<old>`. Restart the app. New and
+   updated secrets are now encrypted with `<new>`; existing ones still decrypt with `<old>`.
+2. Re-encrypt the stored secrets under the new key (`app.core.secrets_crypto.rotate()`, which
+   keeps each token's original timestamp). A command that walks the stored secrets does not exist
+   yet; it comes with the features that store secrets (M7-15). Until every stored secret has been
+   re-encrypted, keep the old key in the list.
+3. Remove the old key: `ENCRYPTION_KEY=<new>`. Restart. A secret still encrypted only under the
+   removed key can no longer be decrypted (`SecretDecryptError`); re-enter it, or put the old
+   key back.
+
+**Losing the key loses the stored secrets.** There is no recovery: back up `ENCRYPTION_KEY`
+(separately from the database backup) and, after a restore, use the key that was active when
+the backup was taken.

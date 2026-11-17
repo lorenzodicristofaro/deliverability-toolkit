@@ -316,7 +316,26 @@ when a profile is older than 12 months.
   time, and live workers per process (bounded wait, then `busy`, never an unbounded queue). Not a thread (cannot be stopped) and not the
   `regex` module timeout (its docs do not say when the deadline is checked).
 - Uploaded `.eml` files and DMARC XML: size caps, zip-bomb protection, defusedxml.
-- Secrets encrypted with a key from env/file (Fernet or libsodium), rotation path documented.
+- Secrets encrypted at rest (M7-14b): `app/core/secrets_crypto.py` `encrypt(str) -> str`,
+  `decrypt(str) -> str`, `rotate(str) -> str`, using Fernet from `cryptography` (AES-128-CBC with
+  HMAC-SHA256, authenticated; tokens are ASCII URL-safe base64 and carry their creation time in
+  clear). Chosen over libsodium: `cryptography` ships MultiFernet, which gives key rotation
+  without our own key-id format. `ENCRYPTION_KEY` is one or more Fernet keys (32 bytes, URL-safe
+  base64, 44 characters) separated by commas; a MultiFernet over them encrypts with the first key
+  and decrypts with any, and `rotate()` re-encrypts a token under the first key (keeping its
+  timestamp). No TTL is applied on decrypt.
+  - Validation is on first use, not in `Settings`: the key ring is parsed and cached by
+    `get_cipher()` (reads `Settings().encryption_key`); a missing, blank or non-Fernet entry raises
+    `SecretsConfigError` naming only the entry's position. Any decrypt/rotate failure (wrong or
+    removed key, tampered, truncated, non-ASCII or garbage token) raises `SecretDecryptError`.
+    Both are `SecretsError` with a stable `code` and fixed text, raised after (never inside) the
+    `contextlib.suppress` block that swallowed the library error, so `__cause__` and
+    `__context__` are None (`from None` alone would keep `__context__`, e.g. a UnicodeEncodeError
+    holding the plaintext or pydantic's ValidationError holding the raw key). No plaintext, key or token reaches a
+    message, repr, exception chain or log. The module does not log.
+  - Rotation procedure: prepend a new key (`new,old`) and restart; re-encrypt stored tokens with
+    `rotate()`; when none is left under the old key, remove it and restart. Losing every key that
+    encrypted a token loses that secret. Operator steps: docs/SETUP.md section 10.
 - CSRF protection for the UI, strict security headers (CSP without inline scripts),
   secure cookies, login throttling, TOTP, session revocation.
 - HTML from user content (email bodies) is always rendered escaped or in a

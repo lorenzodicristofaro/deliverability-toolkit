@@ -19,6 +19,7 @@ dependencies = [
     "publicsuffixlist>=1.1.2.20261106",
     "typer>=0.28.0",
     "httpx2>=2.16.0",
+    "cryptography>=50.0.2",
 ]
 
 [project.scripts]
