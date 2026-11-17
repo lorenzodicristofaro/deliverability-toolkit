@@ -1020,6 +1020,7 @@ async def test_evaluator_accepts_a_real_stored_http_fetch_record(world: World) -
         scope=rec.scope,
         fetch_limits=FetchLimits(),
         fetcher=fetcher,
+        verified_domain="example.com",  # M7-21a: http_fetch fetches only for a verified domain
     )
     result = await check.run(CheckContext(resolver=_NoRecord()), Target(domain="example.com"))
     assert calls == ["https://mta-sts.example.com/.well-known/mta-sts.txt"]

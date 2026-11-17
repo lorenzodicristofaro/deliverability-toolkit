@@ -76,6 +76,16 @@ limits is `error` (`fetch_unconfigured`), never a fetch with defaults. Status ru
   pattern -> the same code (`header_no_match`);
 - regex timeouts and budgets as for `dns_matches` (`error`).
 Mismatch findings carry the configured severity and remediation, like `CUSTOM_CHECK_FAILED`.
+
+Ownership gate (M7-21a, SPEC section 3): an http_fetch check fetches only for the domain its
+caller vouched for as verified, `verified_domain` (the stored name of a domain whose
+`verification_status` is `verified`, read by the caller in the same transaction as the check's
+rows). Any other case (None, the default, or a target that is not that domain) is
+`CUSTOM_HTTP_DOMAIN_UNVERIFIED` (`reason: domain_unverified`, `error`), decided first in the
+http_fetch evaluation: no URL is built and nothing is fetched. Every run path builds checks this
+way: the API domain run (`run_checks_for(..., domain_id=...)`), the dry run (`prepare_test`) and
+any future scheduled path (which must use `run_checks_for` with the target's domain id; built
+without it, the check is `error`). DNS kinds ignore `verified_domain`.
 The response is untrusted: params hold only the check key, the rendered host, the final host
 (validated by the client), the status and the expected statuses; body and header values only
 reach `evidence`, at most MAX_EVIDENCE_CHARS each with non-printable characters replaced, which
@@ -107,7 +117,7 @@ from app.core.custom_check_schema import (
     validate_remediation_text,
     validate_severity,
 )
-from app.core.domain_names import to_ascii_domain
+from app.core.domain_names import InvalidDomainName, to_ascii_domain
 from app.core.safe_regex import (
     MAX_MATCHES,
     MAX_TEXT_BYTES,
@@ -129,6 +139,7 @@ CODES: tuple[str, ...] = (
     "CUSTOM_HTTP_STATUS_MISMATCH",
     "CUSTOM_HTTP_BODY_MISMATCH",
     "CUSTOM_HTTP_HEADER_MISMATCH",
+    "CUSTOM_HTTP_DOMAIN_UNVERIFIED",
 )
 _REDIRECT_STATUSES: Final = frozenset({301, 302, 303, 307, 308})  # as the guarded client
 _BLOCKED_KINDS: Final = frozenset(
@@ -161,6 +172,7 @@ _NUMBER: Final = re.compile(r"[+-]?[0-9]{1,30}(\.[0-9]{1,30})?")
 _CHECK_KEY: Final = re.compile(r"[a-z0-9][a-z0-9_.-]{0,63}")
 _BUDGET_EXCEEDED: Final = "regex_budget_exceeded"
 _RUN_BUDGET_EXCEEDED: Final = "run_budget_exceeded"
+DOMAIN_UNVERIFIED: Final = "domain_unverified"
 _regex_clock = time.monotonic
 
 
@@ -222,6 +234,7 @@ class CustomDnsCheck:
         remediation_optional: bool = False,
         fetch_limits: FetchLimits | None = None,
         fetcher: Fetcher | None = None,
+        verified_domain: str | None = None,
     ) -> None:
         valid_key = isinstance(check_key, str) and _CHECK_KEY.fullmatch(check_key)
         self._key = check_key if valid_key else "invalid"
@@ -238,6 +251,8 @@ class CustomDnsCheck:
         # http_fetch only: the operator's limits (None: the check is `error`) and the I/O seam.
         self._fetch_limits = fetch_limits
         self._fetcher: Fetcher = fetcher if fetcher is not None else guarded_fetch
+        # http_fetch only: the verified domain this check may fetch from (None: none).
+        self._verified_domain = verified_domain if isinstance(verified_domain, str) else None
 
     def _error(self, reason: str, **data: Any) -> _Outcome:
         params = {"check_key": self._key, "reason": reason}
@@ -364,6 +379,20 @@ class CustomDnsCheck:
         found = finding("CUSTOM_HTTP_BLOCKED", "low", params, remediation=False)
         return _Outcome([found], False, {**data, "reason": reason, "hop": hop})
 
+    def _may_fetch(self, target: Target) -> bool:
+        """True only if `target` is the domain the caller vouched for as verified."""
+        if self._verified_domain is None:
+            return False
+        try:
+            return to_ascii_domain(target.domain) == to_ascii_domain(self._verified_domain)
+        except InvalidDomainName:
+            return False
+
+    def _unverified(self) -> _Outcome:
+        params = {"check_key": self._key, "reason": DOMAIN_UNVERIFIED}
+        found = finding("CUSTOM_HTTP_DOMAIN_UNVERIFIED", "low", params, remediation=False)
+        return _Outcome([found], False, {"kind": "http_fetch", "reason": DOMAIN_UNVERIFIED})
+
     async def _evaluate_http(
         self,
         ctx: CheckContext,
@@ -373,6 +402,8 @@ class CustomDnsCheck:
         remediation: dict[str, str] | None,
         remediation_key: str | None,
     ) -> _Outcome:
+        if not self._may_fetch(target):  # before any URL is built or fetched (M7-21a)
+            return self._unverified()
         try:
             url, host = render_url(parsed, target.domain)
         except NameRenderError as exc:
