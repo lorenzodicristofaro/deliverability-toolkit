@@ -1,4 +1,5 @@
 import logging
+import random
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from http import HTTPStatus
@@ -19,7 +20,15 @@ from app.core.csrf import CSRFMiddleware
 from app.core.i18n import t, validate_catalogues
 from app.core.logging import RequestLoggingMiddleware, configure_logging
 from app.core.security_headers import SecurityHeadersMiddleware
+from app.repositories.monitor_targets import known_check_ids
 from app.services.auth import SessionPolicy, purge_sessions
+from app.services.clock import SystemClock
+from app.services.scheduler import (
+    MonitorScheduler,
+    SchedulerConfig,
+    log_only_run,
+    maintenance_job,
+)
 from app.services.seed_sync import SeedSyncError, run_seed_sync
 from app.web.auth import router as auth_router
 from app.web.authentication import router as authentication_router
@@ -111,6 +120,26 @@ def purge_sessions_at_startup(app: FastAPI) -> None:
     )
 
 
+def start_scheduler(app: FastAPI) -> MonitorScheduler | None:
+    """Start the monitor scheduler and the maintenance timer for ROLE worker/all (M7-09);
+    None for ROLE=web. Needs the running event loop."""
+    cfg: Settings = app.state.settings
+    if cfg.role not in ("worker", "all"):
+        return None
+    factory = _session_factory(Request({"type": "http", "app": app}))
+    clock = SystemClock()
+    scheduler = MonitorScheduler(
+        factory,
+        log_only_run,  # M7-10 replaces it with the run that records results
+        SchedulerConfig.from_settings(cfg),
+        clock,
+        random.Random(),
+        known_check_ids=known_check_ids(),
+    )
+    scheduler.start(maintenance_job(factory, cfg, clock))
+    return scheduler
+
+
 def create_app(settings: Settings | None = None) -> FastAPI:
     """Build the app. With explicit settings (tests) they are used as given; otherwise they are
     loaded from the environment at startup (lifespan), so a missing or invalid configuration
@@ -127,7 +156,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         await run_in_threadpool(prepare_setup, app)
         await run_in_threadpool(sync_seeds_at_startup, app)
         await run_in_threadpool(purge_sessions_at_startup, app)
-        yield
+        app.state.scheduler = start_scheduler(app)
+        try:
+            yield
+        finally:
+            if app.state.scheduler is not None:
+                await app.state.scheduler.shutdown()
 
     # Interactive docs and the OpenAPI schema are disabled: they would be served unauthenticated.
     # M10 (Docs site, OpenAPI) re-exposes OpenAPI behind authentication.

@@ -35,6 +35,31 @@ DEFAULT_DNS_SNAPSHOT_HEARTBEAT_HOURS = 24
 DNS_SNAPSHOT_HEARTBEAT_HOURS_MIN = 1
 DNS_SNAPSHOT_HEARTBEAT_HOURS_MAX = 720
 
+# Scheduler and maintenance (M7-09), project choices: not taken from an external source. The DNSBL
+# and HTTP host budgets are deliberately conservative; no list operator's published query limit is
+# encoded here (unverified per list, see ARCHITECTURE section 6).
+DEFAULT_SCHEDULER_TICK_SECONDS = 30
+SCHEDULER_TICK_SECONDS_MIN = 5
+SCHEDULER_TICK_SECONDS_MAX = 600
+DEFAULT_SCHEDULER_BATCH_SIZE = 100
+SCHEDULER_BATCH_SIZE_MIN = 1
+SCHEDULER_BATCH_SIZE_MAX = 1000  # app.repositories.base.MAX_LIMIT
+DEFAULT_SCHEDULER_MAX_CONCURRENCY = 4
+SCHEDULER_MAX_CONCURRENCY_MIN = 1
+SCHEDULER_MAX_CONCURRENCY_MAX = 64
+DEFAULT_SCHEDULER_JITTER_SECONDS = 300
+SCHEDULER_JITTER_SECONDS_MIN = 0
+SCHEDULER_JITTER_SECONDS_MAX = 3600
+# Runs per minute and rate-limit key (one DNSBL list, one remote HTTP host, one tenant).
+DEFAULT_SCHEDULER_DNSBL_RUNS_PER_MINUTE = 20
+DEFAULT_SCHEDULER_HTTP_HOST_RUNS_PER_MINUTE = 10
+DEFAULT_SCHEDULER_TENANT_RUNS_PER_MINUTE = 30
+SCHEDULER_RUNS_PER_MINUTE_MIN = 1
+SCHEDULER_RUNS_PER_MINUTE_MAX = 600
+DEFAULT_MAINTENANCE_INTERVAL_MINUTES = 60
+MAINTENANCE_INTERVAL_MINUTES_MIN = 5
+MAINTENANCE_INTERVAL_MINUTES_MAX = 1440
+
 RESOLVER_ADDR_INVALID_KEY = "config.resolver_addr.invalid"
 
 config_logger = logging.getLogger("app.config")
@@ -237,6 +262,49 @@ class Settings(BaseSettings):
         default=DEFAULT_DNS_SNAPSHOT_HEARTBEAT_HOURS,
         ge=DNS_SNAPSHOT_HEARTBEAT_HOURS_MIN,
         le=DNS_SNAPSHOT_HEARTBEAT_HOURS_MAX,
+    )
+
+    # Scheduler (M7-09, ARCHITECTURE section 6); it runs only when ROLE is worker or all.
+    scheduler_tick_seconds: int = Field(
+        default=DEFAULT_SCHEDULER_TICK_SECONDS,
+        ge=SCHEDULER_TICK_SECONDS_MIN,
+        le=SCHEDULER_TICK_SECONDS_MAX,
+    )
+    scheduler_batch_size: int = Field(
+        default=DEFAULT_SCHEDULER_BATCH_SIZE,
+        ge=SCHEDULER_BATCH_SIZE_MIN,
+        le=SCHEDULER_BATCH_SIZE_MAX,
+    )
+    scheduler_max_concurrency: int = Field(
+        default=DEFAULT_SCHEDULER_MAX_CONCURRENCY,
+        ge=SCHEDULER_MAX_CONCURRENCY_MIN,
+        le=SCHEDULER_MAX_CONCURRENCY_MAX,
+    )
+    scheduler_jitter_seconds: int = Field(
+        default=DEFAULT_SCHEDULER_JITTER_SECONDS,
+        ge=SCHEDULER_JITTER_SECONDS_MIN,
+        le=SCHEDULER_JITTER_SECONDS_MAX,
+    )
+    scheduler_dnsbl_runs_per_minute: int = Field(
+        default=DEFAULT_SCHEDULER_DNSBL_RUNS_PER_MINUTE,
+        ge=SCHEDULER_RUNS_PER_MINUTE_MIN,
+        le=SCHEDULER_RUNS_PER_MINUTE_MAX,
+    )
+    scheduler_http_host_runs_per_minute: int = Field(
+        default=DEFAULT_SCHEDULER_HTTP_HOST_RUNS_PER_MINUTE,
+        ge=SCHEDULER_RUNS_PER_MINUTE_MIN,
+        le=SCHEDULER_RUNS_PER_MINUTE_MAX,
+    )
+    scheduler_tenant_runs_per_minute: int = Field(
+        default=DEFAULT_SCHEDULER_TENANT_RUNS_PER_MINUTE,
+        ge=SCHEDULER_RUNS_PER_MINUTE_MIN,
+        le=SCHEDULER_RUNS_PER_MINUTE_MAX,
+    )
+    # Session purge and check run / DNS snapshot pruning run on this timer (worker/all only).
+    maintenance_interval_minutes: int = Field(
+        default=DEFAULT_MAINTENANCE_INTERVAL_MINUTES,
+        ge=MAINTENANCE_INTERVAL_MINUTES_MIN,
+        le=MAINTENANCE_INTERVAL_MINUTES_MAX,
     )
 
     @field_validator("secret_key", "encryption_key", mode="after")
