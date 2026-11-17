@@ -121,6 +121,11 @@ ID_ROUTES: dict[tuple[str, str], Payload] = {
     ("GET", "/api/v1/domains/{domain_id}/history/trend"): None,
     ("GET", "/api/v1/domains/{domain_id}/history/snapshots"): None,
     ("GET", "/api/v1/domains/{domain_id}/history/snapshots/diff"): None,
+    ("GET", "/api/v1/domains/{domain_id}/verification"): None,
+    ("POST", "/api/v1/domains/{domain_id}/verification"): None,
+    ("POST", "/api/v1/domains/{domain_id}/verification/check"): None,
+    ("POST", "/domains/{domain_id}/verification"): None,
+    ("POST", "/domains/{domain_id}/verification/check"): None,
 }
 
 
