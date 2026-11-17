@@ -15,7 +15,7 @@ from alembic import command
 from alembic.config import Config
 from alembic.script import ScriptDirectory
 from sqlalchemy import Engine, inspect, text
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DataError, IntegrityError
 
 ROOT = Path(__file__).resolve().parents[2]
 NEW = {
@@ -113,7 +113,8 @@ VIOLATIONS = [
 def test_database_enforces_the_columns(real_migrations_engine: Engine, assignment: str) -> None:
     engine = real_migrations_engine
     _seed(engine)
-    with pytest.raises(IntegrityError), engine.begin() as conn:
+    # PostgreSQL refuses an over-long hash by the VARCHAR(64) cap (DataError) before the CHECK.
+    with pytest.raises((IntegrityError, DataError)), engine.begin() as conn:
         conn.execute(text(f"UPDATE domains SET {assignment}"))
 
 
