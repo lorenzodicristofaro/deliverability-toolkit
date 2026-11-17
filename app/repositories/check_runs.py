@@ -296,6 +296,25 @@ class CheckRunRepository:
         nxt = RunCursor(page[-1].started_at, page[-1].id) if more else None
         return RunPage(page, nxt)
 
+    def latest_non_error(self, domain_id: object, check_id: object) -> CheckRunRecord | None:
+        """The newest run of one check of the domain whose status is not `error` (the baseline
+        of change detection, M7-10b), however many `error` runs came after it. None if there is
+        none or the domain is missing, foreign or malformed; CheckRunInvalid for a malformed
+        check id. Served by the (tenant, domain, check, started_at) index, newest first."""
+        cid = _check_id(check_id)
+        did = coerce_id(domain_id)
+        if did is None:
+            return None
+        stmt = (
+            self._select(
+                CheckRun.domain_id == did, CheckRun.check_id == cid, CheckRun.status != "error"
+            )
+            .order_by(CheckRun.started_at.desc(), CheckRun.id.desc())
+            .limit(1)
+        )
+        row = self._session.scalars(stmt).first()
+        return None if row is None else CheckRunRecord.from_model(row)
+
     def latest_per_check(self, domain_id: object) -> list[CheckRunRecord]:
         """The most recent run of each check of the domain, ordered by check id."""
         did = coerce_id(domain_id)

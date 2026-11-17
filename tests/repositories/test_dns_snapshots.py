@@ -26,6 +26,7 @@ from app.repositories.dns_snapshots import (
     DnsSnapshotInvalid,
     DnsSnapshotRecord,
     DnsSnapshotRepository,
+    SnapshotCursor,
 )
 from app.services.dns_diff import MAX_NAME_LENGTH, build_entry, build_snapshot, to_stored
 
@@ -144,6 +145,49 @@ def test_latest_is_per_domain_and_none_without_snapshots(world: World) -> None:
     assert world.repo().latest(world.domains["a1"]) is None
     assert world.repo().latest(world.domains["a2"]) == other
     assert world.repo().list_for_domain(world.domains["a1"]) == []
+
+
+def test_list_pages_with_the_before_cursor(world: World) -> None:
+    made = [world.record(at=_hours(h % 3)) for h in range(7)]  # ties on taken_at
+    newest_first = sorted(made, key=lambda r: (r.taken_at, r.id), reverse=True)
+    seen: list[int] = []
+    before: SnapshotCursor | None = None
+    while True:
+        page = world.repo().list_for_domain(world.domains["a1"], limit=2, before=before)
+        seen += [r.id for r in page]
+        if len(page) < 2:
+            break
+        before = SnapshotCursor.after(page[-1])
+    assert seen == [r.id for r in newest_first]
+    last = SnapshotCursor.after(newest_first[-1])
+    assert world.repo().list_for_domain(world.domains["a1"], before=last) == []
+
+
+@pytest.mark.parametrize(
+    "before",
+    [
+        "x",
+        (T0, 1),
+        SnapshotCursor(datetime(2026, 11, 17), 1),  # naive
+        SnapshotCursor(T0, "1"),  # type: ignore[arg-type]
+        SnapshotCursor(T0, True),
+    ],
+    ids=repr,
+)
+def test_list_rejects_a_malformed_before_cursor(world: World, before: Any) -> None:
+    with pytest.raises(DnsSnapshotInvalid):
+        world.repo().list_for_domain(world.domains["a1"], before=before)
+
+
+def test_a_before_cursor_from_another_tenant_leaks_nothing(world: World) -> None:
+    for h in range(3):
+        world.record("a1", "a", at=_hours(h))
+        world.record("b1", "b", at=_hours(h))
+    [top] = world.repo("a").list_for_domain(world.domains["a1"], limit=1)
+    cursor = SnapshotCursor.after(top)
+    assert world.repo("b").list_for_domain(world.domains["a1"], before=cursor) == []
+    own = world.repo("b").list_for_domain(world.domains["b1"], before=cursor)
+    assert own and {r.domain_id for r in own} == {world.domains["b1"]}
 
 
 @pytest.mark.parametrize("limit", [0, -1, MAX_LIMIT + 1, True, 1.5, "5", None])
