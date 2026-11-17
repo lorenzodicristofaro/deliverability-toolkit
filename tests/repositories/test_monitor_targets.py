@@ -5,7 +5,9 @@ is built by Alembic. No network.
 """
 
 import dataclasses
+import threading
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta, timezone
 from typing import Any
@@ -465,6 +467,109 @@ def test_due_targets_rejects_bad_now(world: World, now: Any) -> None:
         _scheduler(world).due_targets(now, 10)
 
 
-def test_due_targets_is_the_only_public_cross_tenant_method() -> None:
+def test_due_targets_and_claim_are_the_only_public_cross_tenant_methods() -> None:
     public = {n for n in vars(MonitorSchedulerRepository) if not n.startswith("_")}
-    assert public == {"due_targets"}
+    assert public == {"due_targets", "claim"}
+
+
+# --- claim (M7-09) -----------------------------------------------------------------------------
+
+LATER = NOW + timedelta(hours=1)
+
+
+def _next_run(world: World, target_id: int) -> datetime:
+    world.session.expire_all()
+    rec = world.repo("a").get(target_id) or world.repo("b").get(target_id)
+    assert rec is not None
+    return rec.next_run_at
+
+
+def test_claim_moves_next_run_once(world: World) -> None:
+    rec = world.create("b1", tenant="b")
+    (due,) = _scheduler(world).due_targets(NOW, 10)
+    assert _scheduler(world).claim(due.id, due.next_run_at, LATER) is True
+    assert _next_run(world, rec.id) == LATER
+    # A second claim with the value read before the first one loses.
+    assert _scheduler(world).claim(due.id, due.next_run_at, LATER + timedelta(hours=1)) is False
+    assert _next_run(world, rec.id) == LATER
+    assert _scheduler(world).due_targets(NOW, 10) == []
+
+
+def test_claim_changes_nothing_else(world: World) -> None:
+    rec = world.create("a1", check_ids=["spf"], interval_seconds=21600)
+    assert _scheduler(world).claim(rec.id, rec.next_run_at, LATER)
+    world.session.expire_all()
+    after = world.repo().get(rec.id)
+    assert after is not None
+    assert (after.check_ids, after.interval_seconds, after.enabled, after.domain_id) == (
+        rec.check_ids,
+        rec.interval_seconds,
+        rec.enabled,
+        rec.domain_id,
+    )
+    assert after.last_run_at is None and after.last_status is None
+
+
+def test_claim_accepts_other_offsets(world: World) -> None:
+    rec = world.create("a1")
+    plus2 = timezone(timedelta(hours=2))
+    assert _scheduler(world).claim(rec.id, NOW.astimezone(plus2), LATER.astimezone(plus2))
+    assert _next_run(world, rec.id) == LATER
+
+
+def test_claim_loses_on_disabled_deleted_or_moved_targets(world: World) -> None:
+    disabled = world.create("a1", enabled=False)
+    assert _scheduler(world).claim(disabled.id, NOW, LATER) is False
+    moved = world.create("a2")
+    world.repo().update(moved.id, next_run_at=NOW + timedelta(minutes=5))
+    assert _scheduler(world).claim(moved.id, NOW, LATER) is False
+    gone = world.create("a3")
+    world.repo().delete(gone.id)
+    assert _scheduler(world).claim(gone.id, NOW, LATER) is False
+
+
+@pytest.mark.parametrize("target_id", MALFORMED_IDS)
+def test_claim_malformed_id_is_a_miss(world: World, target_id: Any) -> None:
+    world.create("a1")
+    assert _scheduler(world).claim(target_id, NOW, LATER) is False
+
+
+@pytest.mark.parametrize("bad", [None, "2026-11-17", datetime(2026, 11, 17), 0])
+def test_claim_rejects_naive_or_bad_datetimes(world: World, bad: Any) -> None:
+    rec = world.create("a1")
+    with pytest.raises(MonitorTargetInvalid):
+        _scheduler(world).claim(rec.id, bad, LATER)
+    with pytest.raises(MonitorTargetInvalid):
+        _scheduler(world).claim(rec.id, NOW, bad)
+    assert _next_run(world, rec.id) == NOW
+
+
+def test_concurrent_claims_have_exactly_one_winner(world: World, engine: Engine) -> None:
+    """Two schedulers (own sessions, own connections) read the same due target, then claim it
+    at the same time from two threads: exactly one UPDATE wins."""
+    rec = world.create("a1")
+    world.session.commit()
+    factory = create_session_factory(engine)
+    sessions = [factory(), factory()]
+    try:
+        dues = [MonitorSchedulerRepository(s).due_targets(NOW, 10) for s in sessions]
+        for s in sessions:
+            s.commit()  # the reads are done; each claim runs in its own transaction
+        assert [d[0].id for d in dues] == [rec.id, rec.id]
+        barrier = threading.Barrier(2)
+
+        def claim(i: int) -> bool:
+            barrier.wait(timeout=10)
+            won = MonitorSchedulerRepository(sessions[i]).claim(
+                rec.id, dues[i][0].next_run_at, LATER + timedelta(minutes=i)
+            )
+            sessions[i].commit()
+            return won
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(pool.map(claim, [0, 1]))
+    finally:
+        for s in sessions:
+            s.close()
+    assert sorted(results) == [False, True]
+    assert _next_run(world, rec.id) == LATER + timedelta(minutes=results.index(True))

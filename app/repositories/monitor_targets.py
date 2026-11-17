@@ -10,12 +10,16 @@ the composite FK (domain_id, tenant_id) -> domains(id, tenant_id) makes a cross-
 impossible in the database too. Not built on `TenantScopedRepository` because its generic
 `add(obj)` / `update(id, values)` would bypass the validation below.
 
-`MonitorSchedulerRepository` holds `due_targets(now, limit)`, the ONLY cross-tenant method in
-this module and the only reader of monitor targets without a `TenantContext`. It is the system
-entry point of the scheduler (M7-09), like the `Global*` repositories for instance-level data:
-not part of `repo_for`, takes no tenant or domain from its caller, is read-only, and returns
-`DueTarget`s carrying `tenant_id` so the caller builds a `TenantContext` for the run and does
-every further read or write (including `last_run_at`/`next_run_at`) through the tenant repository.
+`MonitorSchedulerRepository` holds the ONLY cross-tenant methods of this module, the system entry
+point of the scheduler (M7-09), like the `Global*` repositories for instance-level data: not part
+of `repo_for`, never given a tenant or domain by its caller.
+- `due_targets(now, limit)`: read-only; returns `DueTarget`s carrying `tenant_id` so the caller
+  builds a `TenantContext` for the run and does every further read or write of tenant data
+  (including `last_run_at`/`last_status`) through the tenant repository.
+- `claim(target_id, expected_next_run_at, new_next_run_at)`: the one system write. A single
+  conditional UPDATE of `next_run_at` on a target id the scheduler got from `due_targets`; it only
+  succeeds while the row is enabled and still has the `next_run_at` that was read, so of several
+  schedulers (or replicas) that read the same due target exactly one wins. It writes nothing else.
 
 Validation before the database (same outcome on SQLite and PostgreSQL), raising
 `MonitorTargetInvalid` with the field and a stable reason, never the value:
@@ -35,9 +39,9 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any, Final
+from typing import Any, Final, cast
 
-from sqlalchemy import ColumnElement, Select, select
+from sqlalchemy import ColumnElement, CursorResult, Select, select, update
 from sqlalchemy.orm import Session
 
 from app.checks.registry import load_builtin_checks
@@ -303,7 +307,8 @@ class MonitorTargetRepository:
 class MonitorSchedulerRepository:
     """System entry point of the scheduler (M7-09). Not part of `repo_for`.
 
-    `due_targets` is the only cross-tenant method for monitor targets (see the module docstring).
+    `due_targets` and `claim` are the only cross-tenant methods for monitor targets (see the
+    module docstring).
     """
 
     __slots__ = ("_session",)
@@ -334,3 +339,29 @@ class MonitorSchedulerRepository:
             )
             for r in self._session.scalars(stmt)
         ]
+
+    def claim(
+        self, target_id: object, expected_next_run_at: object, new_next_run_at: object
+    ) -> bool:
+        """Move an enabled target's `next_run_at` from `expected_next_run_at` (the value
+        `due_targets` returned) to `new_next_run_at` in one conditional UPDATE. True only for the
+        caller whose UPDATE changed the row; False if another claim got there first, the target
+        was disabled, deleted or rescheduled meanwhile, or the id is malformed. Datetimes must be
+        timezone-aware. Flushed, not committed: commit right away so other schedulers see it."""
+        expected = _aware(expected_next_run_at, "expected_next_run_at")
+        new = _aware(new_next_run_at, "new_next_run_at")
+        tid = coerce_id(target_id)
+        if tid is None:
+            return False
+        stmt = (
+            update(MonitorTarget)
+            .where(
+                MonitorTarget.id == tid,
+                MonitorTarget.next_run_at == expected,
+                MonitorTarget.enabled.is_(True),
+            )
+            .values(next_run_at=new)
+            .execution_options(synchronize_session=False)
+        )
+        result = self._session.execute(stmt)
+        return int(cast(CursorResult[Any], result).rowcount) == 1
