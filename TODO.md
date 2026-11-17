@@ -291,13 +291,17 @@ Tickets (docs/tickets/M7-*.md, split 2026-11-13; model in brackets):
 - [x] M7-06 monitor_targets model, migration, repository (sonnet)
 - [x] M7-07 check_runs history model, migration, retention (sonnet; depends M7-06)
   - Status: done (4628d94, QA APPROVE round 2; round 1: check_id width 96, ARCHITECTURE section 5 reconciled, byte cap on stored JSON, fixed by Opus).
-  - [ ] Follow-up (low): .env.example lacks CHECK_RUN_RETENTION_DAYS (default 90, 1..3650); see also the ENCRYPTION_KEY .env.example follow-up under M7-14b
+  - [x] Follow-up (low, done in M7-09): .env.example lacks CHECK_RUN_RETENTION_DAYS (default 90, 1..3650); see also the ENCRYPTION_KEY .env.example follow-up under M7-14b
 - [x] M7-08 DNS snapshots + diff (sonnet; depends M7-06)
   - Status: done (05cd067, QA APPROVE round 2; round 1 findings fixed by Opus: false NUL rejection of literal `\u0000` TXT, quoted TXT unquoted, whitespace/control folding hid NBSP-broken SPF, changes across an error snapshot lost).
-  - [ ] Follow-up (low): .env.example also lacks DNS_SNAPSHOT_HEARTBEAT_HOURS (default 24, 1..720) and DNS_SNAPSHOT_RETENTION_DAYS (default 365, 1..3650); add together with the CHECK_RUN_RETENTION_DAYS item above
+  - [x] Follow-up (low, done in M7-09): .env.example also lacks DNS_SNAPSHOT_HEARTBEAT_HOURS (default 24, 1..720) and DNS_SNAPSHOT_RETENTION_DAYS (default 365, 1..3650); add together with the CHECK_RUN_RETENTION_DAYS item above
   - [ ] Follow-up (low): DMARC tag case-sensitivity unverified; dns_diff keeps DMARC case. Verify against RFC 7489 and decide on folding
   - [ ] Follow-up (low): SPF lowercasing hides a %{l} -> %{L} macro change (documented limitation)
-- [ ] M7-09 scheduler core: rate limits, jitter, concurrency, session purge (sonnet; depends M7-06, M7-07)
+- [x] M7-09 scheduler core: rate limits, jitter, concurrency, session purge (sonnet; depends M7-06, M7-07)
+  - Status: done (5f2442c, QA APPROVE round 1; Opus coder, Opus QA).
+  - [ ] Follow-up (low): `claim()` compares next_run_at by equality and assumes SQLAlchemy-written timestamps; rows written externally on SQLite in another format would never be claimed (add a comment)
+  - [ ] Follow-up (low): rate-limited targets are rescheduled to the same instant without jitter; under sustained overload fairness favours low ids
+  - [ ] Follow-up (low): TestClient with default ROLE=all starts real APScheduler timers (first tick after 30 s); consider ROLE=web in test settings
 - [ ] M7-10 scheduled run executor + change detection (sonnet; depends M7-05, M7-07, M7-08, M7-09)
 - [ ] M7-11 monitor target API + permissions (opus; depends M7-06)
 - [ ] M7-12 history and snapshot read API (sonnet; depends M7-07, M7-08, M7-11)
@@ -308,7 +312,7 @@ Tickets (docs/tickets/M7-*.md, split 2026-11-13; model in brackets):
   - [ ] Follow-up (low): app/main.py `log_secrets` masks ENCRYPTION_KEY only as the whole string; with several comma-separated keys each key should be masked separately
   - [ ] Follow-up (low): `get_cipher()` in app/core/secrets_crypto.py is cached with functools.cache; when M7-15 adds callers, add a shared conftest fixture that clears the cache (today only tests/core/test_secrets_crypto.py does)
   - [ ] Follow-up (low): no command yet to re-encrypt stored secrets after key rotation (docs/SETUP.md section 10 says it comes with M7-15)
-  - [ ] Follow-up (low): .env.example has a bare `ENCRYPTION_KEY=` with no hint that it must be a Fernet key (comma-separated for rotation)
+  - [x] Follow-up (low, done in M7-09): .env.example has a bare `ENCRYPTION_KEY=` with no hint that it must be a Fernet key (comma-separated for rotation)
 - [ ] M7-15 alert channel config, encrypted secrets, dispatcher (opus; depends M7-14, M7-14b, M7-11; alert.manage = owner, admin)
 - [ ] M7-16 alert channel email (sonnet; depends M7-15)
 - [ ] M7-17 alert channel generic webhook (sonnet; depends M7-15, M7-01)
