@@ -64,6 +64,7 @@ ROLE_EXPECTED: dict[str, dict[Action, set[str]]] = {
         ACT.RULES_MANAGE: OWN_RULES,
         ACT.MONITOR_READ: DOMAIN_ALL,
         ACT.MONITOR_MANAGE: DOMAIN_ALL,
+        ACT.DOMAIN_VERIFY: DOMAIN_ALL,
     },
     "admin": {
         ACT.TENANT_READ: TENANT_LEVEL,
@@ -81,6 +82,7 @@ ROLE_EXPECTED: dict[str, dict[Action, set[str]]] = {
         ACT.RULES_MANAGE: OWN_RULES,
         ACT.MONITOR_READ: DOMAIN_ALL,
         ACT.MONITOR_MANAGE: DOMAIN_ALL,
+        ACT.DOMAIN_VERIFY: DOMAIN_ALL,
     },
     "analyst": {
         ACT.TENANT_READ: TENANT_LEVEL,
@@ -152,8 +154,8 @@ MATRIX = [
 
 
 def test_matrix_size() -> None:
-    # 5 role kinds x admin flag x active flag x 17 actions x 9 situations.
-    assert len(MATRIX) == 5 * 2 * 2 * 17 * 9 == 3060
+    # 5 role kinds x admin flag x active flag x 18 actions x 9 situations.
+    assert len(MATRIX) == 5 * 2 * 2 * 18 * 9 == 3240
 
 
 @pytest.mark.parametrize(("role", "admin", "active", "action", "situation"), MATRIX)
@@ -190,6 +192,7 @@ def test_action_list_is_the_m1_set_plus_later_milestone_actions() -> None:
         "rules.manage",  # M5-04
         "monitor.read",  # M7-11
         "monitor.manage",  # M7-11
+        "domain.verify",  # M7-21a
     }
 
 
@@ -1223,3 +1226,70 @@ def test_monitor_actions_need_a_domain_resource(action: Action) -> None:
     assert can(p, action, TenantResource(A)) is False
     assert can(p, action, InstanceResource()) is False
     assert can(None, action, DomainResource(A, ASSIGNED)) is False
+
+
+# --- M7-21a: domain.verify ----------------------------------------------------------------------
+# Domain-level, owner/admin on every domain of the active tenant; never analyst or client viewer
+# (no toggle or DomainAccess grant gives it); deniable per user by its own toggle, independent of
+# domain.update; the instance admin flag adds nothing.
+
+VERIFY_TOGGLES: dict[str, dict[str, Any]] = {
+    "none": {},
+    "true": {"domain.verify": True},
+    "false": {"domain.verify": False},
+    "none_value": {"domain.verify": None},
+    "str_true": {"domain.verify": "true"},
+    "one": {"domain.verify": 1},
+    "all_true": _ALL_TOGGLES_TRUE,
+    "unrelated_false": {"domain.update": False, "check.run": False, "domain.read": False},
+}
+
+
+def _verify_expected(role: str, toggle: str, state: str, resource: str) -> bool:
+    if state not in {"member", "instance_admin_member"}:
+        return False
+    if toggle in {"false", "none_value", "str_true", "one"}:
+        return False
+    return role in {"owner", "admin"} and resource in {"assigned", "unassigned"}
+
+
+@pytest.mark.parametrize(
+    ("role", "toggle", "state", "resource"),
+    [
+        pytest.param(r, t, st, res, id=f"{r}-{t}-{st}-{res}")
+        for r, t, st, res in itertools.product(
+            CHECK_ROLES, VERIFY_TOGGLES, CHECK_STATES, CHECK_RESOURCES
+        )
+    ],
+)
+def test_domain_verify_roles_x_toggles_x_states(
+    role: str, toggle: str, state: str, resource: str
+) -> None:
+    p = _check_principal(role, VERIFY_TOGGLES[toggle], state)
+    expected = _verify_expected(role, toggle, state, resource)
+    res = CHECK_RESOURCES[resource]
+    assert can(p, Action.DOMAIN_VERIFY, res) is expected
+    assert can(p, "domain.verify", res) is expected
+    if not expected:
+        with pytest.raises(PermissionDenied):
+            require(p, Action.DOMAIN_VERIFY, res)
+
+
+def test_domain_verify_toggle_is_independent_of_domain_update() -> None:
+    res = DomainResource(A, ASSIGNED)
+    p = _p(memberships=(_grant("owner", toggles={"domain.verify": False}),))
+    assert can(p, Action.DOMAIN_VERIFY, res) is False
+    assert can(p, Action.DOMAIN_UPDATE, res) is True
+    q = _p(memberships=(_grant("admin", toggles={"domain.update": False}),))
+    assert can(q, Action.DOMAIN_VERIFY, res) is True
+
+
+def test_domain_verify_needs_a_domain_resource_and_does_not_leak_across_tenants() -> None:
+    p = _p(memberships=(_grant("owner"),))
+    assert can(p, Action.DOMAIN_VERIFY, TenantResource(A)) is False
+    assert can(p, Action.DOMAIN_VERIFY, InstanceResource()) is False
+    assert can(None, Action.DOMAIN_VERIFY, DomainResource(A, ASSIGNED)) is False
+    # Owner in B gives nothing in A, where the user is only a client viewer.
+    q = _p(memberships=(_grant("client_viewer"), _grant("owner", B)))
+    assert can(q, Action.DOMAIN_VERIFY, DomainResource(A, ASSIGNED)) is False
+    assert can(q, Action.DOMAIN_VERIFY, DomainResource(B, ASSIGNED)) is False

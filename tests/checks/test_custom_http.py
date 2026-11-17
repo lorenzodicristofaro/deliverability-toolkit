@@ -374,6 +374,7 @@ async def _run(
         "scope": "tenant",
         "fetch_limits": LIMITS,
         "fetcher": used,
+        "verified_domain": domain,  # M7-21a: the gate is tested on its own below
         **overrides,
     }
     ctx = CheckContext(resolver=hosts(**(resolver or RESOLVER)), clock=lambda: NOW)
@@ -906,6 +907,7 @@ async def test_every_http_finding_renders_with_its_params(lang: str) -> None:
         await _run(_http(body_pattern="z"), reply(body=b"a")),
         await _run(_http(header={"name": "etag"}), reply()),
         await _run(_http(), reply(), fetch_limits=None),
+        await _run(_http(), reply(), verified_domain=None),
     ]
     seen = {r.findings[0].code for r, _ in cases}
     assert seen == set(CODES) - {"CUSTOM_CHECK_FAILED"}
@@ -913,3 +915,63 @@ async def test_every_http_finding_renders_with_its_params(lang: str) -> None:
         item = result.findings[0]
         assert t(item.title_key, lang, **item.params)
         assert t(item.detail_key, lang, **item.params)
+
+
+# --- ownership gate (M7-21a) ---------------------------------------------------------------------
+
+# (case, target domain, verified_domain, other overrides, fetched)
+GATE = [
+    ("none", "example.com", None, {}, False),
+    ("other domain", "example.com", "example.org", {}, False),
+    ("parent of the target", "www.example.com", "example.com", {}, False),
+    ("child of the target", "example.com", "www.example.com", {}, False),
+    ("suffix lookalike", "badexample.com", "example.com", {}, False),
+    ("empty", "example.com", "", {}, False),
+    ("malformed", "example.com", "exa mple..com", {}, False),
+    ("not a string", "example.com", 123, {}, False),
+    ("before the limits check", "example.com", None, {"fetch_limits": None}, False),
+    ("before the run budget", "example.com", None, {"budget": RunBudget(0.0)}, False),
+    ("before url rendering", "-bad-.example.com", None, {}, False),
+    ("same domain", "example.com", "example.com", {}, True),
+    ("case and trailing dot", "example.com", "EXAMPLE.com.", {}, True),
+]
+
+
+@pytest.mark.parametrize(
+    ("target", "verified", "overrides", "fetched"),
+    [pytest.param(d, v, o, f, id=c) for c, d, v, o, f in GATE],
+)
+async def test_http_fetch_needs_the_verified_domain(
+    target: str, verified: object, overrides: dict[str, Any], fetched: bool
+) -> None:
+    fetcher = Fetcher(Transport(reply()))
+    result, _ = await _run(
+        _http(),
+        fetcher=fetcher,
+        domain=target,
+        resolver={target: PUBLIC},
+        verified_domain=verified,
+        **overrides,
+    )
+    if fetched:
+        assert fetcher.calls and result.status == "ok"
+        return
+    assert fetcher.calls == []  # nothing was requested, not even DNS for the host
+    assert result.status == "error"
+    (item,) = result.findings
+    assert item.code == "CUSTOM_HTTP_DOMAIN_UNVERIFIED"
+    assert dict(item.params) == {"check_key": "acme.http", "reason": "domain_unverified"}
+    assert result.data["reason"] == "domain_unverified"
+
+
+async def test_dns_kinds_ignore_the_gate() -> None:
+    check = CustomDnsCheck(
+        check_key="dns.k",
+        kind="dns_exists",
+        definition={"name": "{domain}", "rrtype": "TXT"},
+        severity="low",
+        remediation_text=dict(TEXT),
+    )
+    ctx = CheckContext(resolver=hosts(**RESOLVER), clock=lambda: NOW)
+    result = await check.run(ctx, Target(domain="example.com"))
+    assert "CUSTOM_HTTP_DOMAIN_UNVERIFIED" not in [f.code for f in result.findings]

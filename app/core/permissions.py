@@ -18,9 +18,10 @@ Rules (SPEC section 3, ARCHITECTURE section 4 items 3 and 6):
     owner, admin, analyst: dns.tools, check.run, message.analyze, content.analyze, rules.read
     owner, admin, analyst: monitor.read, monitor.manage (all domains of the tenant)
     owner, admin:          rules.manage (scope `tenant`, own active tenant only)
+    owner, admin:          domain.verify (all domains of the tenant)
     client_viewer:         check.run, monitor.read (assigned domains only); never dns.tools,
-                           message.analyze, content.analyze, rules.read, rules.manage or
-                           monitor.manage
+                           message.analyze, content.analyze, rules.read, rules.manage,
+                           monitor.manage or domain.verify
     instance admin flag:   instance.manage, rules.manage (scope `global` only), whatever the
                            tenant role (or none)
 - Per-user feature toggles can only deny: a toggle keyed by the action value that is not exactly
@@ -92,6 +93,13 @@ class Action(enum.StrEnum):
     # taking away interactive checks, and vice versa.
     MONITOR_READ = "monitor.read"
     MONITOR_MANAGE = "monitor.manage"
+    # Prove ownership of one tenant domain (M7-21a, SPEC section 3): start a DNS TXT challenge
+    # and check it. Domain-level, owner/admin only: a verified domain unlocks checks that make the
+    # server contact the domain's hosts (http_fetch), so the analyst, who may not change domains,
+    # does not get it, and client viewers never do (no toggle or DomainAccess grant gives it).
+    # Deniable per user with `{"domain.verify": false}`, independent of `domain.update`. Reading
+    # the verification status is `domain.read`.
+    DOMAIN_VERIFY = "domain.verify"
 
 
 # --- Resources -------------------------------------------------------------------------------
@@ -142,6 +150,7 @@ _RESOURCE_KIND: Mapping[Action, type[Resource]] = MappingProxyType(
         Action.DOMAIN_READ: DomainResource,
         Action.DOMAIN_UPDATE: DomainResource,
         Action.DOMAIN_DELETE: DomainResource,
+        Action.DOMAIN_VERIFY: DomainResource,
         Action.DNS_TOOLS: TenantResource,
         Action.CHECK_RUN: DomainResource,
         Action.MESSAGE_ANALYZE: TenantResource,
@@ -181,6 +190,7 @@ ROLE_ACTIONS: Mapping[MembershipRole, frozenset[Action]] = MappingProxyType(
                 Action.CONTENT_ANALYZE,
                 Action.RULES_READ,
                 Action.RULES_MANAGE,  # tenant scope only; global goes through the instance flag
+                Action.DOMAIN_VERIFY,
             }
         )
         | _DOMAIN_ALL
@@ -196,6 +206,7 @@ ROLE_ACTIONS: Mapping[MembershipRole, frozenset[Action]] = MappingProxyType(
                 Action.CONTENT_ANALYZE,
                 Action.RULES_READ,
                 Action.RULES_MANAGE,  # tenant scope only; global goes through the instance flag
+                Action.DOMAIN_VERIFY,
             }
         )
         | _DOMAIN_ALL

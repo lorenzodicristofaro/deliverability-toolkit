@@ -13,6 +13,10 @@ Routes (all POST, so the CSRF rules are those of `/api/v1/domains`):
 - `/checks/free`: body `{"name": ..., "ids": [...]}`, no tenant data. `name` may be an IP literal
   only when `ids` is exactly the DNSBL check (M7-05); non-public IPs are never queried.
 
+Ownership gate (M7-21a): in `all`, the custom http_fetch checks get the domain as verified only
+when its stored status is `verified` (read with the custom checks, `run_checks_for`); otherwise
+each is `error` (`CUSTOM_HTTP_DOMAIN_UNVERIFIED`) and nothing is fetched. DNS checks are unchanged.
+
 DNSBL enablement (M7-05c): whenever `dnsbl` runs (by id or in `all`, domain or free route), the
 instance's enabled list ids are read for this request (`app.services.dnsbl_admin.enabled_list_ids`,
 instance-level, no tenant data) and handed to the check; a list left disabled stays
@@ -219,7 +223,8 @@ def _prepare_all(
     try:
         registry = registry_for(resolve_probe_selectors(access.ctx, db))
         registry = with_dnsbl_enabled(registry, enabled_list_ids(db))
-        custom = run_checks_for(access.ctx, db, fetch_limits)
+        # http_fetch checks fetch only if this domain is verified (M7-21a).
+        custom = run_checks_for(access.ctx, db, fetch_limits, domain_id=access.view.id)
         esp = resolve_esp_run(access.ctx, db, access.view.id, profiles)
         registry = registry.with_checks([esp.check])
     finally:

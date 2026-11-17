@@ -321,6 +321,17 @@ guarded client: client failures are `error` (`CUSTOM_HTTP_BLOCKED`, `CUSTOM_HTTP
 `CUSTOM_HTTP_TOO_LARGE`), unmet requirements are findings with the configured severity
 (`CUSTOM_HTTP_STATUS_MISMATCH`, `CUSTOM_HTTP_BODY_MISMATCH`, `CUSTOM_HTTP_HEADER_MISMATCH`).
 
+`http_fetch` needs a verified domain (M7-21a, SPEC section 3). On a domain whose ownership is not
+verified, every `http_fetch` check is `error` with `CUSTOM_HTTP_DOMAIN_UNVERIFIED`
+(`reason: domain_unverified`), decided before any URL is built or any request is made, on every
+run path: the `all` domain run, the dry run (`POST /api/v1/custom-checks/test`) and any future
+scheduled run (monitor targets accept built-in ids only today; a scheduled path must build custom
+checks with `run_checks_for(..., domain_id=...)`, which reads the stored status). DNS kinds are
+unaffected. Verification: a TXT record at `_dt-verify.<domain>` with value `dt-verify=<token>`
+(a project choice), started and checked from the domain page or
+`/api/v1/domains/{id}/verification` (`domain.verify`: owner, admin). Renaming a domain resets it
+to unverified and drops any pending token.
+
 ## Surfaces
 
 All three call `app/services/checks.py` and print the same `CheckResult` JSON.

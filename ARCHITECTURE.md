@@ -133,6 +133,15 @@ Isolation strategy (defense in depth):
 `alerts`, `api_keys`, `share_links`, `audit_log`, `settings`.
 The `esp_profiles` table is deferred beyond M6: M6 stores only `domain_esps`, profiles come
 from `profiles/esp/*.yaml`.
+`domains` ownership verification (M7-21a, migration 0015): `verification_status`
+unverified|verified (NOT NULL, default unverified; domains existing before 0015 are unverified),
+`verified_at`, `verification_method` (`dns_txt`; `email` accepted for M7-21b, not written yet),
+`verification_token_hash` (SHA-256 hex of the pending token; the token itself is never stored)
+and `verification_token_expires_at` (`DOMAIN_VERIFY_TOKEN_TTL_HOURS`). The CHECKs are
+single-column so SQLite adds them with ADD COLUMN and never rebuilds `domains`. A rename to a
+different name resets all five (unverified, no token) in the rename transaction. Verified is
+written by one conditional UPDATE that holds only while the name and token checked are still
+stored (`DomainRepository.mark_verified`). Rules: `app/services/domain_verification.py`.
 `domain_esps` (M6-02): one row per (domain, ESP), composite FK (domain_id, tenant_id) to
 `domains` like `domain_access`, cascade from domain and tenant, at most 10 per domain
 (soft cap, checked by count). `esp_id` is a slug with no FK; the service checks it names a
@@ -266,6 +275,17 @@ newest snapshot of each domain is never pruned (it is the baseline of the next d
   DomainAccess: `app/services/monitors.py` decides `domain.read` + `monitor.read` (and
   `monitor.manage` for writes) with `can()` before touching it, and filters the tenant list per
   domain. A tenant holds at most `MONITOR_MAX_TARGETS_PER_TENANT` targets (section 11).
+- Domain ownership verification (M7-21a, SPEC section 3): `domain.verify` (start a DNS TXT
+  challenge, check it) is domain-level, owner and admin on every domain of the tenant, deniable per
+  user by `{"domain.verify": false}` and independent of `domain.update`; never analyst or client
+  viewer. Reading the status is `domain.read`. The check is one TXT lookup at `_dt-verify.<domain>`
+  through the checks' resolver path (`fetch_txt`: strings of a record joined, records never
+  merged); a record exactly `dt-verify=<token>` (hash compared with `hmac.compare_digest`) verifies,
+  NXDOMAIN/NODATA/no match leave the state unchanged, any lookup that did not complete is an `error`
+  outcome and never verifies. No transaction is open during the lookup. `http_fetch` custom checks
+  run only on verified domains (`CUSTOM_HTTP_DOMAIN_UNVERIFIED` otherwise, before any fetch); the
+  gate lives in the evaluator and takes the verified name from `run_checks_for(domain_id=...)` or the
+  dry run's domain, so a scheduled path that ever runs custom checks must build them the same way.
 - DNSBL lookups must detect "refused/blocked" return codes (e.g. 127.255.255.x
   conventions) and report them as `error`, not `listed`.
 
@@ -444,6 +464,8 @@ per key and per process), `MAINTENANCE_INTERVAL_MINUTES` (60, 5..1440). Defaults
 choices, not DNSBL operators' published limits.
 `MONITOR_MAX_TARGETS_PER_TENANT` (M7-11; default 100, 1..1000, out of range fails startup): monitor
 targets one tenant may hold; creating one more is refused (422). Lowering it removes nothing.
+`DOMAIN_VERIFY_TOKEN_TTL_HOURS` (M7-21a; default 72, 1..720, out of range fails startup): lifetime
+of a domain verification token; an expired token never verifies and the owner starts again.
 
 ## 12. Observability
 

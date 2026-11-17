@@ -29,6 +29,11 @@ decision happens before the evaluator or any DNS query or HTTP fetch.
 operator settings (`app.net.limits_from_settings`), passed by the router; an `http_fetch` check
 built without them reports `error` instead of fetching.
 
+Ownership gate (M7-21a): `http_fetch` checks get `verified_domain` only for a domain whose stored
+status is `verified`: `run_checks_for` reads it through the tenant repository from `domain_id`
+(no id: no verified domain), `prepare_test` from the domain the caller may run checks on. An
+unverified domain makes every http_fetch check `error` (`domain_unverified`) before any fetch.
+
 Domain runs (`run_checks_for`): the enabled global rows plus the context tenant's enabled rows,
 read only through the tenant repository, so another tenant's checks never run on this tenant's
 domains. All of them share one `RunBudget`. At most MAX_RUN_CUSTOM_CHECKS query DNS; any further
@@ -157,7 +162,10 @@ class DryRun:
 
 
 def _record_check(
-    record: CustomCheckRecord, budget: RunBudget, fetch_limits: FetchLimits | None
+    record: CustomCheckRecord,
+    budget: RunBudget,
+    fetch_limits: FetchLimits | None,
+    verified_domain: str | None,
 ) -> CustomDnsCheck:
     return CustomDnsCheck(
         check_key=record.check_key,
@@ -169,14 +177,27 @@ def _record_check(
         scope=record.scope,
         budget=budget,
         fetch_limits=fetch_limits,
+        verified_domain=verified_domain,
     )
 
 
 def run_checks_for(
-    ctx: TenantContext, db: Session, fetch_limits: FetchLimits | None = None
+    ctx: TenantContext,
+    db: Session,
+    fetch_limits: FetchLimits | None = None,
+    *,
+    domain_id: int | None = None,
 ) -> list[CustomDnsCheck]:
-    """The custom checks of a domain run of `ctx`'s tenant, in id order (global and own rows)."""
-    store = repo_for(ctx, db).custom_checks
+    """The custom checks of a domain run of `ctx`'s tenant, in id order (global and own rows).
+    `domain_id` is the run's domain: its name is handed to the http_fetch checks only if it is
+    verified (M7-21a); without it no http_fetch check may fetch."""
+    repos = repo_for(ctx, db)
+    verified_domain: str | None = None
+    if domain_id is not None:
+        domain = repos.domains.get(domain_id)
+        if domain is not None and domain.verification_status == "verified":
+            verified_domain = domain.name
+    store = repos.custom_checks
     records: list[CustomCheckRecord] = []
     while True:
         page = store.list(enabled_only=True, limit=MAX_LIMIT, offset=len(records))
@@ -186,7 +207,9 @@ def run_checks_for(
     shared = RunBudget()
     spent = RunBudget(0.0)
     return [
-        _record_check(record, shared if n < MAX_RUN_CUSTOM_CHECKS else spent, fetch_limits)
+        _record_check(
+            record, shared if n < MAX_RUN_CUSTOM_CHECKS else spent, fetch_limits, verified_domain
+        )
         for n, record in enumerate(records)
     ]
 
@@ -341,8 +364,9 @@ class CustomChecksAdminService:
 
     # --- dry run ------------------------------------------------------------------------------
 
-    def _test_domain(self, value: object) -> tuple[int, int, str]:
-        """The visible domain the caller may run checks on (404 / 403 otherwise)."""
+    def _test_domain(self, value: object) -> tuple[int, int, str, bool]:
+        """The visible domain the caller may run checks on (404 / 403 otherwise), and whether
+        it is verified (M7-21a)."""
         assert self._ctx is not None  # check_test ran first
         domain_id = coerce_id(value)
         try:
@@ -352,7 +376,7 @@ class CustomChecksAdminService:
         resource = DomainResource(self._ctx.tenant_id, view.id)
         if not can(self._principal, Action.CHECK_RUN, resource):
             raise DomainRefused(403, "api.error.forbidden")
-        return self._ctx.tenant_id, view.id, view.name
+        return self._ctx.tenant_id, view.id, view.name, view.verified
 
     def prepare_test(
         self, data: Mapping[str, Any], fetch_limits: FetchLimits | None = None
@@ -361,7 +385,7 @@ class CustomChecksAdminService:
         self.check_test()
         if any(name not in TEST_FIELDS for name in data):
             raise CustomCheckFieldInvalid("body", "unknown_field")
-        tenant_id, domain_id, name = self._test_domain(data.get("domain_id"))
+        tenant_id, domain_id, name, verified = self._test_domain(data.get("domain_id"))
         kind, definition = data.get("kind"), data.get("definition")
         severity = data.get("severity", _DEFAULT_TEST_SEVERITY)
         remediation = data.get("remediation_text")
@@ -381,5 +405,6 @@ class CustomChecksAdminService:
             scope=RuleScope.TENANT.value,
             remediation_optional=True,
             fetch_limits=fetch_limits,
+            verified_domain=name if verified else None,
         )
         return DryRun(tenant_id, domain_id, name, check)

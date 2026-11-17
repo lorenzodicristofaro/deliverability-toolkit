@@ -699,7 +699,7 @@ async def test_result_ids_and_serialization() -> None:
 
 
 def test_codes_have_title_and_detail_only() -> None:
-    assert len(set(CODES)) == len(CODES) == 8
+    assert len(set(CODES)) == len(CODES) == 9
     for lang in ("en", "it"):
         data = json.loads((Path(LOCALES_DIR) / f"{lang}.json").read_text(encoding="utf-8"))
         for code in CODES:

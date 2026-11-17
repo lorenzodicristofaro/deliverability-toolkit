@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}{{ t("domain.verify.title") }} · {{ app_name }}{% endblock %}
+{% block content %}
+<p>{{ t("domain.verify.title") }}</p>
+<h1 data-testid="domain-name">{{ row.display_name }}</h1>
+<p>{{ t("domain.verify.instructions") }}</p>
+<dl data-testid="verify-record">
+  <dt>{{ t("domain.verify.record_type") }}</dt><dd><code>{{ started.record_type }}</code></dd>
+  <dt>{{ t("domain.verify.record_name") }}</dt><dd><code data-testid="verify-record-name">{{ started.record_name }}</code></dd>
+  <dt>{{ t("domain.verify.record_value") }}</dt><dd><code data-testid="verify-record-value">{{ started.record_value }}</code></dd>
+</dl>
+<p role="status"><strong data-testid="verify-shown-once">{{ t("domain.verify.token_shown_once") }}</strong></p>
+<p data-testid="verify-expires">{{ t("domain.verify.expires", date=started.state.token_expires_at.strftime("%Y-%m-%d %H:%M UTC")) }}</p>
+<form method="post" action="/domains/{{ row.id }}/verification/check">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <button type="submit" data-testid="verify-now">{{ t("domain.verify.now") }}</button>
+</form>
+<p><a href="/domains/{{ row.id }}">{{ t("domain.verify.back") }}</a></p>
+{% endblock %}

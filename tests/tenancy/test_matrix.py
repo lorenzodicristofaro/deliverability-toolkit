@@ -534,6 +534,15 @@ MATRIX: dict[tuple[str, str], Entry] = {
     ("GET", "/api/v1/domains/{domain_id}/history/snapshots/diff"): Entry(
         Kind.DOMAIN, not_found=_MONITOR_404
     ),
+    # Domain ownership verification (M7-21a, app.api.v1.domain_verification, app.web.domains):
+    # status needs `domain.read`, start/check `domain.verify` (owner/admin). Every role gets 404
+    # on a foreign or unassigned domain, before any token is issued or any DNS query; per role,
+    # toggle and CSRF: tests/api/test_domain_verification_api.py and tests/web/test_domains_ui.py.
+    ("GET", "/api/v1/domains/{domain_id}/verification"): Entry(Kind.DOMAIN),
+    ("POST", "/api/v1/domains/{domain_id}/verification"): Entry(Kind.DOMAIN),
+    ("POST", "/api/v1/domains/{domain_id}/verification/check"): Entry(Kind.DOMAIN),
+    ("POST", "/domains/{domain_id}/verification"): Entry(Kind.DOMAIN),
+    ("POST", "/domains/{domain_id}/verification/check"): Entry(Kind.DOMAIN),
 }
 
 # Public routes by (method, path): a new method on an exempt path is NOT exempt. Keep this

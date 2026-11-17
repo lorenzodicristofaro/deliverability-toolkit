@@ -11,6 +11,12 @@ Forms are urlencoded and parsed with `read_form` (no python-multipart). A field 
 repeated, over-long or contains control characters (NUL included) is refused here, before the
 service or the database, and is never echoed back. Templates autoescape everything.
 
+Ownership verification (M7-21a, `app.services.domain_verification`): the domain page shows the
+status badge to whoever sees the domain; owners/admins with `domain.verify` get the start and
+verify buttons (POST forms with the CSRF token). Starting renders the record to publish, token
+included, in that response only (never in a URL, a redirect or another page). Verify now renders
+the domain page with the outcome; a DNS failure shows the `error` badge and is never verified.
+
 Lookalikes: `mixed_script` is a minimal offline MIXED-SCRIPT HEURISTIC inspired by UTS #39
 section 5.2 ("Highly Restrictive"); it is NOT a conformant UTS #39 implementation (no confusable
 skeletons, no Script_Extensions data). The script of a letter is taken from the first word of
@@ -22,15 +28,27 @@ from __future__ import annotations
 
 import unicodedata
 from dataclasses import dataclass
+from datetime import timedelta
 from typing import Annotated, Final
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from starlette.concurrency import run_in_threadpool
 
+from app.api.v1.checks import ResolverDep
+from app.api.v1.domain_verification import verification_clock
 from app.core.domain_names import MAX_INPUT_LENGTH
 from app.core.permissions import Action, DomainResource, Principal, TenantResource, can
 from app.core.tenancy import TenantContext
 from app.repositories.base import parse_id
+from app.services.clock import Clock
+from app.services.domain_verification import (
+    DomainVerificationService,
+    VerificationState,
+    VerifyOutcome,
+    VerifyResult,
+    verify,
+)
 from app.services.domains import (
     DomainService,
     DomainServiceError,
@@ -39,7 +57,7 @@ from app.services.domains import (
     InvalidRequest,
     NotFound,
 )
-from app.web.deps import CurrentSession, DbDep, tenant_ctx
+from app.web.deps import CurrentSession, DbDep, SettingsDep, tenant_ctx
 from app.web.templating import payload_too_large, read_form, render
 
 router = APIRouter()
@@ -107,6 +125,7 @@ class DomainRow:
     can_rename: bool
     can_delete: bool
     can_check: bool = False
+    can_verify: bool = False
 
 
 def domain_row(view: DomainView, principal: Principal, tenant_id: int) -> DomainRow:
@@ -119,6 +138,7 @@ def domain_row(view: DomainView, principal: Principal, tenant_id: int) -> Domain
         can_rename=can(principal, Action.DOMAIN_UPDATE, resource),
         can_delete=can(principal, Action.DOMAIN_DELETE, resource),
         can_check=can(principal, Action.CHECK_RUN, resource),
+        can_verify=can(principal, Action.DOMAIN_VERIFY, resource),
     )
 
 
@@ -133,12 +153,22 @@ def can_create(principal: Principal, tenant_id: int) -> bool:
 class Web:
     service: DomainService
     ctx: TenantContext
+    verification: DomainVerificationService
 
 
 def _web(
-    db: DbDep, auth: CurrentSession, ctx: Annotated[TenantContext, Depends(tenant_ctx)]
+    db: DbDep,
+    auth: CurrentSession,
+    ctx: Annotated[TenantContext, Depends(tenant_ctx)],
+    settings: SettingsDep,
+    clock: Annotated[Clock, Depends(verification_clock)],
 ) -> Web:
-    return Web(DomainService(db, ctx, auth.principal), ctx)
+    ttl = timedelta(hours=settings.domain_verify_token_ttl_hours)
+    return Web(
+        DomainService(db, ctx, auth.principal),
+        ctx,
+        DomainVerificationService(db, ctx, auth.principal, clock, ttl),
+    )
 
 
 WebDep = Annotated[Web, Depends(_web)]
@@ -238,12 +268,17 @@ def _count_param(request: Request, name: str) -> str:
     return raw.lstrip("0") if raw.isascii() and raw.isdigit() and len(raw) <= 4 else ""
 
 
-@router.get("/domains/{domain_id}", include_in_schema=False)
-def domain_detail(request: Request, web: WebDep, domain_id: str) -> Response:
-    try:
-        row = _row(web, _domain_id(domain_id))
-    except DomainServiceError as exc:
-        return _denied(request, exc)
+@dataclass(frozen=True, slots=True)
+class _Detail:
+    row: DomainRow
+    access_count: int | None
+    verification: VerificationState
+
+
+def _detail(web: Web, domain_id: int | None) -> _Detail:
+    """Everything the domain page reads from the database (sync: run in a worker thread from
+    async routes)."""
+    row = _row(web, domain_id)
     access_count: int | None = None
     try:
         web.service.check_set_access(row.id)
@@ -251,15 +286,60 @@ def domain_detail(request: Request, web: WebDep, domain_id: str) -> Response:
         pass  # analysts and client viewers do not see who has access
     else:
         access_count = len(web.service.access_of(row.id).user_ids)
+    return _Detail(row, access_count, web.verification.status(row.id))
+
+
+def _detail_page(
+    request: Request, detail: _Detail, result: VerifyResult | None = None
+) -> HTMLResponse:
+    error = result is not None and result.outcome is VerifyOutcome.error
     return render(
         request,
         "domains/detail.html",
         logged_in=True,
-        row=row,
-        access_count=access_count,
+        row=detail.row,
+        access_count=detail.access_count,
+        verification=detail.verification,
+        verify_outcome=None if result is None else str(result.outcome),
+        verify_error=error,
+        dns_state=None if result is None else result.dns_state,
         esp_hosts_rewritten=_count_param(request, "esp_hosts"),
         esp_hosts_unmatched=_count_param(request, "esp_unmatched"),
     )
+
+
+@router.get("/domains/{domain_id}", include_in_schema=False)
+def domain_detail(request: Request, web: WebDep, domain_id: str) -> Response:
+    try:
+        detail = _detail(web, _domain_id(domain_id))
+    except DomainServiceError as exc:
+        return _denied(request, exc)
+    return _detail_page(request, detail)
+
+
+@router.post("/domains/{domain_id}/verification", include_in_schema=False)
+def start_verification(request: Request, web: WebDep, domain_id: str) -> Response:
+    """Issue a token and show the record to publish: the only page that ever shows the token."""
+    try:
+        row = _row(web, _domain_id(domain_id))
+        started = web.verification.start(row.id)
+    except DomainServiceError as exc:
+        return _denied(request, exc)
+    return render(request, "domains/verification.html", logged_in=True, row=row, started=started)
+
+
+@router.post("/domains/{domain_id}/verification/check", include_in_schema=False)
+async def check_verification(
+    request: Request, web: WebDep, resolver: ResolverDep, domain_id: str
+) -> Response:
+    target = _domain_id(domain_id)
+    try:
+        await run_in_threadpool(web.verification.check_verify, target)
+        result = await verify(web.verification, resolver, target)
+        detail = await run_in_threadpool(_detail, web, target)
+    except DomainServiceError as exc:
+        return _denied(request, exc)
+    return _detail_page(request, detail, result)
 
 
 @router.get("/domains/{domain_id}/rename", include_in_schema=False)

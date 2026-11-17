@@ -29,7 +29,7 @@ from app.core.config import Settings
 from app.core.db import create_db_engine, create_session_factory
 from app.core.i18n import t
 from app.main import create_app
-from app.models import CustomCheck, User
+from app.models import CustomCheck, Domain, User
 from app.net import FetchError, FetchLimits, FetchResult
 from app.services import custom_checks_admin as admin
 from tests.api.test_domains import KEY, World, _seed, call
@@ -416,9 +416,18 @@ def fake_fetch(monkeypatch: pytest.MonkeyPatch) -> FakeFetch:
     return fake
 
 
+def verify_domain(w: World, which: str = "assigned") -> None:
+    """Mark a domain verified straight in the database (M7-21a; the flow has its own tests)."""
+    domain = w.db.get(Domain, w.domains[which])
+    assert domain is not None
+    domain.verification_status = "verified"
+    w.db.commit()
+
+
 def test_http_fetch_dry_run_uses_the_guarded_client_with_operator_limits(
     rig: Rig, fake_fetch: FakeFetch
 ) -> None:
+    verify_domain(rig.world)
     body = dry(rig.world, kind="http_fetch", definition=HTTP_FETCH)
     response = call(rig.world, "analyst", "POST", TEST_URL, json=body)
     assert response.status_code == 200, response.text
@@ -433,6 +442,7 @@ def test_http_fetch_dry_run_uses_the_guarded_client_with_operator_limits(
 
 def test_http_fetch_in_a_domain_run(rig: Rig, fake_fetch: FakeFetch) -> None:
     w = rig.world
+    verify_domain(w)
     make(w, check_key="own.http", kind="http_fetch", definition=HTTP_FETCH)
     fake_fetch.status = 503
     result = run_all(w).json()[-1]
@@ -441,6 +451,40 @@ def test_http_fetch_in_a_domain_run(rig: Rig, fake_fetch: FakeFetch) -> None:
     ((url, limits),) = fake_fetch.calls
     assert url == f"https://{D}/.well-known/x"
     assert limits is not None and limits.allowed_ports == w.settings.outbound_http_ports()
+
+
+def _unverified(result: dict[str, Any]) -> None:
+    assert result["status"] == "error"
+    (item,) = result["findings"]
+    assert (item["code"], item["params"]["reason"]) == (
+        "CUSTOM_HTTP_DOMAIN_UNVERIFIED",
+        "domain_unverified",
+    )
+
+
+def test_http_fetch_dry_run_on_an_unverified_domain_fetches_nothing(
+    rig: Rig, fake_fetch: FakeFetch
+) -> None:
+    """M7-21a: the dry run is `error` (domain_unverified) before any fetch."""
+    body = dry(rig.world, kind="http_fetch", definition=HTTP_FETCH)
+    response = call(rig.world, "owner", "POST", TEST_URL, json=body)
+    assert response.status_code == 200, response.text
+    _unverified(response.json())
+    assert fake_fetch.calls == []
+
+
+def test_http_fetch_domain_run_on_an_unverified_domain_fetches_nothing(
+    rig: Rig, fake_fetch: FakeFetch
+) -> None:
+    """M7-21a: in `all`, only the http_fetch check is gated; another domain being verified
+    does not open this one."""
+    w = rig.world
+    verify_domain(w, "unassigned")
+    make(w, check_key="own.http", kind="http_fetch", definition=HTTP_FETCH)
+    results = run_all(w).json()
+    _unverified(results[-1])
+    assert fake_fetch.calls == []
+    assert {r["check_id"] for r in results} >= {"spf", "dmarc"}
 
 
 @pytest.mark.parametrize("raw", [b"{", b"[1]", b'{"a": 1, "a": 2}', b'{"x": NaN}'])

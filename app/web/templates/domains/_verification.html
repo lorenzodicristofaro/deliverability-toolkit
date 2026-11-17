@@ -1,0 +1,29 @@
+{# Ownership verification block of the domain page (M7-21a). Never shows a token. #}
+<h2>{{ t("domain.verify.title") }}</h2>
+<p data-testid="verify-status">
+  {% if verify_error %}<strong data-testid="badge-verify-error">{{ t("domain.verify.status.error") }}</strong>
+  {% elif verification.verified %}<span data-testid="badge-verified">{{ t("domain.verify.status.verified") }}</span>
+  {% else %}<strong data-testid="badge-unverified">{{ t("domain.verify.status.unverified") }}</strong>{% endif %}
+  {% if verification.verified and verification.verified_at %}<br><small>{{ t("domain.verify.verified_at", date=verification.verified_at.strftime("%Y-%m-%d %H:%M UTC")) }}</small>{% endif %}
+</p>
+{% if verify_outcome %}<p role="status" data-testid="verify-outcome">
+  {%- if verify_outcome == "verified" %}{{ t("domain.verify.outcome.verified") }}
+  {%- elif verify_outcome == "not_found" %}{{ t("domain.verify.outcome.not_found") }}
+  {%- elif verify_outcome == "expired" %}{{ t("domain.verify.outcome.expired") }}
+  {%- elif verify_outcome == "not_started" %}{{ t("domain.verify.outcome.not_started") }}
+  {%- else %}{{ t("domain.verify.outcome.error", state=dns_state or "") }}{% endif -%}
+</p>{% endif %}
+{% if not verification.verified %}<p data-testid="verify-note">{{ t("domain.verify.unverified_note") }}</p>{% endif %}
+{% if row.can_verify %}
+  {% if verification.pending %}<p data-testid="verify-pending">{{ t("domain.verify.pending", name=verification.record_name, date=verification.token_expires_at.strftime("%Y-%m-%d %H:%M UTC")) }}</p>{% endif %}
+  <form method="post" action="/domains/{{ row.id }}/verification">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <button type="submit" data-testid="verify-start">{{ t("domain.verify.start") }}</button>
+  </form>
+  {% if verification.pending %}
+  <form method="post" action="/domains/{{ row.id }}/verification/check">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <button type="submit" data-testid="verify-now">{{ t("domain.verify.now") }}</button>
+  </form>
+  {% endif %}
+{% endif %}
