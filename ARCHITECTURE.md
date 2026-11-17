@@ -75,9 +75,10 @@ Rules:
 - "Could not evaluate" (timeout, SERVFAIL, refused) is `error`, never `ok`.
 - Finding codes are stable public identifiers (used by alerts, API, tests).
 - Checks never touch the DB directly; the service layer stores results.
-- Custom checks are DNS kinds only in M5 (`dns_exists`, `dns_matches`, `dns_value_range`);
-  `http_fetch` is a reserved kind refused by schema and evaluator until M7, where it goes through
-  the guarded client. The definition schema is `app/core/custom_check_schema.py`, so repositories
+- Custom checks: DNS kinds (`dns_exists`, `dns_matches`, `dns_value_range`, M5) and `http_fetch`
+  (M7-02: URL built from scheme, host template under `{domain}` and path, no port; fetched only
+  through the guarded client `app.net.fetch` with the operator's limits, capped by the run budget;
+  every client error is `error`; API-only in the UI in M7). The definition schema is `app/core/custom_check_schema.py`, so repositories
   validate every write without depending on `/checks`; the evaluator is `app/checks/custom.py`.
   An `all` domain run (built in `app/api/v1/checks.py`) runs the built-ins first, then the enabled
   global and own-tenant custom checks, read through the tenant repository; ids are
