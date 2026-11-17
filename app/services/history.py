@@ -19,6 +19,9 @@ Bounds (module constants, not settings):
 - `MAX_WINDOW` (366 days): a runs window wider than this keeps its `until` and moves `since`
   forward; the answer says `window.capped: true`. A trend window is also limited by the bucket
   cap below, whichever is smaller.
+- `MIN_MOMENT` (1970-01-01 UTC) .. `MAX_MOMENT` (9000-01-01 UTC), inclusive: the accepted
+  `since`/`until`, so window arithmetic (default window, bucket alignment, caps) stays far from
+  the `datetime` limits; any arithmetic overflow left is still a 422, never a 500.
 - `MAX_BUCKETS` (500) buckets per trend; `MAX_TREND_RUNS` (20000) runs read per trend. When a cap
   bites, the OLDEST part of the window is dropped (`window.capped` / `window.truncated`).
 
@@ -31,7 +34,8 @@ shape, types, range, other domain) is `HistoryInvalid`.
 
 Trend buckets are UTC and aligned to the unit (`hour`: minute 0; `day`: 00:00 UTC): a run belongs
 to the bucket `floor(started_at)`. `since`/`until` (ISO 8601 with a UTC offset or `Z`; naive is
-rejected) are half-open (`since <= started_at < until`) and are widened to bucket boundaries.
+rejected; outside `MIN_MOMENT`..`MAX_MOMENT` is a 422) are half-open
+(`since <= started_at < until`) and are widened to bucket boundaries.
 Per bucket: `counts` (runs per status, all statuses present), `runs`, and `checks`:
 check_id -> {`status` of the check's LATEST run in the bucket, `runs`}. Every bucket of the window
 is listed, empty ones included.
@@ -61,7 +65,7 @@ from typing import Any, Final
 from sqlalchemy.orm import Session
 
 from app.checks.finding_text import display_params
-from app.core.i18n import MissingKeyError, has_key, t
+from app.core.i18n import DEFAULT_LANGUAGE, SUPPORTED_LANGUAGES, load_catalogue, placeholders
 from app.core.permissions import Action, DomainResource, Principal, can
 from app.core.tenancy import TenantContext
 from app.core.text import visible
@@ -94,6 +98,8 @@ INVALID_KEY: Final = "api.error.invalid_request"
 CONFLICT_KEY: Final = "api.error.conflict"
 
 _EPOCH: Final = datetime(1970, 1, 1, tzinfo=UTC)
+MIN_MOMENT: Final = _EPOCH
+MAX_MOMENT: Final = datetime(9000, 1, 1, tzinfo=UTC)
 _ISO_RE: Final = re.compile(r"[0-9T:.+\-Z ]{10,40}")
 _FORBIDDEN_PARAM_NAMES: Final = frozenset({"key", "lang"})  # arguments of `t()`
 
@@ -143,9 +149,12 @@ def _moment(raw: str | None) -> datetime | None:
     if value.tzinfo is None:
         raise HistoryInvalid
     try:
-        return value.astimezone(UTC)
+        value = value.astimezone(UTC)
     except (OverflowError, ValueError):
         raise HistoryInvalid from None
+    if not MIN_MOMENT <= value <= MAX_MOMENT:
+        raise HistoryInvalid
+    return value
 
 
 def _check_id(raw: str | None) -> str | None:
@@ -195,12 +204,29 @@ def decode_cursor(raw: str, kind: str, domain_id: int) -> tuple[datetime, int]:
 # --- findings -----------------------------------------------------------------------------------
 
 
+def _template(key: str, lang: str) -> str | None:
+    """The template `t(key, lang)` would use (`lang`, else English), None when there is none."""
+    template = load_catalogue(lang).get(key) if lang in SUPPORTED_LANGUAGES else None
+    return template if template is not None else load_catalogue(DEFAULT_LANGUAGE).get(key)
+
+
 def _text(key: str, lang: str, params: Mapping[str, Any]) -> str | None:
-    if not has_key(key, lang):
+    """`key` rendered with `params`; None when it has no template or the params cannot fill it.
+
+    Formatted here rather than through `t()`: with strict mode off `t()` returns the raw template
+    (`{count}` shown to the user) when a param is missing or does not fit its format."""
+    template = _template(key, lang)
+    if template is None:
         return None
     try:
-        return t(key, lang, **params)
-    except (KeyError, IndexError, ValueError, TypeError, AttributeError, MissingKeyError):
+        names = placeholders(template)
+    except ValueError:
+        return None
+    if any(re.split(r"[.\[]", name, maxsplit=1)[0] not in params for name in names):
+        return None
+    try:
+        return template.format_map(params)
+    except (KeyError, IndexError, ValueError, TypeError, AttributeError):
         return None
 
 
@@ -306,8 +332,11 @@ class HistoryService:
         if since is not None and until is not None and since >= until:
             raise HistoryInvalid
         capped = False
-        if since is not None and until is not None and until - since > MAX_WINDOW:
-            since, capped = until - MAX_WINDOW, True
+        try:
+            if since is not None and until is not None and until - since > MAX_WINDOW:
+                since, capped = until - MAX_WINDOW, True
+        except OverflowError:
+            raise HistoryInvalid from None
         try:
             page = self._repos().check_runs.list_for_domain(
                 domain_id,
@@ -344,16 +373,19 @@ class HistoryService:
             raise HistoryInvalid
         size = BUCKETS[unit]
         until = _moment(params.get("until")) or self._clock.now().astimezone(UTC)
-        since = _moment(params.get("since")) or until - DEFAULT_TREND_WINDOW
-        if since >= until:
-            raise HistoryInvalid
-        first, end = _floor(since, size), _ceil(until, size)
-        capped = False
-        limit_buckets = min(MAX_BUCKETS, MAX_WINDOW // size)
-        if (end - first) // size > limit_buckets:
-            first, capped = end - limit_buckets * size, True
-        total = (end - first) // size
-        starts = [first + i * size for i in range(total)]
+        try:
+            since = _moment(params.get("since")) or until - DEFAULT_TREND_WINDOW
+            if since >= until:
+                raise HistoryInvalid
+            first, end = _floor(since, size), _ceil(until, size)
+            capped = False
+            limit_buckets = min(MAX_BUCKETS, MAX_WINDOW // size)
+            if (end - first) // size > limit_buckets:
+                first, capped = end - limit_buckets * size, True
+            total = (end - first) // size
+            starts = [first + i * size for i in range(total)]
+        except OverflowError:
+            raise HistoryInvalid from None
         runs, truncated = self._scan(domain_id, check_id, first, end)
         if truncated:
             # Newest runs were read first: the oldest bucket read is incomplete, so drop it.

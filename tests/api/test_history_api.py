@@ -35,6 +35,20 @@ INVALID = {"detail": t("api.error.invalid_request", "en")}
 SPF = ("@", "TXT", "ok", ["v=spf1 -all"])
 SPF2 = ("@", "TXT", "ok", ["v=spf1 include:_spf.example -all"])
 ROUTES = ("runs", "trend", "snapshots", "snapshots/diff")
+# since/until outside 1970-01-01..9000-01-01 UTC, including the datetime limits that used to
+# overflow the window arithmetic into a 500 (`%2B` is a literal `+` in a query string).
+OUT_OF_RANGE = (
+    "?until=0001-01-01T00:00:00Z",
+    "?since=0001-01-01T00:00:00Z",
+    "?until=9999-12-31T23:30:00Z",
+    "?until=9999-12-31T23:59:59.999999%2B00:00",
+    "?since=9999-12-31T23:30Z&until=9999-12-31T23:40Z",
+    "?bucket=hour&since=9999-12-31T23:30Z&until=9999-12-31T23:40Z",
+    "?since=1969-12-31T23:59:59Z",
+    "?until=9000-01-01T00:00:01Z",
+    "?until=9999-12-31T23:59:59-14:00",
+    "?since=0001-01-01T00:00:00%2B14:00",
+)
 
 
 class _FixedClock:
@@ -250,18 +264,27 @@ def test_runs_cursor_cannot_cross_domains_or_tenants(world: World) -> None:
     d, other = world.domains["assigned"], world.domains["other"]
     for i in range(3):
         seed_run(world, d, world.tenant_a, at=NOW - timedelta(minutes=i))
-    seed_run(world, other, world.tenant_b)
+    b_runs = [seed_run(world, other, world.tenant_b, at=NOW - timedelta(minutes=i)) for i in (0, 1)]
     cursor = call(world, "owner", "GET", url(world, "runs", query="?limit=1")).json()["next_cursor"]
     # Same cursor on another readable domain of A, and on tenant B's domain (404 first).
     other_a = url(world, "runs", "unassigned", f"?cursor={cursor}")
     assert call(world, "owner", "GET", other_a).status_code == 422
     foreign = url(world, "runs", "other", f"?cursor={cursor}")
     assert call(world, "owner", "GET", foreign).status_code == 404
-    # B's own cursor on A's domain: refused, nothing of B returned.
-    b_cursor = call(
-        world, "b_owner", "GET", url(world, "runs", "other", "?limit=1"), tenant="b"
-    ).json()["next_cursor"]
-    assert b_cursor is None  # only one run: no next page
+    # B's own real cursor (B has two runs, so a next page) on A's domain: refused, nothing of B.
+    b_page = call(world, "b_owner", "GET", url(world, "runs", "other", "?limit=1"), tenant="b")
+    assert b_page.status_code == 200
+    assert [i["id"] for i in b_page.json()["items"]] == b_runs[:1]
+    b_cursor = b_page.json()["next_cursor"]
+    assert b_cursor is not None
+    replay = call(world, "owner", "GET", url(world, "runs", query=f"?cursor={b_cursor}"))
+    assert replay.status_code == 422
+    assert replay.json() == INVALID
+    # ...and it still works for B on B's own domain.
+    b_next = call(
+        world, "b_owner", "GET", url(world, "runs", "other", f"?cursor={b_cursor}"), tenant="b"
+    )
+    assert [i["id"] for i in b_next.json()["items"]] == b_runs[1:]
     forged = call(world, "owner", "GET", url(world, "runs", query="?cursor=" + "A" * 40))
     assert forged.status_code == 422
 
@@ -284,6 +307,7 @@ def test_runs_cursor_cannot_cross_domains_or_tenants(world: World) -> None:
         "?cursor=%00",
         "?cursor=",
         "?bogus=1",
+        *(q for q in OUT_OF_RANGE if "bucket" not in q),
     ],
 )
 def test_runs_malformed_query_is_422(world: World, query: str) -> None:
@@ -352,12 +376,24 @@ def test_trend_wire_format(world: World) -> None:
         "?since=2026-11-17T00:00:00Z&until=2026-11-16T00:00:00Z",
         "?limit=3",
         "?cursor=abc",
+        *OUT_OF_RANGE,
     ],
 )
 def test_trend_malformed_query_is_422(world: World, query: str) -> None:
     response = call(world, "owner", "GET", url(world, "trend", query=query))
     assert response.status_code == 422
     assert response.json() == INVALID
+
+
+@pytest.mark.parametrize("route", ["runs", "trend"])
+def test_time_bounds_are_inclusive(world: World, route: str) -> None:
+    seed(world)
+    for query in (
+        "?since=1970-01-01T00:00:00Z",
+        "?until=9000-01-01T00:00:00Z",
+        "?until=1970-01-01T00:00:00Z",
+    ):
+        assert call(world, "owner", "GET", url(world, route, query=query)).status_code == 200
 
 
 def test_trend_bucket_cap(world: World) -> None:

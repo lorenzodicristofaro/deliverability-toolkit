@@ -233,6 +233,28 @@ def test_finding_with_incomplete_params_never_raises(params: Mapping[str, Any]) 
     assert out["title"] is not None  # the title has no placeholders
 
 
+@pytest.mark.parametrize(
+    "params", [{}, {"count": 12}, {"limit": 10}, {"unrelated": 1}, {"key": "x", "lang": "y"}]
+)
+def test_missing_placeholder_gives_null_text_with_strict_mode_off(
+    params: Mapping[str, Any],
+) -> None:
+    # Strict off (production): `t()` would return the raw template, so `{count}` must never show.
+    i18n.set_strict(False)
+    for lang in ("en", "it"):
+        out = render_finding(StoredFinding("SPF_TOO_MANY_LOOKUPS", params), lang)
+        assert out["detail"] is None
+        assert out["title"] == i18n.t("finding.SPF_TOO_MANY_LOOKUPS.title", lang)
+        assert out["remediation"] is not None
+        assert not any("{" in (out[k] or "") for k in ("title", "detail", "remediation"))
+
+
+def test_complete_params_render_with_strict_mode_off() -> None:
+    i18n.set_strict(False)
+    out = render_finding(StoredFinding("SPF_TOO_MANY_LOOKUPS", {"count": 12, "limit": 10}), "en")
+    assert out["detail"] is not None and "12" in out["detail"] and "{" not in out["detail"]
+
+
 @pytest.mark.parametrize("code", ["NO_SUCH_CODE", "SPF_TOO_MANY_LOOKUP", "X"])
 def test_unknown_code_has_null_texts_and_keeps_params(code: str) -> None:
     out = render_finding(StoredFinding(code, {"v": "<script>"}), "it")
@@ -297,6 +319,24 @@ def test_domain_read_toggle_off_is_not_found(world: World) -> None:
 # --- query parameters ---------------------------------------------------------------------------
 
 
+# Moments outside MIN_MOMENT..MAX_MOMENT, including the datetime limits that used to overflow the
+# window arithmetic (default `since = until - 7d`, `_ceil` adding a bucket) into a 500.
+OUT_OF_RANGE: list[dict[str, str]] = [
+    {"until": "0001-01-01T00:00:00Z"},
+    {"since": "0001-01-01T00:00:00Z"},
+    {"until": "9999-12-31T23:30:00Z"},
+    {"until": "9999-12-31T23:59:59.999999+00:00"},
+    {"since": "9999-12-31T23:30:00Z", "until": "9999-12-31T23:40:00Z"},
+    {"since": "0001-01-01T00:00:00Z", "until": "2026-11-01T00:00:00Z"},
+    {"since": "1969-12-31T23:59:59.999999Z"},
+    {"until": "1970-01-01T00:59:59+01:00"},
+    {"until": "9000-01-01T00:00:00.000001Z"},
+    {"until": "9000-01-01T00:00:00-00:01"},
+    {"since": "0001-01-01T00:00:00+14:00"},
+    {"until": "9999-12-31T23:59:59-14:00"},
+]
+
+
 @pytest.mark.parametrize(
     "params",
     [
@@ -315,6 +355,7 @@ def test_domain_read_toggle_off_is_not_found(world: World) -> None:
         {"until": "x" * 100},
         {"since": "2026-11-02T00:00:00Z", "until": "2026-11-01T00:00:00Z"},
         {"since": "2026-11-01T00:00:00Z", "until": "2026-11-01T00:00:00Z"},
+        *OUT_OF_RANGE,
         {"check_id": "SPF"},
         {"check_id": "a b"},
         {"check_id": "a" * 97},
@@ -337,6 +378,8 @@ def test_runs_rejects_malformed_params(world: World, params: dict[str, str]) -> 
         {"cursor": "x"},
         {"since": "bad"},
         {"since": "2026-11-02T00:00:00Z", "until": "2026-11-01T00:00:00Z"},
+        *OUT_OF_RANGE,
+        {"bucket": "hour", "since": "9999-12-31T23:30:00Z", "until": "9999-12-31T23:40:00Z"},
     ],
 )
 def test_trend_rejects_malformed_params(world: World, params: dict[str, str]) -> None:
@@ -351,6 +394,41 @@ def test_trend_rejects_malformed_params(world: World, params: dict[str, str]) ->
 def test_snapshots_reject_malformed_params(world: World, params: dict[str, str]) -> None:
     with pytest.raises(HistoryInvalid):
         world.service("owner").snapshots(world.domains["a"], params)
+
+
+@pytest.mark.parametrize(
+    "params",
+    [
+        {"since": "1970-01-01T00:00:00Z"},
+        {"until": "9000-01-01T00:00:00Z"},
+        {"since": "1970-01-01T00:00:00Z", "until": "9000-01-01T00:00:00Z"},
+        {"since": "1970-01-01T01:00:00+01:00", "until": "1970-01-02T00:00:00Z"},
+    ],
+)
+def test_bounds_are_inclusive(world: World, params: dict[str, str]) -> None:
+    service = world.service("owner")
+    assert service.runs(world.domains["a"], params, "en")["items"] == []
+    assert service.trend(world.domains["a"], params)["buckets"]
+
+
+def test_trend_default_window_before_the_minimum_is_fine(world: World) -> None:
+    # `until` at the lower bound: the default `since` (until - 7 days) is before 1970, no error.
+    out = world.service("owner").trend(world.domains["a"], {"until": "1970-01-01T00:00:00Z"})
+    assert out["window"]["until"] == "1970-01-01T00:00:00+00:00"
+    assert len(out["buckets"]) == 7
+
+
+class _EndOfTimeClock:
+    def now(self) -> datetime:
+        return datetime(9999, 12, 31, 23, 30, tzinfo=UTC)
+
+
+def test_trend_arithmetic_overflow_is_invalid_not_a_crash(world: World) -> None:
+    # Not reachable through the parser bounds; the guard still turns an overflow into a 422.
+    service = world.service("owner")
+    service._clock = _EndOfTimeClock()
+    with pytest.raises(HistoryInvalid):
+        service.trend(world.domains["a"], {})
 
 
 # --- runs ---------------------------------------------------------------------------------------
