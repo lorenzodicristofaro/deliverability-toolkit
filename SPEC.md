@@ -49,6 +49,11 @@ Requirements:
   not assigned to them; on assigned domains they see assigned and detected ESPs
   and the ESP check result read-only, maintainer decision 2026-11-10).
 - Optional read-only **share links** (token, expiry, revocable) for a domain report.
+- **Domain ownership verification** (maintainer decision 2026-11-17): a domain is unverified until a
+  tenant owner/admin proves control, by a DNS TXT record (primary) or by email to a role address at the
+  domain (alternative). Unverified domains can be added and checked with DNS-based checks, but checks that
+  make the server contact hosts of the domain (http_fetch) and scheduled monitoring of such checks require
+  a verified domain.
 - Audit log of sensitive actions (login, role change, rule change, export).
 - Local login with argon2 hashes + optional TOTP 2FA; OIDC/SSO is a later milestone.
 - Scoped API keys (per tenant, per role).

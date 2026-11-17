@@ -277,7 +277,8 @@ Tickets (docs/tickets/M7-*.md, split 2026-11-13; model in brackets):
 - [x] M7-01 guarded outbound HTTP client + ARCHITECTURE decision record (opus)
 - [ ] Follow-up (low): tests/parsers/test_message.py::test_fold_bomb_is_bounded_and_fast failed once in two local PostgreSQL full runs under load (timing test, flaky candidate)
 - [x] M7-02 custom check kind http_fetch via guarded client (opus; depends M7-01)
-  - [ ] Follow-up (medium, maintainer decision pending): domains are added without ownership verification and public suffixes (github.io, co.uk) are accepted, so http_fetch with host `{domain}` can still read up to 256 chars from any public host registered as a domain; also no rate limit on POST /custom-checks/test. Options: domain verification, refuse public suffixes, rate limit /test. Must be decided before custom checks become schedulable.
+  - [ ] Follow-up (medium): domains were added without ownership verification, so http_fetch with host `{domain}` could read up to 256 chars from any public host registered as a domain. Maintainer decision 2026-11-17: domain ownership verification (DNS TXT preferred, email alternative), see M7-21a and M7-21b; http_fetch and its scheduling require a verified domain. Closed when M7-21a is done.
+  - [ ] Follow-up (low): no rate limit on POST /custom-checks/test; public suffixes (github.io, co.uk) are still accepted as domain names (not covered by M7-21a/b; decide whether to refuse them)
   - [ ] Follow-up (low): web UI editor for http_fetch definitions (API-only in M7)
   - [ ] Follow-up (low): wire per-host HTTP rate limiting (M7-09 RateKind.HTTP_HOST) when custom checks become schedulable
   - [ ] Follow-up (low): web/API kind race on custom-check update (harmless, last writer wins with a validated definition); optional precondition in the service update transaction
@@ -313,6 +314,7 @@ Tickets (docs/tickets/M7-*.md, split 2026-11-13; model in brackets):
   - [ ] Follow-up (low): app/api/v1/checks.py `_prepare_all` (and `_prepare_free`) still prepare the registry inline; switch them to domain_registry.prepare_domain_registry.
 - [ ] M7-11 monitor target API + permissions (opus; depends M7-06)
 - [ ] M7-12 history and snapshot read API (sonnet; depends M7-07, M7-08, M7-11)
+- [ ] M7-21a domain ownership verification via DNS TXT (opus; depends M7-02; parallel-safe no; maintainer decision 2026-11-17; run after M7-11/M7-12, before M7-13 or any schedulable custom check)
 - [ ] M7-13 monitoring page + SVG trend charts (sonnet; depends M7-11, M7-12)
 - [ ] M7-14 alert state, dedup, exactly-once design (opus; depends M7-10, M7-10b)
 - [x] M7-14b secret encryption service, Fernet/MultiFernet, ARCHITECTURE §9 (opus; no deps)
@@ -323,10 +325,11 @@ Tickets (docs/tickets/M7-*.md, split 2026-11-13; model in brackets):
   - [x] Follow-up (low, done in M7-09): .env.example has a bare `ENCRYPTION_KEY=` with no hint that it must be a Fernet key (comma-separated for rotation)
 - [ ] M7-15 alert channel config, encrypted secrets, dispatcher (opus; depends M7-14, M7-14b, M7-11; alert.manage = owner, admin)
 - [ ] M7-16 alert channel email (sonnet; depends M7-15)
+- [ ] M7-21b domain ownership verification by email (opus; depends M7-21a, M7-16; parallel-safe no)
 - [ ] M7-17 alert channel generic webhook (sonnet; depends M7-15, M7-01)
 - [ ] M7-18 alert channel Slack, payload to verify in official docs (sonnet; depends M7-17)
 - [ ] M7-19 alert channel Teams, mechanism to verify in official docs (sonnet; depends M7-17)
-- [ ] M7-20 M7 acceptance tests + docs/MONITORING.md (sonnet; depends all channels, M7-02, M7-05, M7-13)
+- [ ] M7-20 M7 acceptance tests + docs/MONITORING.md (sonnet; depends all channels, M7-02, M7-05, M7-13, M7-21a, M7-21b)
 
 ## M8 — DMARC aggregate reports
 - [ ] IMAP ingestion + HTTP endpoint, safe XML/zip/gz parsing
