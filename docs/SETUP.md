@@ -232,6 +232,7 @@ at startup. `compose.yaml` forwards each one with the same default.
 | `CHECK_RUN_RETENTION_DAYS` | `90` | 1-3650 | Raw check runs older than this are pruned. |
 | `DNS_SNAPSHOT_RETENTION_DAYS` | `365` | 1-3650 | DNS snapshots older than this are pruned (never earlier than `CHECK_RUN_RETENTION_DAYS`; each domain keeps its newest snapshot). |
 | `DNS_SNAPSHOT_HEARTBEAT_HOURS` | `24` | 1-720 | An unchanged DNS snapshot is stored again after this many hours. |
+| `DOMAIN_VERIFY_TOKEN_TTL_HOURS` | `72` | 1-720 | Hours a domain ownership verification token stays valid; after that the owner starts again. |
 
 A target that hits a rate limit is postponed to when the limit has room, not skipped. The limits
 are counted per container, in memory: a restart starts with a full allowance, and with several

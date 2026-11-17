@@ -177,7 +177,9 @@ class DomainRepository(TenantScopedRepository[Domain]):
         row = self.get(id_)
         return None if row is None else row.verification_token_hash
 
-    def set_pending_token(self, id_: object, token_hash: str, expires_at: datetime) -> Domain | None:
+    def set_pending_token(
+        self, id_: object, token_hash: str, expires_at: datetime
+    ) -> Domain | None:
         """Store a new pending token (its hash) and expiry, replacing any previous one; the
         status is unchanged. None if the domain is missing/foreign/malformed."""
         if len(token_hash) != 64 or expires_at.tzinfo is None:

@@ -198,7 +198,7 @@ def test_hash_and_record_name() -> None:
     assert record_name("example.com") == "_dt-verify.example.com"
 
 
-# --- start ------------------------------------------------------------------------------------------
+# --- start ----------------------------------------------------------------------------------------
 
 
 def test_start_stores_only_a_hash_with_expiry(world: World, caplog: Any) -> None:
@@ -225,7 +225,7 @@ def test_reissue_invalidates_the_old_token(world: World) -> None:
     assert world.verify().outcome is VerifyOutcome.verified
 
 
-# --- verify -------------------------------------------------------------------------------------------
+# --- verify ---------------------------------------------------------------------------------------
 
 # (case, answer builder from token, outcome, dns_state)
 OUTCOMES: list[tuple[str, Any, VerifyOutcome, str | None]] = [
@@ -347,7 +347,7 @@ def test_name_too_long_to_query_is_error(world: World) -> None:
     assert world.row("long").verification_status == "unverified" and world.resolver.asked == []
 
 
-# --- rename -------------------------------------------------------------------------------------------
+# --- rename ---------------------------------------------------------------------------------------
 
 
 def _verified(world: World) -> None:
@@ -382,7 +382,7 @@ def test_rename_to_the_same_name_keeps_verification(world: World) -> None:
     assert world.row().verification_status == "verified"
 
 
-# --- permissions and tenancy --------------------------------------------------------------------------
+# --- permissions and tenancy ----------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -425,7 +425,7 @@ def test_invisible_domains_are_not_found(world: World, target: str) -> None:
     assert world.row("b").verification_token_hash is None and world.resolver.asked == []
 
 
-# --- scheduled-run hook of the http_fetch gate ------------------------------------------------------
+# --- scheduled-run hook of the http_fetch gate ----------------------------------------------------
 
 HTTP_CHECK = {
     "check_key": "web.ok",

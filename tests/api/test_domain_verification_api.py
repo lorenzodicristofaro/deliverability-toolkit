@@ -128,7 +128,7 @@ def set_toggles(w: World, who: str, toggles: dict[str, Any]) -> None:
     w.db.commit()
 
 
-# --- per role --------------------------------------------------------------------------------------
+# --- per role -------------------------------------------------------------------------------------
 
 # who -> (GET status, POST start, POST check) on tenant A's assigned domain.
 ROLE_TABLE = {
@@ -200,7 +200,7 @@ def test_mutations_need_csrf(world: World, resolver: Scripted, check: bool) -> N
     assert state(world) == before and resolver.asked == []
 
 
-# --- flow and token exposure ------------------------------------------------------------------------
+# --- flow and token exposure ----------------------------------------------------------------------
 
 
 def test_flow_start_publish_verify(world: World, resolver: Scripted) -> None:
@@ -273,7 +273,11 @@ def test_rename_through_the_api_resets_verification(world: World, resolver: Scri
     )  # fmt: skip
     assert response.status_code == 200
     status = call(world, "owner", "GET", url(world)).json()
-    assert (status["status"], status["pending"], status["verified_at"]) == ("unverified", False, None)
+    assert (status["status"], status["pending"], status["verified_at"]) == (
+        "unverified",
+        False,
+        None,
+    )
     assert status["record_name"] == "_dt-verify.renamed.example"
 
 

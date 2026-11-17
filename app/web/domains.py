@@ -325,9 +325,7 @@ def start_verification(request: Request, web: WebDep, domain_id: str) -> Respons
         started = web.verification.start(row.id)
     except DomainServiceError as exc:
         return _denied(request, exc)
-    return render(
-        request, "domains/verification.html", logged_in=True, row=row, started=started
-    )
+    return render(request, "domains/verification.html", logged_in=True, row=row, started=started)
 
 
 @router.post("/domains/{domain_id}/verification/check", include_in_schema=False)

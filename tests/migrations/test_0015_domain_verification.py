@@ -46,9 +46,7 @@ def _seed(engine: Engine) -> None:
                 "VALUES (1, 1, 1, 'client_viewer')"
             )
         )
-        conn.execute(
-            text("INSERT INTO domains (id, tenant_id, name) VALUES (1, 1, 'old.example')")
-        )
+        conn.execute(text("INSERT INTO domains (id, tenant_id, name) VALUES (1, 1, 'old.example')"))
         conn.execute(
             text("INSERT INTO domain_access (membership_id, domain_id, tenant_id) VALUES (1, 1, 1)")
         )
@@ -75,7 +73,7 @@ def test_existing_domains_migrate_unverified_and_downgrade_round_trips(
     _seed(engine)
 
     command.upgrade(_cfg(), "head")
-    assert NEW <= _columns(engine)
+    assert _columns(engine) >= NEW
     with engine.connect() as conn:
         row = conn.execute(
             text(
