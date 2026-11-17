@@ -3,6 +3,7 @@ from app.models.check_run import CheckRun
 from app.models.content_rule import ContentRule
 from app.models.custom_check import CustomCheck
 from app.models.dkim_selector import DkimSelector
+from app.models.dns_snapshot import DnsSnapshot
 from app.models.dnsbl_enablement import DnsblListEnablement
 from app.models.domain import Domain
 from app.models.domain_esp import DomainEsp
@@ -19,6 +20,7 @@ __all__ = [
     "ContentRule",
     "CustomCheck",
     "DkimSelector",
+    "DnsSnapshot",
     "DnsblListEnablement",
     "Domain",
     "DomainAccess",

@@ -25,6 +25,16 @@ DEFAULT_CHECK_RUN_RETENTION_DAYS = 90
 CHECK_RUN_RETENTION_DAYS_MIN = 1
 CHECK_RUN_RETENTION_DAYS_MAX = 3650
 
+# DNS snapshots (M7-08), project choices: kept longer than raw runs (retention applies at least the
+# check run window, see app.services.retention); an unchanged snapshot is stored again once per
+# heartbeat interval.
+DEFAULT_DNS_SNAPSHOT_RETENTION_DAYS = 365
+DNS_SNAPSHOT_RETENTION_DAYS_MIN = 1
+DNS_SNAPSHOT_RETENTION_DAYS_MAX = 3650
+DEFAULT_DNS_SNAPSHOT_HEARTBEAT_HOURS = 24
+DNS_SNAPSHOT_HEARTBEAT_HOURS_MIN = 1
+DNS_SNAPSHOT_HEARTBEAT_HOURS_MAX = 720
+
 RESOLVER_ADDR_INVALID_KEY = "config.resolver_addr.invalid"
 
 config_logger = logging.getLogger("app.config")
@@ -214,6 +224,19 @@ class Settings(BaseSettings):
         default=DEFAULT_CHECK_RUN_RETENTION_DAYS,
         ge=CHECK_RUN_RETENTION_DAYS_MIN,
         le=CHECK_RUN_RETENTION_DAYS_MAX,
+    )
+    # DNS snapshots are pruned after this many days (M7-08); retention applies at least the check
+    # run window, so snapshots always outlive raw runs.
+    dns_snapshot_retention_days: int = Field(
+        default=DEFAULT_DNS_SNAPSHOT_RETENTION_DAYS,
+        ge=DNS_SNAPSHOT_RETENTION_DAYS_MIN,
+        le=DNS_SNAPSHOT_RETENTION_DAYS_MAX,
+    )
+    # An unchanged snapshot is stored again after this many hours (M7-08, 1..720).
+    dns_snapshot_heartbeat_hours: int = Field(
+        default=DEFAULT_DNS_SNAPSHOT_HEARTBEAT_HOURS,
+        ge=DNS_SNAPSHOT_HEARTBEAT_HOURS_MIN,
+        le=DNS_SNAPSHOT_HEARTBEAT_HOURS_MAX,
     )
 
     @field_validator("secret_key", "encryption_key", mode="after")
