@@ -145,6 +145,17 @@ scheduled|manual, findings as stable codes + params only (no rendered text; capp
 truncation flag) and `findings_hash`. Composite FK (domain_id, tenant_id) to `domains`, cascade
 from domain and tenant; accessed through `CheckRunRepository` (tenant) and, for retention only,
 `CheckRunRetentionRepository`.
+`dns_snapshots` (M7-08): the normalised monitored DNS records of a tenant domain, for diffing
+(`app.services.dns_diff`, pure). `entries` is a JSON list of (name, type, state, sorted values) with
+names RELATIVE to the domain (`@`, `_dmarc`, `<selector>._domainkey`): apex SPF TXT, `_dmarc` TXT,
+MX, NS and the tenant's enabled DKIM selectors (BIMI and MTA-STS are not monitored). A lookup that
+did not complete is stored as `error`, never as "removed"; a diff with `error` on either side (or an
+entry on one side only) is `inconclusive`. Values are normalised (TXT string splitting, whitespace,
+SPF case, hostnames) and stored as SHA-256 plus bounded text; `content_hash` covers the full
+normalised content. A snapshot is stored only when its hash differs from the newest one or
+`DNS_SNAPSHOT_HEARTBEAT_HOURS` passed. Composite FK (domain_id, tenant_id) to `domains`, cascade
+from domain and tenant; accessed through `DnsSnapshotRepository` (tenant) and, for retention only,
+`DnsSnapshotRetentionRepository`.
 `dnsbl_list_enablements` (M7-05c): instance-level (no tenant_id), one row per DNSBL list the
 instance admin enabled (unique `list_id`, a `seeds/dnsbl.yaml` slug with no FK; the row carries
 the usage-policy acknowledgement). Written only by the instance-admin service through
@@ -152,7 +163,9 @@ the usage-policy acknowledgement). Written only by the instance-admin service th
 `dnsbl` run (API and CLI). Details in `docs/DNSBL.md`.
 
 Retention: raw `check_runs` are pruned after `CHECK_RUN_RETENTION_DAYS` (default 90,
-1..3650); aggregates and DNS snapshots are kept longer.
+1..3650); aggregates are kept longer. DNS snapshots are pruned after `DNS_SNAPSHOT_RETENTION_DAYS`
+(default 365, 1..3650, applied as at least `CHECK_RUN_RETENTION_DAYS`, so they outlive raw runs); the
+newest snapshot of each domain is never pruned (it is the baseline of the next diff).
 
 ## 6. Execution model
 
@@ -370,6 +383,10 @@ An invalid entry fails startup. uvicorn's own proxy-header rewriting is off in t
 (`--no-proxy-headers`). Deployment details: docs/SETUP.md section 7.
 `CHECK_RUN_RETENTION_DAYS` (M7-07; default 90, 1..3650): age after which raw `check_runs` are
 pruned; out of range fails startup.
+`DNS_SNAPSHOT_RETENTION_DAYS` (M7-08; default 365, 1..3650): age after which `dns_snapshots` are
+pruned (never earlier than `CHECK_RUN_RETENTION_DAYS`); `DNS_SNAPSHOT_HEARTBEAT_HOURS` (M7-08;
+default 24, 1..720): an unchanged snapshot is stored again after this many hours. Out of range
+fails startup.
 
 ## 12. Observability
 
