@@ -124,8 +124,8 @@ Isolation strategy (defense in depth):
 ## 5. Data model (core tables)
 
 `users`, `tenants`, `memberships`, `domain_access`, `domains`, `domain_esps`,
-`ips`, `check_runs`, `check_results` (domain/ip, check_id, status, findings JSON,
-data JSON, timestamps), `dns_snapshots` (for diffing), `dkim_selectors`
+`ips`, `check_runs` (domain, check_id, status, findings JSON, timestamps),
+`dns_snapshots` (for diffing), `dkim_selectors`
 (scope global/tenant), `content_rules`, `custom_checks`, `esp_profiles`
 (cached from YAML + overrides), `dmarc_reports`, `dmarc_report_rows`,
 `integrations` (encrypted credentials), `alert_channels`, `alert_rules`,
@@ -138,14 +138,21 @@ from `profiles/esp/*.yaml`.
 loaded profile. Optional `return_path_host` / `tracking_host` must be the domain or a
 subdomain of it. `DomainEspRepository.add` is idempotent and never changes stored hosts
 (use `update_hosts`).
+`check_runs` (M7-07): one table holds the raw per-check results (there is no separate
+`check_results` table), one row per executed check on a tenant domain: `check_id` (built-in id or
+`custom:{scope}:{key}`), `status` as the Check contract, `started_at`, `duration_ms`, `source`
+scheduled|manual, findings as stable codes + params only (no rendered text; capped per run with a
+truncation flag) and `findings_hash`. Composite FK (domain_id, tenant_id) to `domains`, cascade
+from domain and tenant; accessed through `CheckRunRepository` (tenant) and, for retention only,
+`CheckRunRetentionRepository`.
 `dnsbl_list_enablements` (M7-05c): instance-level (no tenant_id), one row per DNSBL list the
 instance admin enabled (unique `list_id`, a `seeds/dnsbl.yaml` slug with no FK; the row carries
 the usage-policy acknowledgement). Written only by the instance-admin service through
 `DnsblEnablementRepository` (not part of `repo_for`); its ids are read per request by every
 `dnsbl` run (API and CLI). Details in `docs/DNSBL.md`.
 
-Retention: raw `check_results` are pruned by configurable policy; aggregates
-and DNS snapshots are kept longer.
+Retention: raw `check_runs` are pruned after `CHECK_RUN_RETENTION_DAYS` (default 90,
+1..3650); aggregates and DNS snapshots are kept longer.
 
 ## 6. Execution model
 
@@ -361,6 +368,8 @@ only a direct peer inside it may set the client IP via `X-Forwarded-For` (rightm
 not a trusted proxy; `Forwarded` is not read); empty means the direct peer is the client IP.
 An invalid entry fails startup. uvicorn's own proxy-header rewriting is off in the image
 (`--no-proxy-headers`). Deployment details: docs/SETUP.md section 7.
+`CHECK_RUN_RETENTION_DAYS` (M7-07; default 90, 1..3650): age after which raw `check_runs` are
+pruned; out of range fails startup.
 
 ## 12. Observability
 
