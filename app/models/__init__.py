@@ -7,6 +7,7 @@ from app.models.domain import Domain
 from app.models.domain_esp import DomainEsp
 from app.models.instance_setup import InstanceSetup
 from app.models.membership import DomainAccess, Membership, MembershipRole
+from app.models.monitor_target import MonitorTarget
 from app.models.session import UserSession
 from app.models.tenant import Tenant
 from app.models.user import User
@@ -23,6 +24,7 @@ __all__ = [
     "InstanceSetup",
     "Membership",
     "MembershipRole",
+    "MonitorTarget",
     "Tenant",
     "User",
     "UserSession",
