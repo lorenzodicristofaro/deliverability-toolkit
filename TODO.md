@@ -302,11 +302,12 @@ Tickets (docs/tickets/M7-*.md, split 2026-11-13; model in brackets):
   - [ ] Follow-up (low): `claim()` compares next_run_at by equality and assumes SQLAlchemy-written timestamps; rows written externally on SQLite in another format would never be claimed (add a comment)
   - [ ] Follow-up (low): rate-limited targets are rescheduled to the same instant without jitter; under sustained overload fairness favours low ids
   - [ ] Follow-up (low): TestClient with default ROLE=all starts real APScheduler timers (first tick after 30 s); consider ROLE=web in test settings
-- [ ] M7-10 scheduled run executor + change detection (sonnet; depends M7-05, M7-07, M7-08, M7-09)
+- [x] M7-10 scheduled run executor + change detection (sonnet; depends M7-05, M7-07, M7-08, M7-09) (fff4656, QA APPROVE round 1)
+- [ ] M7-10b baseline lookup beyond 50 runs + DNSBL judged per list (opus; depends M7-10; parallel-safe no)
 - [ ] M7-11 monitor target API + permissions (opus; depends M7-06)
 - [ ] M7-12 history and snapshot read API (sonnet; depends M7-07, M7-08, M7-11)
 - [ ] M7-13 monitoring page + SVG trend charts (sonnet; depends M7-11, M7-12)
-- [ ] M7-14 alert state, dedup, exactly-once design (opus; depends M7-10)
+- [ ] M7-14 alert state, dedup, exactly-once design (opus; depends M7-10, M7-10b)
 - [x] M7-14b secret encryption service, Fernet/MultiFernet, ARCHITECTURE §9 (opus; no deps)
   - Status: done (383dfd1, QA APPROVE round 2; round 1: secrets reachable via exception __context__, fixed).
   - [ ] Follow-up (low): app/main.py `log_secrets` masks ENCRYPTION_KEY only as the whole string; with several comma-separated keys each key should be masked separately
