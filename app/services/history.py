@@ -23,7 +23,10 @@ Bounds (module constants, not settings):
   `since`/`until`, so window arithmetic (default window, bucket alignment, caps) stays far from
   the `datetime` limits; any arithmetic overflow left is still a 422, never a 500.
 - `MAX_BUCKETS` (500) buckets per trend; `MAX_TREND_RUNS` (20000) runs read per trend. When a cap
-  bites, the OLDEST part of the window is dropped (`window.capped` / `window.truncated`).
+  bites, the OLDEST part of the window is dropped (`window.capped` / `window.truncated`). The
+  trend is aggregated by `CheckRunRepository.trend` (M7-12b), which reads only the started_at,
+  status and check_id columns (never findings) and buckets in Python, identically on SQLite and
+  PostgreSQL; the run cap is kept so the read stays bounded whatever the run density.
 
 Cursors (runs and snapshots): `base64url(json)` of `["r"|"s", domain_id, epoch_microseconds, id]`,
 at most `MAX_CURSOR_LENGTH` characters. The domain id is checked against the request's domain and
@@ -386,30 +389,36 @@ class HistoryService:
             starts = [first + i * size for i in range(total)]
         except OverflowError:
             raise HistoryInvalid from None
-        runs, truncated = self._scan(domain_id, check_id, first, end)
+        try:
+            trend = self._repos().check_runs.trend(
+                domain_id,
+                since=first,
+                until=end,
+                size=size,
+                max_runs=MAX_TREND_RUNS,
+                check_id=check_id,
+            )
+        except CheckRunInvalid:
+            raise HistoryInvalid from None
+        truncated = trend.truncated
         if truncated:
-            # Newest runs were read first: the oldest bucket read is incomplete, so drop it.
-            oldest = _floor(runs[-1].started_at, size)
-            first = oldest + size
+            # Newest runs were read first: the oldest bucket read was incomplete and is left out.
+            first = trend.complete_from
             starts = [s for s in starts if s >= first]
-            runs = [r for r in runs if r.started_at >= first]
-        buckets: list[dict[str, Any]] = [
-            {
-                "start": s.isoformat(),
-                "runs": 0,
-                "counts": dict.fromkeys(STATUSES, 0),
-                "checks": {},
-            }
-            for s in starts
-        ]
-        index = {s: i for i, s in enumerate(starts)}
-        # `runs` is newest first: the first run seen of a check in a bucket is its latest.
-        for run in runs:
-            slot = buckets[index[_floor(run.started_at, size)]]
-            slot["runs"] += 1
-            slot["counts"][run.status] += 1
-            entry = slot["checks"].setdefault(run.check_id, {"status": run.status, "runs": 0})
-            entry["runs"] += 1
+        found = {b.start: b for b in trend.buckets}
+        buckets: list[dict[str, Any]] = []
+        for s in starts:
+            b = found.get(s)
+            buckets.append(
+                {
+                    "start": s.isoformat(),
+                    "runs": 0 if b is None else b.runs,
+                    "counts": dict.fromkeys(STATUSES, 0) if b is None else dict(b.counts),
+                    "checks": {}
+                    if b is None
+                    else {c: {"status": v.status, "runs": v.runs} for c, v in b.checks.items()},
+                }
+            )
         return {
             "bucket": unit,
             "buckets": buckets,
@@ -422,29 +431,6 @@ class HistoryService:
                 "max_days": MAX_WINDOW.days,
             },
         }
-
-    def _scan(
-        self, domain_id: int, check_id: str | None, since: datetime, until: datetime
-    ) -> tuple[list[CheckRunRecord], bool]:
-        """The window's runs newest first, at most MAX_TREND_RUNS; True when more existed."""
-        repo = self._repos().check_runs
-        runs: list[CheckRunRecord] = []
-        cursor: RunCursor | None = None
-        while True:
-            page = repo.list_for_domain(
-                domain_id,
-                check_id=check_id,
-                since=since,
-                until=until,
-                limit=min(1000, MAX_TREND_RUNS - len(runs)),
-                cursor=cursor,
-            )
-            runs.extend(page.items)
-            cursor = page.next_cursor
-            if cursor is None:
-                return runs, False
-            if len(runs) >= MAX_TREND_RUNS:
-                return runs, True
 
     # --- snapshots ----------------------------------------------------------------------------
 
