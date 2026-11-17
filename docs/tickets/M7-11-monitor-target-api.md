@@ -12,5 +12,10 @@ Acceptance criteria:
 - Every endpoint has tenancy and permission tests: cross-tenant 404, client viewer on unassigned domain denied, toggled-off user denied, CSRF/auth as other write endpoints, domain from another tenant rejected.
 - Audit log entry if an audit mechanism exists at this point (if not, note it and skip; do not build one).
 New i18n keys: monitor.* error and validation messages (en + it), permission labels for the new toggles
-Status: todo
+Status: done (83f4919, QA APPROVE round 1)
+Record (done):
+- Routes: GET /api/v1/monitors and GET/POST/PATCH/DELETE /api/v1/domains/{id}/monitor. Router registered in app/api/__init__.py (where all /api/v1 routers live, not app/main.py).
+- Test file is tests/api/test_monitors_api.py (name clash avoided with the planned test_monitors.py).
+- GM-approved extras: app/core/config.py MONITOR_MAX_TARGETS_PER_TENANT (default 100, range 1..1000) + .env.example + compose.yaml; ARCHITECTURE sections 7 and 11; tests/core/test_permissions.py, tests/tenancy/test_matrix.py, tests/tenancy/test_id_range.py.
+- Decisions: first next_run_at = now; PATCH of interval sets next_run_at = min(current, now + new interval); 404 before 403 ordering; no audit table exists, so structured log lines instead (none built).
 Note (from M7-06): per-user DomainAccess is not enforced in MonitorTargetRepository (same as DomainRepository/DomainEspRepository); the endpoint layer must enforce it. The tenant repository is `repo_for(ctx).monitor_targets`.

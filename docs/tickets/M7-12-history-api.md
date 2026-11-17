@@ -13,3 +13,4 @@ Acceptance criteria:
 - Tests: permission matrix per role, cross-tenant ids on every endpoint, pagination bounds, malformed query params, large windows capped.
 New i18n keys: none beyond existing finding keys
 Status: todo
+Note (from M7-11): monitor routes exist: GET /api/v1/monitors and GET/POST/PATCH/DELETE /api/v1/domains/{id}/monitor (router in app/api/__init__.py, register history there too). Permission actions `monitor.read` / `monitor.manage` are domain-level; a client viewer has read on assigned domains only. Ordering convention: 404 before 403.

@@ -13,3 +13,4 @@ Acceptance criteria:
 - Tests: permission and tenancy per role on every route, escaping of hostile record values in the diff view (a `"><script>` TXT value rendered escaped), empty states, en and it render with no missing keys.
 New i18n keys: monitor.tab.*, monitor.chart.*, monitor.diff.* (en + it, listed by the coder in the PR)
 Status: todo
+Note (from M7-11): monitor API routes: GET /api/v1/monitors and GET/POST/PATCH/DELETE /api/v1/domains/{id}/monitor (router in app/api/__init__.py). Permission actions `monitor.read` / `monitor.manage` are domain-level; client viewer has read on assigned domains only, never manage. The `permission.monitor.*` labels exist in locales but are unused until a toggle UI exists: if M7-13 adds permission toggles it must render them.
