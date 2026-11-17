@@ -18,6 +18,9 @@ Entry points:
 - `DnsblEnablementRepository` (app.repositories.dnsbl_enablement) holds the instance-level DNSBL
   list enablement (M7-05c): written only by the instance-admin service, its enabled ids read by
   every DNSBL check run. Not part of `repo_for` (no tenant data).
+- `MonitorSchedulerRepository` (app.repositories.monitor_targets, M7-06) is the scheduler's
+  system entry point: its `due_targets` is the only cross-tenant read of monitor targets. Not part
+  of `repo_for`; tenant access to targets is `repo_for(ctx).monitor_targets`.
 
 Cross-tenant ids behave exactly like missing ids (None/False), so upstream maps them to 404.
 """
@@ -38,6 +41,7 @@ from app.repositories.domain import DomainRepository
 from app.repositories.domain_access import DomainAccessRepository
 from app.repositories.domain_esps import DomainEspRepository
 from app.repositories.membership import UserMembershipsRepository, UserTenantMembership
+from app.repositories.monitor_targets import MonitorSchedulerRepository, MonitorTargetRepository
 from app.repositories.principal import principal_from_models
 from app.repositories.tenant import CurrentTenantRepository, TenantMembershipRepository
 
@@ -55,6 +59,7 @@ class TenantRepositories:
     content_rules: ContentRuleRepository
     dkim_selectors: DkimSelectorRepository
     custom_checks: CustomCheckRepository
+    monitor_targets: MonitorTargetRepository
 
 
 def repo_for(ctx: TenantContext, session: Session) -> TenantRepositories:
@@ -71,6 +76,7 @@ def repo_for(ctx: TenantContext, session: Session) -> TenantRepositories:
         content_rules=ContentRuleRepository(ctx, session),
         dkim_selectors=DkimSelectorRepository(ctx, session),
         custom_checks=CustomCheckRepository(ctx, session),
+        monitor_targets=MonitorTargetRepository(ctx, session),
     )
 
 
@@ -86,6 +92,8 @@ __all__ = [
     "GlobalContentRuleRepository",
     "GlobalCustomCheckRepository",
     "GlobalDkimSelectorRepository",
+    "MonitorSchedulerRepository",
+    "MonitorTargetRepository",
     "TenantMembershipRepository",
     "TenantRepositories",
     "TenantScopeError",
