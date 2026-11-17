@@ -303,7 +303,10 @@ Tickets (docs/tickets/M7-*.md, split 2026-11-13; model in brackets):
   - [ ] Follow-up (low): rate-limited targets are rescheduled to the same instant without jitter; under sustained overload fairness favours low ids
   - [ ] Follow-up (low): TestClient with default ROLE=all starts real APScheduler timers (first tick after 30 s); consider ROLE=web in test settings
 - [x] M7-10 scheduled run executor + change detection (sonnet; depends M7-05, M7-07, M7-08, M7-09) (fff4656, QA APPROVE round 1)
-- [ ] M7-10b baseline lookup beyond 50 runs + DNSBL judged per list (opus; depends M7-10; parallel-safe no)
+- [x] M7-10b baseline lookup beyond 50 runs + DNSBL judged per list (opus; depends M7-10; parallel-safe no) (ead5671, QA APPROVE round 1)
+  - [ ] Follow-up (medium): store per run which DNSBL lists were evaluated (enabled and queried) so per-list baselines can distinguish "disabled" from "clean". Today a list enabled while the domain is already listed emits new_listing against a run where the list was disabled, and a listing that clears while the list is disabled never yields listing_cleared. Never a false cleared. Also fix the change_detect.py docstring (~141, "a list never evaluated before is its own baseline") to state the current behaviour accurately and add a monitor_run test pinning both scenarios. GM accepted the current behaviour for M7.
+  - [ ] Follow-up (low): paged snapshot_baseline sets Snapshot.truncated slightly differently from the full carry_forward fold (unused today); include truncated in the equivalence test or document.
+  - [ ] Follow-up (low): app/api/v1/checks.py `_prepare_all` (and `_prepare_free`) still prepare the registry inline; switch them to domain_registry.prepare_domain_registry.
 - [ ] M7-11 monitor target API + permissions (opus; depends M7-06)
 - [ ] M7-12 history and snapshot read API (sonnet; depends M7-07, M7-08, M7-11)
 - [ ] M7-13 monitoring page + SVG trend charts (sonnet; depends M7-11, M7-12)

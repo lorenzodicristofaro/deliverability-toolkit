@@ -14,4 +14,10 @@ Acceptance criteria:
 - (e, nit) Add a test for the RUNNER_FAILED path in monitor_run.py ~255-259.
 - No network in tests; ruff, mypy and relevant tests green (including PostgreSQL params if local PG is up); full suite not required unless shared fixtures change.
 New i18n keys: none
-Status: todo
+Status: done (ead5671, QA APPROVE round 1)
+Record:
+- GM-approved extra files: app/repositories/dns_snapshots.py + tests (snapshot baseline keyset paging, same 50-limit issue fixed).
+- New CheckRunRepository.latest_non_error (tenant-scoped).
+- New app/services/domain_registry.prepare_domain_registry(strict), shared by API and executor.
+- change_detect API is now CheckState(check_id, status, lists) + CheckInput.
+- Follow-ups recorded in TODO.md under M7-10b (per-list evaluated storage, snapshot truncated equivalence, checks.py _prepare_all/_prepare_free).
