@@ -20,6 +20,7 @@ from app.core.db import create_db_engine, create_session_factory
 from app.core.permissions import MembershipGrant, Principal
 from app.core.tenancy import TenantContext
 from app.models import Domain, MembershipRole, Tenant, User
+from app.models.check_run import STATUSES
 from app.repositories import repo_for
 from app.repositories.check_runs import StoredFinding
 from app.services import history
@@ -618,6 +619,137 @@ def test_trend_other_tenant_runs_never_counted(world: World) -> None:
     seed_run(world, world.domains["b"], world.tenant_b)
     out = world.service("owner").trend(world.domains["a"], {})
     assert sum(b["runs"] for b in out["buckets"]) == 0
+
+
+# --- M7-12b: the repository aggregation answers exactly like the M7-12 scan ---------------------
+
+
+def _legacy_trend(service: HistoryService, domain_id: int, params: Mapping[str, str]) -> Any:
+    """The M7-12 trend (full CheckRun rows paged with list_for_domain, bucketed here), kept
+    verbatim as the reference of the equivalence tests below."""
+    check_id = history._check_id(params.get("check_id"))
+    unit = params.get("bucket", history.DEFAULT_BUCKET)
+    size = history.BUCKETS[unit]
+    until = history._moment(params.get("until")) or service._clock.now().astimezone(UTC)
+    since = history._moment(params.get("since")) or until - history.DEFAULT_TREND_WINDOW
+    first, end = history._floor(since, size), history._ceil(until, size)
+    capped = False
+    limit_buckets = min(MAX_BUCKETS, MAX_WINDOW // size)
+    if (end - first) // size > limit_buckets:
+        first, capped = end - limit_buckets * size, True
+    starts = [first + i * size for i in range(int((end - first) // size))]
+    repo = service._repos().check_runs
+    runs: list[Any] = []
+    cursor = None
+    truncated = False
+    while True:
+        page = repo.list_for_domain(
+            domain_id,
+            check_id=check_id,
+            since=first,
+            until=end,
+            limit=min(1000, history.MAX_TREND_RUNS - len(runs)),
+            cursor=cursor,
+        )
+        runs.extend(page.items)
+        cursor = page.next_cursor
+        if cursor is None:
+            break
+        if len(runs) >= history.MAX_TREND_RUNS:
+            truncated = True
+            break
+    if truncated:
+        first = history._floor(runs[-1].started_at, size) + size
+        starts = [s for s in starts if s >= first]
+        runs = [r for r in runs if r.started_at >= first]
+    buckets: list[dict[str, Any]] = [
+        {"start": s.isoformat(), "runs": 0, "counts": dict.fromkeys(STATUSES, 0), "checks": {}}
+        for s in starts
+    ]
+    index = {s: i for i, s in enumerate(starts)}
+    for run in runs:
+        slot = buckets[index[history._floor(run.started_at, size)]]
+        slot["runs"] += 1
+        slot["counts"][run.status] += 1
+        entry = slot["checks"].setdefault(run.check_id, {"status": run.status, "runs": 0})
+        entry["runs"] += 1
+    return {
+        "bucket": unit,
+        "buckets": buckets,
+        "window": {
+            "since": starts[0].isoformat() if starts else first.isoformat(),
+            "until": end.isoformat(),
+            "capped": capped,
+            "truncated": truncated,
+            "max_buckets": MAX_BUCKETS,
+            "max_days": MAX_WINDOW.days,
+        },
+    }
+
+
+_H0 = datetime(2026, 11, 17, 9, tzinfo=UTC)
+_US = timedelta(microseconds=1)
+# (offset from _H0, check, status, domain key, tenant key)
+_EQUIV_RUNS: list[tuple[timedelta, str, str, str, str]] = [
+    (timedelta(0), "spf", "ok", "a", "a"),  # exactly on the hour / day edge
+    (-_US, "spf", "fail", "a", "a"),  # last microsecond of the previous bucket
+    (timedelta(minutes=10), "spf", "warn", "a", "a"),
+    (timedelta(minutes=10), "spf", "error", "a", "a"),  # tie: higher id is the latest
+    (timedelta(minutes=10), "dmarc", "info", "a", "a"),
+    (timedelta(minutes=59, seconds=59), "dkim", "ok", "a", "a"),
+    (timedelta(hours=1), "dkim", "fail", "a", "a"),
+    (timedelta(hours=-9), "spf", "warn", "a", "a"),  # 00:00 UTC: day edge
+    (timedelta(hours=-9) - _US, "dmarc", "error", "a", "a"),
+    (timedelta(days=-3, minutes=5), "spf", "ok", "a", "a"),
+    (timedelta(hours=3), "custom:global:x", "warn", "a", "a"),
+    (timedelta(hours=14, minutes=59, seconds=59), "spf", "ok", "a", "a"),  # 23:59:59 UTC
+    (timedelta(hours=15), "spf", "fail", "a", "a"),  # next day: outside some windows
+    (timedelta(0), "spf", "fail", "a2", "a"),  # same tenant, other domain
+    (timedelta(minutes=10), "spf", "fail", "b", "b"),  # other tenant
+]
+
+
+@pytest.mark.parametrize(
+    "params",
+    [
+        {},
+        {"bucket": "hour"},
+        {"bucket": "hour", "since": "2026-11-17T08:30:00Z", "until": "2026-11-17T10:30:00Z"},
+        {"bucket": "hour", "since": "2026-11-17T09:00:00Z", "until": "2026-11-17T10:00:00Z"},
+        {"bucket": "hour", "since": "2026-11-17T10:30:00+02:00", "until": "2026-11-17T12:00:00Z"},
+        {"since": "2026-11-16T23:59:59.999999Z", "until": "2026-11-18T00:00:00Z"},
+        {"since": "2026-11-17T00:00:00Z", "until": "2026-11-17T23:59:59Z"},
+        {"since": "2026-11-17T00:00:00Z", "until": "2026-11-18T00:00:00.000001Z"},
+        {"since": "2026-11-01T05:00:00-07:00", "until": "2026-11-20T00:00:00Z"},
+        {"bucket": "hour", "check_id": "spf"},
+        {"check_id": "dmarc", "since": "2026-11-10T00:00:00Z"},
+        {"check_id": "nosuch"},
+        {"bucket": "hour", "since": "2026-01-01T00:00:00Z", "until": "2026-11-17T12:00:00Z"},
+        {"since": "2000-01-01T00:00:00Z", "until": "2026-11-18T00:00:00Z"},
+        {"until": "1970-01-01T00:00:00Z"},
+        {"since": "2030-01-01T00:00:00Z", "until": "2030-01-03T00:00:00Z"},
+    ],
+)
+@pytest.mark.parametrize("cap", [20000, 9, 4, 1])
+def test_trend_matches_the_m7_12_scan(
+    world: World, monkeypatch: pytest.MonkeyPatch, params: dict[str, str], cap: int
+) -> None:
+    monkeypatch.setattr(history, "MAX_TREND_RUNS", cap)
+    for delta, check, status, domain, tenant in _EQUIV_RUNS:
+        tid = world.tenant_a if tenant == "a" else world.tenant_b
+        seed_run(world, world.domains[domain], tid, check_id=check, status=status, at=_H0 + delta)
+    service = world.service("owner")
+    new = service.trend(world.domains["a"], params)
+    assert new == _legacy_trend(service, world.domains["a"], params)
+    # Key order is part of the wire format too.
+    assert [list(b) for b in new["buckets"]] == [
+        ["start", "runs", "counts", "checks"] for _ in new["buckets"]
+    ]
+    for b in new["buckets"]:
+        assert list(b["counts"]) == list(STATUSES)
+    legacy = _legacy_trend(service, world.domains["a"], params)
+    for b_new, b_old in zip(new["buckets"], legacy["buckets"], strict=True):
+        assert list(b_new["checks"]) == list(b_old["checks"])
 
 
 # --- snapshots and diff -------------------------------------------------------------------------
