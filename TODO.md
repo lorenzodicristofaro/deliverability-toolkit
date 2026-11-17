@@ -297,7 +297,12 @@ Tickets (docs/tickets/M7-*.md, split 2026-11-13; model in brackets):
 - [ ] M7-12 history and snapshot read API (sonnet; depends M7-07, M7-08, M7-11)
 - [ ] M7-13 monitoring page + SVG trend charts (sonnet; depends M7-11, M7-12)
 - [ ] M7-14 alert state, dedup, exactly-once design (opus; depends M7-10)
-- [ ] M7-14b secret encryption service, Fernet/MultiFernet, ARCHITECTURE §9 (opus; no deps)
+- [x] M7-14b secret encryption service, Fernet/MultiFernet, ARCHITECTURE §9 (opus; no deps)
+  - Status: done (383dfd1, QA APPROVE round 2; round 1: secrets reachable via exception __context__, fixed).
+  - [ ] Follow-up (low): app/main.py `log_secrets` masks ENCRYPTION_KEY only as the whole string; with several comma-separated keys each key should be masked separately
+  - [ ] Follow-up (low): `get_cipher()` in app/core/secrets_crypto.py is cached with functools.cache; when M7-15 adds callers, add a shared conftest fixture that clears the cache (today only tests/core/test_secrets_crypto.py does)
+  - [ ] Follow-up (low): no command yet to re-encrypt stored secrets after key rotation (docs/SETUP.md section 10 says it comes with M7-15)
+  - [ ] Follow-up (low): .env.example has a bare `ENCRYPTION_KEY=` with no hint that it must be a Fernet key (comma-separated for rotation)
 - [ ] M7-15 alert channel config, encrypted secrets, dispatcher (opus; depends M7-14, M7-14b, M7-11; alert.manage = owner, admin)
 - [ ] M7-16 alert channel email (sonnet; depends M7-15)
 - [ ] M7-17 alert channel generic webhook (sonnet; depends M7-15, M7-01)

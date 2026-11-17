@@ -13,4 +13,4 @@ Acceptance criteria:
 - ARCHITECTURE section 9 records the choice (Fernet, MultiFernet rotation) and the rotation procedure; docs/SETUP.md explains generating a key, comma-separated multi-key syntax as implemented, rotation steps and that losing the key loses stored secrets.
 - Tests table-driven, no network: round trip, unicode, empty string, rotation old->new, removed old key fails typed, tamper, garbage, bad key format, multi-key.
 New i18n keys: none
-Status: todo
+Status: done (383dfd1, QA APPROVE round 2; round 1: secrets reachable via exception __context__, fixed)

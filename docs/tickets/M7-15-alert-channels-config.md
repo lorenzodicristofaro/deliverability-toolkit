@@ -15,4 +15,7 @@ Acceptance criteria:
 - Tests: no network, fake channel.
 Guarded client rules apply unchanged to webhook targets (GM decision: no private-target allowlist in M7).
 New i18n keys: alert.channel.* validation errors, permission label for `alert.manage` (en + it)
+Notes from M7-14b follow-ups (low priority, may be split out):
+- `get_cipher()` is cached with functools.cache; with new callers here, add a shared conftest fixture that clears the cache (today only tests/core/test_secrets_crypto.py does).
+- No command exists yet to re-encrypt stored secrets after key rotation; docs/SETUP.md section 10 says it comes with this ticket.
 Status: todo
