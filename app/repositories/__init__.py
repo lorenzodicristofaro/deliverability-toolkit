@@ -24,6 +24,9 @@ Entry points:
 - `CheckRunRetentionRepository` (app.repositories.check_runs, M7-07) is the retention system entry
   point: its `prune_all_tenants` is the only cross-tenant access to check runs. Not part of
   `repo_for`; tenant access is `repo_for(ctx).check_runs`.
+- `DnsSnapshotRetentionRepository` (app.repositories.dns_snapshots, M7-08) is the retention system
+  entry point for DNS snapshots: its `prune_all_tenants` is the only cross-tenant access to them.
+  Not part of `repo_for`; tenant access is `repo_for(ctx).dns_snapshots`.
 
 Cross-tenant ids behave exactly like missing ids (None/False), so upstream maps them to 404.
 """
@@ -40,6 +43,7 @@ from app.repositories.check_runs import CheckRunRepository, CheckRunRetentionRep
 from app.repositories.content_rules import ContentRuleRepository, GlobalContentRuleRepository
 from app.repositories.custom_checks import CustomCheckRepository, GlobalCustomCheckRepository
 from app.repositories.dkim_selectors import DkimSelectorRepository, GlobalDkimSelectorRepository
+from app.repositories.dns_snapshots import DnsSnapshotRepository, DnsSnapshotRetentionRepository
 from app.repositories.dnsbl_enablement import DnsblEnablementRepository
 from app.repositories.domain import DomainRepository
 from app.repositories.domain_access import DomainAccessRepository
@@ -65,6 +69,7 @@ class TenantRepositories:
     custom_checks: CustomCheckRepository
     monitor_targets: MonitorTargetRepository
     check_runs: CheckRunRepository
+    dns_snapshots: DnsSnapshotRepository
 
 
 def repo_for(ctx: TenantContext, session: Session) -> TenantRepositories:
@@ -83,6 +88,7 @@ def repo_for(ctx: TenantContext, session: Session) -> TenantRepositories:
         custom_checks=CustomCheckRepository(ctx, session),
         monitor_targets=MonitorTargetRepository(ctx, session),
         check_runs=CheckRunRepository(ctx, session),
+        dns_snapshots=DnsSnapshotRepository(ctx, session),
     )
 
 
@@ -93,6 +99,8 @@ __all__ = [
     "CurrentTenantRepository",
     "CustomCheckRepository",
     "DkimSelectorRepository",
+    "DnsSnapshotRepository",
+    "DnsSnapshotRetentionRepository",
     "DnsblEnablementRepository",
     "DomainAccessRepository",
     "DomainEspRepository",
