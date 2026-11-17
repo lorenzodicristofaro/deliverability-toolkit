@@ -21,6 +21,9 @@ Entry points:
 - `MonitorSchedulerRepository` (app.repositories.monitor_targets, M7-06) is the scheduler's
   system entry point: its `due_targets` is the only cross-tenant read of monitor targets. Not part
   of `repo_for`; tenant access to targets is `repo_for(ctx).monitor_targets`.
+- `CheckRunRetentionRepository` (app.repositories.check_runs, M7-07) is the retention system entry
+  point: its `prune_all_tenants` is the only cross-tenant access to check runs. Not part of
+  `repo_for`; tenant access is `repo_for(ctx).check_runs`.
 
 Cross-tenant ids behave exactly like missing ids (None/False), so upstream maps them to 404.
 """
@@ -33,6 +36,7 @@ from sqlalchemy.orm import Session
 
 from app.core.tenancy import TenantContext
 from app.repositories.base import TenantScopedRepository, TenantScopeError
+from app.repositories.check_runs import CheckRunRepository, CheckRunRetentionRepository
 from app.repositories.content_rules import ContentRuleRepository, GlobalContentRuleRepository
 from app.repositories.custom_checks import CustomCheckRepository, GlobalCustomCheckRepository
 from app.repositories.dkim_selectors import DkimSelectorRepository, GlobalDkimSelectorRepository
@@ -60,6 +64,7 @@ class TenantRepositories:
     dkim_selectors: DkimSelectorRepository
     custom_checks: CustomCheckRepository
     monitor_targets: MonitorTargetRepository
+    check_runs: CheckRunRepository
 
 
 def repo_for(ctx: TenantContext, session: Session) -> TenantRepositories:
@@ -77,10 +82,13 @@ def repo_for(ctx: TenantContext, session: Session) -> TenantRepositories:
         dkim_selectors=DkimSelectorRepository(ctx, session),
         custom_checks=CustomCheckRepository(ctx, session),
         monitor_targets=MonitorTargetRepository(ctx, session),
+        check_runs=CheckRunRepository(ctx, session),
     )
 
 
 __all__ = [
+    "CheckRunRepository",
+    "CheckRunRetentionRepository",
     "ContentRuleRepository",
     "CurrentTenantRepository",
     "CustomCheckRepository",

@@ -1,4 +1,5 @@
 from app.models.base import Base
+from app.models.check_run import CheckRun
 from app.models.content_rule import ContentRule
 from app.models.custom_check import CustomCheck
 from app.models.dkim_selector import DkimSelector
@@ -14,6 +15,7 @@ from app.models.user import User
 
 __all__ = [
     "Base",
+    "CheckRun",
     "ContentRule",
     "CustomCheck",
     "DkimSelector",

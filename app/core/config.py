@@ -20,6 +20,11 @@ DEFAULT_OUTBOUND_HTTP_ALLOWED_PORTS = "80,443"
 DEFAULT_OUTBOUND_HTTP_MAX_REDIRECTS = 3
 OUTBOUND_HTTP_MAX_REDIRECTS_HARD_MAX = 5
 
+# Raw check run retention in days (M7-07): project choice, not taken from an external source.
+DEFAULT_CHECK_RUN_RETENTION_DAYS = 90
+CHECK_RUN_RETENTION_DAYS_MIN = 1
+CHECK_RUN_RETENTION_DAYS_MAX = 3650
+
 RESOLVER_ADDR_INVALID_KEY = "config.resolver_addr.invalid"
 
 config_logger = logging.getLogger("app.config")
@@ -204,6 +209,12 @@ class Settings(BaseSettings):
         default=DEFAULT_OUTBOUND_HTTP_MAX_REDIRECTS, ge=0, le=OUTBOUND_HTTP_MAX_REDIRECTS_HARD_MAX
     )
     _outbound_ports: tuple[int, ...] = PrivateAttr(default=())
+    # Raw check run history is pruned after this many days (M7-07, 1..3650).
+    check_run_retention_days: int = Field(
+        default=DEFAULT_CHECK_RUN_RETENTION_DAYS,
+        ge=CHECK_RUN_RETENTION_DAYS_MIN,
+        le=CHECK_RUN_RETENTION_DAYS_MAX,
+    )
 
     @field_validator("secret_key", "encryption_key", mode="after")
     @classmethod
