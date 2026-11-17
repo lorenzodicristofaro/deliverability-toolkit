@@ -175,12 +175,33 @@ newest snapshot of each domain is never pruned (it is the baseline of the next d
 - Interactive checks: request starts the check, the UI subscribes to an SSE
   stream; each sub-check (SPF, then DKIM selectors in parallel, then DNSBLs)
   emits an HTML fragment as soon as it is ready.
-- Scheduled checks: APScheduler enqueues per-domain jobs with jitter, a global
-  concurrency semaphore and per-target rate limits (DNSBLs punish bursts).
+- Scheduled checks (M7-09, `app/services/scheduler.py`): APScheduler 3.x
+  (`AsyncIOScheduler`, pinned `>=3.11.3,<4`; 4.x is still pre-release with a different API) is
+  only the timer. Every `SCHEDULER_TICK_SECONDS` a tick reads
+  `MonitorSchedulerRepository.due_targets(now, SCHEDULER_BATCH_SIZE)` and, while one of the
+  `SCHEDULER_MAX_CONCURRENCY` slots is free, claims each due target with
+  `MonitorSchedulerRepository.claim(id, read next_run_at, now + interval + jitter)`: a single
+  conditional UPDATE committed at once, so with several workers on PostgreSQL exactly one wins and
+  overlapping runs of a target are impossible. Jitter is uniform in
+  [0, min(`SCHEDULER_JITTER_SECONDS`, interval)] from an injected random source. Rate limits
+  (`app/services/rate_limit.py`, sliding window per key, in memory, per process): one key per
+  tenant, per enabled DNSBL list (targets running `dnsbl`) and per remote HTTP host (no built-in
+  check fetches over HTTP yet); a run takes all its keys or none. A rate-limited target is claimed
+  to the time its keys have room (not dropped, not a run). Each claimed target runs as an asyncio
+  task under a semaphore; an exception is logged by type, `shutdown` cancels the runs in flight.
+  The run itself is M7-10 (`RunFn`); check ids no longer in the registry are passed to it in
+  `ScheduledRun.unknown_check_ids` and must be recorded as `error`. `due_targets` and `claim` are
+  the only cross-tenant methods of monitor targets; everything else goes through
+  `repo_for(TenantContext(target.tenant_id))`.
+- Maintenance (M7-09): every `MAINTENANCE_INTERVAL_MINUTES` the scheduler process runs the session
+  purge (`purge_sessions` with the session policy; every role also purges once at startup),
+  `prune_check_runs` and `prune_dns_snapshots`, each in its own transaction; a failure is logged
+  and the others still run.
 - DKIM probing: bounded concurrency, negative-result caching, early stop not
   allowed (all selectors are probed) but results stream.
 - Optional worker mode: `ROLE=web|worker|all`, all state in the DB, so scaling
-  later means pointing several workers at PostgreSQL.
+  later means pointing several workers at PostgreSQL. The scheduler and maintenance timers start
+  only for `worker` and `all` (lifespan in `app/main.py`).
 - Migrations are safe to run from several containers started together: on
   PostgreSQL, `migrations/env.py` holds a session-level advisory lock
   (`MIGRATION_LOCK_KEY`) for the whole upgrade, so the first replica migrates and
@@ -390,6 +411,13 @@ pruned; out of range fails startup.
 pruned (never earlier than `CHECK_RUN_RETENTION_DAYS`); `DNS_SNAPSHOT_HEARTBEAT_HOURS` (M7-08;
 default 24, 1..720): an unchanged snapshot is stored again after this many hours. Out of range
 fails startup.
+`ROLE` (`web|worker|all`, default `all`): the scheduler runs only for `worker`/`all` (section 6).
+Scheduler (M7-09, all bounded, out of range fails startup): `SCHEDULER_TICK_SECONDS` (30, 5..600),
+`SCHEDULER_BATCH_SIZE` (100, 1..1000), `SCHEDULER_MAX_CONCURRENCY` (4, 1..64),
+`SCHEDULER_JITTER_SECONDS` (300, 0..3600), `SCHEDULER_DNSBL_RUNS_PER_MINUTE` (20),
+`SCHEDULER_HTTP_HOST_RUNS_PER_MINUTE` (10), `SCHEDULER_TENANT_RUNS_PER_MINUTE` (30) (each 1..600,
+per key and per process), `MAINTENANCE_INTERVAL_MINUTES` (60, 5..1440). Defaults are project
+choices, not DNSBL operators' published limits.
 
 ## 12. Observability
 

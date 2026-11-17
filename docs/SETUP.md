@@ -210,3 +210,30 @@ decrypt.
 **Losing the key loses the stored secrets.** There is no recovery: back up `ENCRYPTION_KEY`
 (separately from the database backup) and, after a restore, use the key that was active when
 the backup was taken.
+
+## 11. Scheduler, maintenance and retention settings
+
+The scheduler (ARCHITECTURE section 6) starts only when `ROLE` is `worker` or `all` (default
+`all`); a `web` container serves requests and runs no scheduled work. Every container still purges
+dead sessions once at startup. All settings are optional; a value outside its range stops the app
+at startup. `compose.yaml` forwards each one with the same default.
+
+| Variable | Default | Range | Meaning |
+|---|---|---|---|
+| `ROLE` | `all` | `web`, `worker`, `all` | Whether this container runs the scheduler (`worker`, `all`). |
+| `SCHEDULER_TICK_SECONDS` | `30` | 5-600 | Seconds between two reads of the due monitor targets. |
+| `SCHEDULER_BATCH_SIZE` | `100` | 1-1000 | Due targets read per tick, oldest first. |
+| `SCHEDULER_MAX_CONCURRENCY` | `4` | 1-64 | Scheduled runs in flight at once in this container. |
+| `SCHEDULER_JITTER_SECONDS` | `300` | 0-3600 | Random delay (at most the target's interval) added to each next run, so targets drift apart. |
+| `SCHEDULER_DNSBL_RUNS_PER_MINUTE` | `20` | 1-600 | Runs started per minute that query one DNSBL list. |
+| `SCHEDULER_HTTP_HOST_RUNS_PER_MINUTE` | `10` | 1-600 | Runs started per minute that fetch from one remote host. |
+| `SCHEDULER_TENANT_RUNS_PER_MINUTE` | `30` | 1-600 | Runs started per minute for one tenant. |
+| `MAINTENANCE_INTERVAL_MINUTES` | `60` | 5-1440 | Minutes between maintenance runs: session purge, check run and DNS snapshot pruning. |
+| `CHECK_RUN_RETENTION_DAYS` | `90` | 1-3650 | Raw check runs older than this are pruned. |
+| `DNS_SNAPSHOT_RETENTION_DAYS` | `365` | 1-3650 | DNS snapshots older than this are pruned (never earlier than `CHECK_RUN_RETENTION_DAYS`; each domain keeps its newest snapshot). |
+| `DNS_SNAPSHOT_HEARTBEAT_HOURS` | `24` | 1-720 | An unchanged DNS snapshot is stored again after this many hours. |
+
+A target that hits a rate limit is postponed to when the limit has room, not skipped. The limits
+are counted per container, in memory: a restart starts with a full allowance, and with several
+`worker`/`all` containers each applies them on its own. The defaults are project choices, not
+taken from any DNSBL operator's published usage limits; check the terms of the lists you enable.

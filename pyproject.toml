@@ -20,6 +20,7 @@ dependencies = [
     "typer>=0.28.0",
     "httpx2>=2.16.0",
     "cryptography>=50.0.2",
+    "apscheduler>=3.11.3,<4",
 ]
 
 [project.scripts]
@@ -70,3 +71,8 @@ addopts = "-m 'not integration'"
 markers = [
     "integration: needs Docker and network (tests/integration); run with -m integration",
 ]
+
+[[tool.mypy.overrides]]
+# APScheduler 3.x ships no type hints (no py.typed); only app.services.scheduler imports it.
+module = ["apscheduler.*"]
+ignore_missing_imports = true
