@@ -12,6 +12,7 @@
 </nav>
 <h2>{{ t("domain.detail.status") }}</h2>
 <p class="empty-state">{{ t("landing.domain.never_checked") }}</p>
+{% include "domains/_verification.html" %}
 {% if access_count is not none %}
 <h2>{{ t("domain.access.title") }}</h2>
 <p data-testid="access-count">{{ t("domain.access.count", count=access_count) }}</p>
