@@ -117,6 +117,10 @@ ID_ROUTES: dict[tuple[str, str], Payload] = {
     ("POST", "/api/v1/domains/{domain_id}/monitor"): _monitor,
     ("PATCH", "/api/v1/domains/{domain_id}/monitor"): _monitor,
     ("DELETE", "/api/v1/domains/{domain_id}/monitor"): None,
+    ("GET", "/api/v1/domains/{domain_id}/history/runs"): None,
+    ("GET", "/api/v1/domains/{domain_id}/history/trend"): None,
+    ("GET", "/api/v1/domains/{domain_id}/history/snapshots"): None,
+    ("GET", "/api/v1/domains/{domain_id}/history/snapshots/diff"): None,
 }
 
 
