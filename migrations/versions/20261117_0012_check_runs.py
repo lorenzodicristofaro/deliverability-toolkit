@@ -28,7 +28,8 @@ def upgrade() -> None:
         sa.Column("id", sa.Integer(), nullable=False),
         sa.Column("tenant_id", sa.Integer(), nullable=False),
         sa.Column("domain_id", sa.Integer(), nullable=False),
-        sa.Column("check_id", sa.String(length=64), nullable=False),
+        # app.models.check_run.MAX_CHECK_ID_LENGTH (covers `custom:{scope}:{64-char key}`).
+        sa.Column("check_id", sa.String(length=96), nullable=False),
         sa.Column("status", sa.String(length=8), nullable=False),
         sa.Column("started_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("duration_ms", sa.Integer(), nullable=False),

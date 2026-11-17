@@ -17,6 +17,7 @@ from sqlalchemy import Engine, inspect, text
 from sqlalchemy.exc import DataError, IntegrityError
 
 from app.core.db import create_db_engine
+from app.models.check_run import MAX_CHECK_ID_LENGTH
 
 ROOT = Path(__file__).resolve().parents[2]
 TABLE = "check_runs"
@@ -56,6 +57,9 @@ def test_upgrade_downgrade(real_migrations_engine: Engine) -> None:
         (("domain_id", "tenant_id"), "domains", "CASCADE"),
         (("tenant_id",), "tenants", "CASCADE"),
     }
+    # The migration hardcodes the model's width (custom check ids need more than 64).
+    widths = {c["name"]: getattr(c["type"], "length", None) for c in insp.get_columns(TABLE)}
+    assert widths["check_id"] == MAX_CHECK_ID_LENGTH
     indexes = {tuple(i["column_names"]) for i in insp.get_indexes(TABLE)}
     assert ("tenant_id", "domain_id", "check_id", "started_at") in indexes
     assert ("started_at",) in indexes
