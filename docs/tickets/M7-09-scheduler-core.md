@@ -15,3 +15,4 @@ Acceptance criteria:
 - Tests with fake clock, fake resolver and fake run function (no network, no sleeping): jitter bounds, semaphore cap, per-list rate limit across many targets, reschedule after skip, claim race, shutdown cancels in-flight work, exception in one job is logged and does not stop the loop.
 New i18n keys: none
 Status: todo
+Note (from M7-06): `MonitorSchedulerRepository(session).due_targets(now, limit)` returns DueTarget records carrying tenant_id. check_ids are validated only at write time, so if a check id is no longer in the registry the scheduler must report it as `error`, not skip it.

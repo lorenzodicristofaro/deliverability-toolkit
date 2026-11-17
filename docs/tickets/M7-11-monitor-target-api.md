@@ -13,3 +13,4 @@ Acceptance criteria:
 - Audit log entry if an audit mechanism exists at this point (if not, note it and skip; do not build one).
 New i18n keys: monitor.* error and validation messages (en + it), permission labels for the new toggles
 Status: todo
+Note (from M7-06): per-user DomainAccess is not enforced in MonitorTargetRepository (same as DomainRepository/DomainEspRepository); the endpoint layer must enforce it. The tenant repository is `repo_for(ctx).monitor_targets`.

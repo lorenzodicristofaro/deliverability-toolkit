@@ -12,4 +12,5 @@ Acceptance criteria:
 - Cross-tenant tests: tenant A cannot read, update or delete tenant B targets; a domain from another tenant is rejected at insert; `due_targets` returns only enabled rows with next_run_at <= now, ordered, limited, and carries tenant_id so execution rebuilds a TenantContext.
 - Migration upgrades from head on SQLite and PostgreSQL, downgrade works, FK cascade on domain/tenant delete tested.
 New i18n keys: none
-Status: todo
+Status: done (b492b9e, QA APPROVE round 1)
+GM decisions recorded: allowed intervals 3600/21600/43200/86400 s; MIN_INTERVAL_SECONDS = 3600 (the DB CHECK enforces only the minimum, the repository enforces the allowed set); next_run_at is NOT NULL; the migration is 0011.

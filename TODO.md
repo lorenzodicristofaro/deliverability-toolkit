@@ -271,7 +271,7 @@ Decided 2026-11-13 (maintainer):
 Tickets (docs/tickets/M7-*.md, split 2026-11-13; model in brackets):
 - [x] M7-00 CI test speed 3: pytest-xdist for both test jobs, target at most 50% duration, identical test ids (opus; serialized after M7-01; ci.yml push by maintainer)
   - Status: done (9bf618f, QA APPROVE round 1); dev CI run 43523482419: test-postgres 6.1 min (was about 12.9), test-sqlite 5.5 min (was about 11.4), target met, thin margin due to runner variance.
-  - [ ] Follow-up (low): give tests/core/test_csrf.py and tests/core/test_security.py stable parametrize ids so the separate single-process CI step can be removed
+  - [ ] Follow-up (low): give tests/core/test_csrf.py and tests/core/test_security.py stable parametrize ids so the separate single-process CI step can be removed. Also: a local `pytest -n auto` over the whole tree fails at collection because these files have random param ids (CI excludes them via --ignore); docs/WORKFLOW.md or CLAUDE.md commands should show the CI-equivalent local invocation
   - [ ] Follow-up (low): tests/conftest.py:96-106 worker DB name could be truncated near PostgreSQL's 63-char limit (gw1/gw10 collision), local only
   - [ ] Follow-up (low): watch wall-clock tests under -n auto on CI: test_content_rules_engine.py:242/277, test_spf.py:374, test_received.py:565, test_authres.py:738, test_content_rules_admin.py:657
 - [x] M7-01 guarded outbound HTTP client + ARCHITECTURE decision record (opus)
@@ -288,7 +288,7 @@ Tickets (docs/tickets/M7-*.md, split 2026-11-13; model in brackets):
 - [x] M7-05 dnsbl check registration, API, CLI, web (sonnet; depends M7-03, M7-03b, M7-04); list enablement moved to M7-05c
 - [x] M7-05c DNSBL list enablement by instance admin: table, migration, repo, API, admin UI, per-request `enabled_ids` wiring (opus; depends M7-05)
 - [ ] M7-05b Spamhaus via DQS key, key via secret service (opus; depends M7-03b, M7-05, M7-05c, M7-14b; schedule after M7-14b)
-- [ ] M7-06 monitor_targets model, migration, repository (sonnet)
+- [x] M7-06 monitor_targets model, migration, repository (sonnet)
 - [ ] M7-07 check_runs history model, migration, retention (sonnet; depends M7-06)
 - [ ] M7-08 DNS snapshots + diff (sonnet; depends M7-06)
 - [ ] M7-09 scheduler core: rate limits, jitter, concurrency, session purge (sonnet; depends M7-06, M7-07)

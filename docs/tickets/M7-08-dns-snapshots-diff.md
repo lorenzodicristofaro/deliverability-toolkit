@@ -14,3 +14,4 @@ Acceptance criteria:
 - Repository via TenantContext; cross-tenant tests; migration up/down SQLite and PostgreSQL. Retention: snapshots kept longer than runs per ARCHITECTURE section 5; setting with bounds, fake-clock test.
 New i18n keys: none
 Status: todo
+Note: the migration chain head is now 0011 (monitor_targets); the new revision follows it.

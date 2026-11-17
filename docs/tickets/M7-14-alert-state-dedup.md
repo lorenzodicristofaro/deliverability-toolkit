@@ -17,3 +17,4 @@ Acceptance criteria:
 - Tenant isolation tests on repository; migration up/down SQLite and PostgreSQL; fake clock, no network.
 New i18n keys: ALERT_RECORD_CHANGED, ALERT_NEW_LISTING, ALERT_LISTING_CLEARED, ALERT_POLICY_REGRESSION, ALERT_CHECK_ERROR (.title/.detail) (en + it); locale files touched, so serialize
 Status: todo
+Note: the migration chain head is now 0011 (monitor_targets); the new revision follows it (or a later head if M7-07/08 merge first).

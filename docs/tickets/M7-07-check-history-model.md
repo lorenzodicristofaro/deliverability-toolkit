@@ -14,3 +14,4 @@ Acceptance criteria:
 - Cross-tenant isolation tests; migration up/down on SQLite and PostgreSQL.
 New i18n keys: none
 Status: todo
+Note: the migration chain head is now 0011 (monitor_targets); the new revision follows it.
