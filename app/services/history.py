@@ -54,7 +54,6 @@ import base64
 import binascii
 import json
 import re
-import unicodedata
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from typing import Any, Final
@@ -65,6 +64,7 @@ from app.checks.finding_text import display_params
 from app.core.i18n import MissingKeyError, has_key, t
 from app.core.permissions import Action, DomainResource, Principal, can
 from app.core.tenancy import TenantContext
+from app.core.text import visible
 from app.models.check_run import STATUSES
 from app.repositories import TenantRepositories, repo_for
 from app.repositories.base import coerce_id, parse_id
@@ -95,7 +95,6 @@ CONFLICT_KEY: Final = "api.error.conflict"
 
 _EPOCH: Final = datetime(1970, 1, 1, tzinfo=UTC)
 _ISO_RE: Final = re.compile(r"[0-9T:.+\-Z ]{10,40}")
-_CONTROL: Final = frozenset({"Cc", "Cs", "Cf", "Co", "Cn", "Zl", "Zp"})
 _FORBIDDEN_PARAM_NAMES: Final = frozenset({"key", "lang"})  # arguments of `t()`
 
 
@@ -194,19 +193,6 @@ def decode_cursor(raw: str, kind: str, domain_id: int) -> tuple[datetime, int]:
 
 
 # --- findings -----------------------------------------------------------------------------------
-
-
-def visible(value: str) -> str:
-    """`value` with control/format/unassigned characters replaced by visible escapes (the rule of
-    `app.web.dns_tools.visible`, kept here so the service does not import the web layer)."""
-    out: list[str] = []
-    for ch in value:
-        if unicodedata.category(ch) in _CONTROL:
-            code = ord(ch)
-            out.append(f"\\x{code:02x}" if code < 0x100 else f"\\u{code:04x}")
-        else:
-            out.append(ch)
-    return "".join(out)
 
 
 def _text(key: str, lang: str, params: Mapping[str, Any]) -> str | None:
