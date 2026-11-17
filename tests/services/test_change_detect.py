@@ -1,5 +1,6 @@
-"""M7-10 change detection: pure, table-driven, no database, no network."""
+"""M7-10 / M7-10b change detection: pure, table-driven, no database, no network."""
 
+from collections.abc import Iterator
 from typing import Any
 
 import pytest
@@ -7,12 +8,17 @@ import pytest
 from app.services.change_detect import (
     STATUS_RANK,
     ChangeEvent,
+    CheckInput,
     CheckState,
+    ListView,
     detect_check_events,
     detect_events,
     detect_record_events,
     evaluated_ids,
     fingerprint,
+    list_baseline,
+    list_view_of_data,
+    list_view_of_findings,
     listed_ids,
 )
 from app.services.dns_diff import build_entry, build_snapshot, carry_forward
@@ -20,12 +26,28 @@ from app.services.dns_diff import build_entry, build_snapshot, carry_forward
 D = 7
 
 
-def st(status: str, listed: tuple[str, ...] = (), *, check: str = "spf", **kw: Any) -> CheckState:
-    return CheckState(check, status, frozenset(listed), **kw)
+def st(status: str, *, check: str = "spf", lists: ListView | None = None) -> CheckState:
+    return CheckState(check, status, lists)
 
 
-def bl(status: str, listed: tuple[str, ...] = (), **kw: Any) -> CheckState:
-    return st(status, listed, check="dnsbl", **kw)
+def view(
+    listed: tuple[str, ...] = (), clean: tuple[str, ...] = (), errored: tuple[str, ...] = ()
+) -> ListView:
+    """A fresh run's view: `listed` and `clean` evaluated, `errored` in error, others n/a."""
+    return ListView(frozenset(listed), frozenset(errored), frozenset(listed + clean))
+
+
+def bl(
+    status: str,
+    listed: tuple[str, ...] = (),
+    clean: tuple[str, ...] = (),
+    errored: tuple[str, ...] = (),
+) -> CheckState:
+    return st(status, check="dnsbl", lists=view(listed, clean, errored))
+
+
+def prev(status: str) -> CheckState:
+    return st(status, check="dnsbl")
 
 
 def kinds(events: list[ChangeEvent]) -> list[tuple[str, str]]:
@@ -76,6 +98,8 @@ def test_status_rank_orders_evaluated_statuses_and_leaves_error_out() -> None:
         (st("fail"), st("error"), None, [("check_error_cleared", "spf")]),
         # malformed stored status counts as error, never as ok
         (st("fail"), st("bogus"), None, [("check_error_cleared", "spf")]),
+        # a malformed baseline status is no baseline
+        (st("fail"), st("ok"), st("bogus"), []),
     ],
 )
 def test_check_events(
@@ -87,65 +111,94 @@ def test_check_events(
     assert kinds(detect_check_events(D, current, previous=previous, baseline=baseline)) == expected
 
 
+# DNSBL is judged per list against `lists_baseline` (each list's last evaluated outcome).
 @pytest.mark.parametrize(
-    ("current", "previous", "baseline", "expected"),
+    ("current", "previous", "lists_baseline", "expected"),
     [
-        (bl("ok", evaluated=frozenset({"a"})), None, None, []),
-        (bl("fail", ("a",)), None, None, []),  # listed on the first run: baseline, no event
-        (bl("fail", ("a",)), bl("ok"), bl("ok"), [("new_listing", "a")]),
+        # first run: the baseline, whatever is listed
+        (bl("fail", ("a",)), None, None, []),
+        (bl("fail", ("a",)), None, view(clean=("a",)), []),
+        # all lists evaluated, both runs
+        (bl("ok", clean=("a", "b")), prev("ok"), view(clean=("a", "b")), []),
+        (bl("fail", ("a",), ("b",)), prev("ok"), view(clean=("a", "b")), [("new_listing", "a")]),
+        (bl("fail", ("a", "b")), prev("fail"), view(("b",), ("a",)), [("new_listing", "a")]),
         (
-            bl("fail", ("a", "b")),
-            bl("fail", ("b",)),
-            bl("fail", ("b",)),
-            [("new_listing", "a")],
-        ),
-        (
-            bl("ok", evaluated=frozenset({"a", "b"})),
-            bl("fail", ("a",)),
-            bl("fail", ("a",)),
+            bl("ok", clean=("a", "b")),
+            prev("fail"),
+            view(("a",), ("b",)),
             [("listing_cleared", "a")],
         ),
-        # cleared only when the new run evaluated the list (disabled / unknown: no "cleared")
-        (bl("ok", evaluated=frozenset({"b"})), bl("fail", ("a",)), bl("fail", ("a",)), []),
-        (bl("ok"), bl("fail", ("a",)), bl("fail", ("a",)), []),
-        # an error run: only the error event, no listing and no cleared
         (
-            bl("error", ("c",)),
-            bl("fail", ("a",)),
-            bl("fail", ("a",)),
+            bl("fail", ("b",), ("a",)),
+            prev("fail"),
+            view(("a",), ("b",)),
+            [("new_listing", "b"), ("listing_cleared", "a")],
+        ),
+        (bl("fail", ("a",)), prev("fail"), view(("a",)), []),  # still listed
+        # one list errors while another changes: the other one still gets its event
+        (
+            bl("error", ("a",), errored=("b",)),
+            prev("ok"),
+            view(clean=("a", "b")),
+            [("check_error_started", "dnsbl"), ("new_listing", "a")],
+        ),
+        (
+            bl("error", clean=("a",), errored=("b",)),
+            prev("error"),
+            view(("a", "b")),
+            [("listing_cleared", "a")],
+        ),
+        # the erroring list itself: no listing and never a false "cleared"
+        (bl("error", errored=("a",)), prev("error"), view(("a",)), []),
+        (
+            bl("error", errored=("a",)),
+            prev("ok"),
+            view(clean=("a",)),
             [("check_error_started", "dnsbl")],
         ),
-        (bl("error"), bl("error"), bl("fail", ("a",)), []),
-        # back from error: against the last non-error baseline, so a listing that stayed is quiet
+        # list errors then recovers: judged against its own last evaluated outcome
+        (bl("fail", ("a",)), prev("error"), view(("a",)), [("check_error_cleared", "dnsbl")]),
         (
-            bl("fail", ("a",), evaluated=frozenset({"a"})),
-            bl("error"),
-            bl("fail", ("a",)),
-            [("check_error_cleared", "dnsbl")],
+            bl("ok", clean=("a",)),
+            prev("error"),
+            view(("a",)),
+            [("check_error_cleared", "dnsbl"), ("listing_cleared", "a")],
         ),
         (
-            bl("fail", ("b",), evaluated=frozenset({"a", "b"})),
-            bl("error"),
             bl("fail", ("a",)),
-            [("check_error_cleared", "dnsbl"), ("new_listing", "b"), ("listing_cleared", "a")],
+            prev("error"),
+            view(clean=("a",)),
+            [("check_error_cleared", "dnsbl"), ("new_listing", "a")],
         ),
+        # list never evaluated in the baseline (errored in every earlier run): its own baseline
+        (bl("fail", ("a",)), prev("error"), view(), [("check_error_cleared", "dnsbl")]),
+        (bl("fail", ("a", "b")), prev("fail"), view(clean=("b",)), [("new_listing", "b")]),
+        # not evaluated now (disabled / not applicable): never "cleared"
+        (bl("ok", clean=("b",)), prev("fail"), view(("a",), ("b",)), []),
+        # no per-list detail now (internal error, malformed data) or no baseline: no listing
+        (prev("error"), prev("fail"), view(("a",)), [("check_error_started", "dnsbl")]),
+        (st("ok", check="dnsbl", lists=ListView()), prev("fail"), view(("a",)), []),
+        (bl("fail", ("a",)), prev("ok"), None, []),
         # dnsbl status changes are listing events, not policy regressions
-        (bl("warn", ("a",)), bl("ok"), bl("ok"), [("new_listing", "a")]),
-        # truncated baseline: its ids may be incomplete, no new listing against it
-        (bl("fail", ("a",)), bl("ok"), bl("ok", complete=False), []),
+        (bl("warn", ("a",)), prev("ok"), view(clean=("a",)), [("new_listing", "a")]),
     ],
 )
 def test_dnsbl_events(
     current: CheckState,
     previous: CheckState | None,
-    baseline: CheckState | None,
+    lists_baseline: ListView | None,
     expected: list[tuple[str, str]],
 ) -> None:
-    assert kinds(detect_check_events(D, current, previous=previous, baseline=baseline)) == expected
+    got = detect_check_events(
+        D, current, previous=previous, baseline=previous, lists_baseline=lists_baseline
+    )
+    assert kinds(got) == expected
 
 
 def test_event_fields() -> None:
-    [event] = detect_check_events(D, bl("fail", ("a",)), previous=bl("ok"), baseline=bl("ok"))
+    [event] = detect_check_events(
+        D, bl("fail", ("a",)), previous=prev("ok"), baseline=None, lists_baseline=view(clean=("a",))
+    )
     assert (event.domain_id, event.before, event.after, event.check_id) == (
         D,
         "not_listed",
@@ -154,6 +207,77 @@ def test_event_fields() -> None:
     )
     [reg] = detect_check_events(D, st("fail"), previous=st("warn"), baseline=st("warn"))
     assert (reg.before, reg.after) == ("warn", "fail")
+
+
+def test_listing_fingerprints_are_stable_per_list() -> None:
+    """The same listing gives the same fingerprint whatever else happens in the run (another
+    list erroring, the overall status), and a different list a different one."""
+    base = view(clean=("a", "b", "c"))
+
+    def fp(current: CheckState) -> dict[str, str]:
+        events = detect_check_events(
+            D, current, previous=prev("ok"), baseline=None, lists_baseline=base
+        )
+        return {e.subject: e.fingerprint for e in events if e.kind == "new_listing"}
+
+    alone = fp(bl("fail", ("a",), ("b", "c")))
+    with_error = fp(bl("error", ("a",), ("b",), errored=("c",)))
+    both = fp(bl("fail", ("a", "b"), ("c",)))
+    assert alone == with_error == {"a": both["a"]} and both["b"] != both["a"]
+
+
+# --- per-list baseline ---------------------------------------------------------------------------
+
+
+def stored(status: str, listed: tuple[str, ...] = (), errored: tuple[str, ...] = ()) -> Any:
+    findings = [("DNSBL_LISTED", {"list_id": i}) for i in listed]
+    findings += [("DNSBL_LIST_ERROR", {"list_id": i}) for i in errored]
+    return list_view_of_findings(status, findings)
+
+
+@pytest.mark.parametrize(
+    ("wanted", "views", "listed", "resolved"),
+    [
+        ((), [stored("fail", ("a",))], set(), set()),
+        (("a", "b"), [], set(), set()),
+        # the newest view evaluating each list wins
+        (("a", "b"), [stored("fail", ("a",)), stored("ok")], {"a"}, {"a", "b"}),
+        (("a",), [stored("ok"), stored("fail", ("a",))], set(), {"a"}),
+        # a list in error is looked up further back, the other lists are not
+        (
+            ("a", "b"),
+            [stored("error", errored=("a",)), stored("error", ("a",), ("b",))],
+            {"a"},
+            {"a", "b"},
+        ),
+        # whole-check errors (no per-list detail) are passed over
+        (("a",), [None, stored("error"), stored("fail", ("a",))], {"a"}, {"a"}),
+        # errored in every run: no baseline for that list
+        (("a", "b"), [stored("error", errored=("a",))] * 3, set(), {"b"}),
+    ],
+)
+def test_list_baseline(
+    wanted: tuple[str, ...], views: list[Any], listed: set[str], resolved: set[str]
+) -> None:
+    got = list_baseline(wanted, views)
+    assert (got.listed, got.evaluated, got.errored) == (
+        frozenset(listed),
+        frozenset(resolved),
+        frozenset(),
+    )
+
+
+def test_list_baseline_reads_no_further_than_needed() -> None:
+    consumed: list[int] = []
+
+    def views() -> Iterator[ListView | None]:
+        for i in range(1000):
+            consumed.append(i)
+            yield stored("error", errored=("a",)) if i < 60 else stored("ok")
+
+    got = list_baseline(["a", "b"], views())
+    assert got.evaluated == frozenset({"a", "b"}) and got.listed == frozenset()
+    assert consumed == list(range(61))  # 60 runs with `a` in error, then the one resolving it
 
 
 # --- findings / data parsing (malformed input) -------------------------------------------------
@@ -178,13 +302,61 @@ def test_listed_ids(findings: list[tuple[str, Any]], expected: set[str]) -> None
 
 
 @pytest.mark.parametrize(
+    ("status", "findings", "expected"),
+    [
+        ("ok", [], ((), ())),
+        ("fail", [("DNSBL_LISTED", {"list_id": "a"})], (("a",), ())),
+        (
+            "error",
+            [
+                ("DNSBL_LISTED", {"list_id": "a"}),
+                ("DNSBL_LIST_ERROR", {"list_id": "b"}),
+                ("DNSBL_LIST_REFUSED", {"list_id": "c"}),
+                ("DNSBL_LIST_UNVERIFIED", {"list_id": "d"}),
+            ],
+            (("a",), ("b", "c", "d")),
+        ),
+        # an error run without per-list errors failed as a whole: no per-list view
+        ("error", [], None),
+        ("error", [("CHECK_INTERNAL_ERROR", {"reason": "timeout"})], None),
+        ("error", [("DNSBL_ENABLEMENT_UNAVAILABLE", {"reason": "x"})], None),
+        ("error", [("DNSBL_LISTED", {"list_id": "a"})], None),
+        ("bogus", [("DNSBL_LIST_ERROR", {"list_id": "a"})], ((), ("a",))),
+        # malformed params are ignored; a list both listed and errored counts as errored
+        ("error", [("DNSBL_LIST_ERROR", {"list_id": 3})], None),
+        (
+            "error",
+            [("DNSBL_LIST_ERROR", "x"), ("DNSBL_LIST_ERROR", {"list_id": "a"})],
+            ((), ("a",)),
+        ),
+        (
+            "error",
+            [("DNSBL_LISTED", {"list_id": "a"}), ("DNSBL_LIST_ERROR", {"list_id": "a"})],
+            ((), ("a",)),
+        ),
+        ("ok", [("OTHER", {"list_id": "a"})], ((), ())),
+    ],
+)
+def test_list_view_of_findings(status: str, findings: list[tuple[str, Any]], expected: Any) -> None:
+    got = list_view_of_findings(status, findings)
+    if expected is None:
+        assert got is None
+        return
+    assert got == ListView(frozenset(expected[0]), frozenset(expected[1]), None)
+    # every list neither listed nor errored reads as evaluated, not listed
+    assert got.outcome("zz") == "not_listed"
+
+
+@pytest.mark.parametrize(
     ("data", "expected"),
     [
         ({}, None),
+        ("x", None),
         ({"lists": "x"}, None),
         ({"lists": [1]}, None),
         ({"lists": [{"id": "a"}]}, None),
         ({"lists": [{"id": 1, "outcome": "listed"}]}, None),
+        ({"lists": [{"id": "", "outcome": "listed"}]}, None),
         ({"lists": []}, set()),
         (
             {
@@ -194,6 +366,7 @@ def test_listed_ids(findings: list[tuple[str, Any]], expected: set[str]) -> None
                     {"id": "c", "outcome": "info"},
                     {"id": "d", "outcome": "not_applicable"},
                     {"id": "e", "outcome": "error"},
+                    {"id": "f", "outcome": "something new"},
                 ]
             },
             {"a", "b", "c"},
@@ -203,6 +376,22 @@ def test_listed_ids(findings: list[tuple[str, Any]], expected: set[str]) -> None
 def test_evaluated_ids(data: Any, expected: set[str] | None) -> None:
     got = evaluated_ids(data)
     assert got == (None if expected is None else frozenset(expected))
+
+
+def test_list_view_of_data_outcomes() -> None:
+    got = list_view_of_data({"lists": lists_data(a="listed", b="not_listed", d="n", e="error")})
+    assert got is not None
+    assert [got.outcome(i) for i in ("a", "b", "d", "e", "x")] == [
+        "listed",
+        "not_listed",
+        None,
+        "error",
+        None,
+    ]
+
+
+def lists_data(**outcomes: str) -> list[dict[str, str]]:
+    return [{"id": k, "outcome": "not_applicable" if v == "n" else v} for k, v in outcomes.items()]
 
 
 # --- record events -----------------------------------------------------------------------------
@@ -256,7 +445,10 @@ def test_removed_record_after_is_absent() -> None:
 def test_detect_events_combines_checks_then_records() -> None:
     events = detect_events(
         D,
-        [(st("error"), st("ok"), st("ok")), (bl("fail", ("a",)), bl("ok"), bl("ok"))],
+        [
+            CheckInput(st("error"), st("ok"), st("ok")),
+            CheckInput(bl("fail", ("a",)), prev("ok"), prev("ok"), view(clean=("a",))),
+        ],
         snap(apex=X),
         snap(apex=Y),
     )

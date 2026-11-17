@@ -7,10 +7,12 @@ One run of a `ScheduledRun`:
 2. Load (one read transaction, ended before any DNS): the target (skipped if it was deleted,
    disabled or moved to another domain since the claim), the domain, the enabled DKIM selectors
    for the snapshot, the check registry (`prepare_registry`: DKIM on the tenant's probe selectors,
-   DNSBL on the instance's enabled lists, as the API domain routes do), and the history change
-   detection compares against: per check the latest stored run and the latest non-`error` one
-   (within the newest `history` runs of that check), and the newest `history` snapshots folded
-   with `dns_diff.carry_forward` into the last non-error state of each entry.
+   DNSBL on the instance's enabled lists, through `domain_registry.prepare_domain_registry`
+   shared with the API domain routes), and the history change detection compares against: per
+   check the latest stored run and the latest non-`error` one (`latest_non_error`: however many
+   `error` runs followed it, M7-10b), and the DNS snapshot baseline (`snapshot_baseline`: the
+   newest snapshot with each entry it could not evaluate replaced by that entry's last non-error
+   state, paging back through history only as far as needed).
 3. Run: the target's check ids through `app.services.checks.run_checks` (the one runner: an
    exception or timeout in one check is that check's `error`, the others still run) and the DNS
    snapshot (`dns_snapshot.collect_snapshot`), concurrently. Check ids no longer registered
@@ -22,6 +24,11 @@ One run of a `ScheduledRun`:
    and the target's `last_run_at` (the run's start) and `last_status` (`summary_status`).
    `next_run_at` is NOT touched: the scheduler's claim already moved it to the next slot, and
    moving it here would race the next claim.
+   Before the store, for the DNSBL check only (M7-10b), one more read builds the per-list
+   baseline: for each list the new run evaluated, its outcome in the newest stored run where
+   that list was evaluated (`change_detect.list_baseline` over the history paged newest first,
+   stopping as soon as every such list is resolved). A list that errored for any number of runs
+   is still judged against its last real outcome, and a list failing for good blocks nothing.
 5. Events: `change_detect.detect_events` (pure) after the commit, handed to the injected
    `EventSink`. Until M7-14 (delivery and dedup) the app wires `log_events`, which only logs kind,
    domain id and fingerprint. Nothing is stored for events here.
@@ -34,14 +41,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Final
 
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.checks.dkim import DkimCheck
 from app.checks.dnsbl import DnsblCheck
 from app.checks.models import CheckContext, CheckResult, finding
 from app.checks.registry import CheckRegistry
@@ -51,29 +57,31 @@ from app.models.check_run import MAX_DURATION_MS
 from app.repositories import TenantRepositories, repo_for
 from app.repositories.base import MAX_LIMIT
 from app.repositories.check_runs import CheckRunInvalid, CheckRunRecord
-from app.repositories.dns_snapshots import DnsSnapshotInvalid, DnsSnapshotRecord
+from app.repositories.dns_snapshots import (
+    DnsSnapshotInvalid,
+    DnsSnapshotRecord,
+    SnapshotCursor,
+)
 from app.services.change_detect import (
     ChangeEvent,
+    CheckInput,
     CheckState,
+    ListView,
     detect_events,
-    evaluated_ids,
-    listed_ids,
+    list_baseline,
+    list_view_of_data,
+    list_view_of_findings,
 )
-from app.services.checks import (
-    DEFAULT_DEADLINE_S,
-    default_registry,
-    run_checks,
-    with_dnsbl_enabled,
-)
+from app.services.checks import DEFAULT_DEADLINE_S, default_registry, run_checks
 from app.services.clock import Clock
-from app.services.dkim_probe_selectors import registry_for, resolve_probe_selectors
-from app.services.dns_diff import Snapshot, SnapshotFormatError, carry_forward
+from app.services.dns_diff import Entry, Snapshot, SnapshotFormatError, build_snapshot
 from app.services.dns_snapshot import collect_snapshot, load_snapshot, store_if_due
-from app.services.dnsbl_admin import enabled_list_ids
+from app.services.domain_registry import prepare_domain_registry
 from app.services.scheduler import ScheduledRun
 
 logger = logging.getLogger("app.monitor_run")
 
+# Page size when paging back through stored runs and snapshots (not a cap on how far back).
 HISTORY_LIMIT: Final = 50
 SOURCE: Final = "scheduled"
 UNKNOWN_CHECK: Final = "unknown_check"
@@ -86,23 +94,10 @@ EventSink = Callable[[TenantContext, Sequence[ChangeEvent]], None]
 
 
 def prepare_registry(ctx: TenantContext, db: Session, ids: Sequence[str]) -> CheckRegistry:
-    """The registry of a domain run, as the API domain routes build it: DKIM probing the tenant's
-    selectors, DNSBL running the instance's enabled lists (unreadable: the check is `error`)."""
-    registry = default_registry()
-    if DkimCheck.id in ids:
-        registry = registry_for(resolve_probe_selectors(ctx, db))
-    if DnsblCheck.id in ids:
-        try:
-            enabled: frozenset[str] | None = enabled_list_ids(db)
-        except Exception as exc:  # noqa: BLE001 - the DNSBL check then reports `error`
-            logger.warning(
-                "dnsbl enablement unreadable (%s)",
-                type(exc).__name__,
-                extra={"event": "monitor_run.dnsbl_enablement_failed"},
-            )
-            enabled = None
-        registry = with_dnsbl_enabled(registry, enabled)
-    return registry
+    """The registry of a domain run, prepared as the API domain routes do
+    (`prepare_domain_registry`), in its non-strict mode: an unreadable DNSBL enablement makes
+    the DNSBL check `error` instead of failing the run."""
+    return prepare_domain_registry(ctx, db, ids, strict=False) or default_registry()
 
 
 def log_events(ctx: TenantContext, events: Sequence[ChangeEvent]) -> None:
@@ -135,30 +130,35 @@ def error_result(check_id: str, target: str, reason: str, at: datetime) -> Check
     )
 
 
+def list_view_of_record(record: CheckRunRecord) -> ListView | None:
+    """The per-list DNSBL view of a stored run (None for any other check)."""
+    if record.check_id != DnsblCheck.id:
+        return None
+    return list_view_of_findings(record.status, ((f.code, f.params) for f in record.findings))
+
+
 def state_of_record(record: CheckRunRecord) -> CheckState:
-    return CheckState(
-        check_id=record.check_id,
-        status=record.status,
-        listed=listed_ids((f.code, f.params) for f in record.findings),
-        complete=not record.findings_truncated,
-    )
+    return CheckState(record.check_id, record.status, list_view_of_record(record))
 
 
 def state_of_result(result: CheckResult) -> CheckState:
-    return CheckState(
-        check_id=result.check_id,
-        status=result.status,
-        listed=listed_ids((f.code, f.params) for f in result.findings),
-        evaluated=evaluated_ids(result.data),
-    )
+    lists = list_view_of_data(result.data) if result.check_id == DnsblCheck.id else None
+    return CheckState(result.check_id, result.status, lists)
 
 
-def snapshot_baseline(records: Sequence[DnsSnapshotRecord]) -> Snapshot | None:
-    """Fold stored snapshots (newest first, as `list_for_domain` returns them) oldest to newest
-    with `carry_forward`: the last non-error state of each entry. A malformed stored snapshot is
-    skipped. None when there is no usable snapshot."""
-    baseline: Snapshot | None = None
-    for record in reversed(records):
+def snapshot_baseline(records: Iterable[DnsSnapshotRecord]) -> Snapshot | None:
+    """The DNS baseline from stored snapshots given newest first, consumed lazily and no further
+    than needed: the newest usable snapshot, with each entry it could not evaluate (`error`)
+    replaced by that entry's newest non-error state, looking back only while the entry stays
+    monitored (present) in every snapshot in between. This is what folding the whole history
+    oldest to newest with `dns_diff.carry_forward` gives, so a lookup failing for any number of
+    snapshots keeps its last real state (M7-10b). A malformed stored snapshot is skipped. None
+    when there is no usable snapshot."""
+    base: Snapshot | None = None
+    entries: dict[tuple[str, str], Entry] = {}
+    pending: set[tuple[str, str]] = set()
+    carried = truncated = False
+    for record in records:
         try:
             snap = load_snapshot(record)
         except SnapshotFormatError:
@@ -167,8 +167,49 @@ def snapshot_baseline(records: Sequence[DnsSnapshotRecord]) -> Snapshot | None:
                 extra={"event": "monitor_run.snapshot_malformed"},
             )
             continue
-        baseline = snap if baseline is None else carry_forward(baseline, snap)
-    return baseline
+        older = {(e.name, e.rdtype): e for e in snap.entries}
+        if base is None:
+            base, entries = snap, older
+            pending = {k for k, e in older.items() if e.state == "error"}
+        else:
+            for key in sorted(pending):
+                entry = older.get(key)
+                if entry is None or entry.state != "error":
+                    pending.discard(key)  # absent: not monitored then, the chain ends here
+                if entry is not None and entry.state != "error":
+                    entries[key] = entry
+                    carried, truncated = True, truncated or snap.truncated
+        if not pending:
+            break
+    if base is None or not carried:
+        return base
+    return build_snapshot(entries.values(), truncated=base.truncated or truncated)
+
+
+def _snapshots_newest_first(
+    repos: TenantRepositories, domain_id: int, page: int
+) -> Iterator[DnsSnapshotRecord]:
+    before: SnapshotCursor | None = None
+    while True:
+        items = repos.dns_snapshots.list_for_domain(domain_id, limit=page, before=before)
+        yield from items
+        if len(items) < page:
+            return
+        before = SnapshotCursor.after(items[-1])
+
+
+def _runs_newest_first(
+    repos: TenantRepositories, domain_id: int, check_id: str, page: int
+) -> Iterator[CheckRunRecord]:
+    cursor = None
+    while True:
+        result = repos.check_runs.list_for_domain(
+            domain_id, check_id=check_id, limit=page, cursor=cursor
+        )
+        yield from result.items
+        if result.next_cursor is None:
+            return
+        cursor = result.next_cursor
 
 
 @dataclass(frozen=True, slots=True)
@@ -272,22 +313,19 @@ class MonitorRunExecutor:
             snapshot = snap_out
 
         status = summary_status([r.status for r in results])
+        inputs = [
+            CheckInput(
+                state_of_result(r),
+                loaded.history[r.check_id].previous,
+                loaded.history[r.check_id].baseline,
+            )
+            for r in results
+        ]
+        inputs = await asyncio.to_thread(self._with_lists_baseline, ctx, loaded.domain_id, inputs)
         recorded, stored = await asyncio.to_thread(
             self._store, ctx, run.target.id, loaded.domain_id, results, snapshot, status, now
         )
-        events = detect_events(
-            loaded.domain_id,
-            [
-                (
-                    state_of_result(r),
-                    loaded.history[r.check_id].previous,
-                    loaded.history[r.check_id].baseline,
-                )
-                for r in results
-            ],
-            loaded.snapshot_baseline,
-            snapshot,
-        )
+        events = detect_events(loaded.domain_id, inputs, loaded.snapshot_baseline, snapshot)
         if events:
             try:
                 self._sink(ctx, events)
@@ -352,7 +390,7 @@ class MonitorRunExecutor:
                 registry = self._prepare(ctx, db, [c for c in ids if c not in unknown])
                 history = {c: self._check_history(repos, target.domain_id, c) for c in ids}
                 baseline = snapshot_baseline(
-                    repos.dns_snapshots.list_for_domain(target.domain_id, limit=self._history)
+                    _snapshots_newest_first(repos, target.domain_id, self._history)
                 )
                 return _Loaded(
                     target.domain_id, domain.name, selectors, registry, history, baseline
@@ -362,14 +400,48 @@ class MonitorRunExecutor:
 
     def _check_history(self, repos: TenantRepositories, domain_id: int, check_id: str) -> _History:
         try:
-            page = repos.check_runs.list_for_domain(
-                domain_id, check_id=check_id, limit=self._history
-            )
+            page = repos.check_runs.list_for_domain(domain_id, check_id=check_id, limit=1)
+            if not page.items:
+                return _History(None, None)
+            latest = page.items[0]
+            stored = latest if latest.status != "error" else None
+            if stored is None:
+                stored = repos.check_runs.latest_non_error(domain_id, check_id)
         except CheckRunInvalid:
             return _History(None, None)  # an id the history cannot hold: no previous run
-        previous = state_of_record(page.items[0]) if page.items else None
-        baseline = next((state_of_record(r) for r in page.items if r.status != "error"), None)
-        return _History(previous, baseline)
+        baseline = None if stored is None else state_of_record(stored)
+        return _History(state_of_record(latest), baseline)
+
+    def _with_lists_baseline(
+        self, ctx: TenantContext, domain_id: int, inputs: list[CheckInput]
+    ) -> list[CheckInput]:
+        """`inputs` with the per-list baseline of the DNSBL check (M7-10b): only the lists the
+        new run evaluated, each resolved at the newest stored run that evaluated it."""
+        out: list[CheckInput] = []
+        for item in inputs:
+            lists = item.current.lists
+            if (
+                item.current.check_id != DnsblCheck.id
+                or item.previous is None
+                or lists is None
+                or not lists.evaluated
+            ):
+                out.append(item)
+                continue
+            try:
+                with self._factory() as db:
+                    try:
+                        repos = repo_for(ctx, db)
+                        runs = _runs_newest_first(repos, domain_id, DnsblCheck.id, self._history)
+                        found = list_baseline(lists.evaluated, map(list_view_of_record, runs))
+                    finally:
+                        db.rollback()
+            except Exception as exc:  # noqa: BLE001 - results are still stored, no listing event
+                self._log_failed("lists_baseline", exc)
+                out.append(item)
+                continue
+            out.append(item._replace(lists_baseline=found))
+        return out
 
     def _store(
         self,
@@ -426,6 +498,7 @@ __all__ = [
     "RegistryFn",
     "RunOutcome",
     "error_result",
+    "list_view_of_record",
     "log_events",
     "prepare_registry",
     "snapshot_baseline",
