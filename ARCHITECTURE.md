@@ -188,11 +188,24 @@ newest snapshot of each domain is never pruned (it is the baseline of the next d
   tenant, per enabled DNSBL list (targets running `dnsbl`) and per remote HTTP host (no built-in
   check fetches over HTTP yet); a run takes all its keys or none. A rate-limited target is claimed
   to the time its keys have room (not dropped, not a run). Each claimed target runs as an asyncio
-  task under a semaphore; an exception is logged by type, `shutdown` cancels the runs in flight.
-  The run itself is M7-10 (`RunFn`); check ids no longer in the registry are passed to it in
-  `ScheduledRun.unknown_check_ids` and must be recorded as `error`. `due_targets` and `claim` are
-  the only cross-tenant methods of monitor targets; everything else goes through
-  `repo_for(TenantContext(target.tenant_id))`.
+  task under a semaphore; an exception is logged by type. `shutdown` waits for a tick in progress
+  (tick lock), cancels the runs in flight and undoes the claim of every run that did not finish
+  (conditional `claim(id, new_next_run_at, claimed_at)`), so a restart loses no interval.
+  `due_targets` and `claim` are the only cross-tenant methods of monitor targets; everything else
+  goes through `repo_for(TenantContext(target.tenant_id))`.
+- Scheduled run (M7-10, `app/services/monitor_run.py`, the `RunFn`): with
+  `TenantContext(tenant_id, principal=None)` it loads the target, domain, registry (as the API
+  domain routes) and history in one read transaction, runs the checks through `run_checks` and
+  collects the DNS snapshot concurrently, then in one write transaction stores a `check_runs` row
+  per check (`source=scheduled`; `error` stays `error`; ids in `ScheduledRun.unknown_check_ids` or
+  missing from the registry are `error` rows), the snapshot when due, and `last_run_at` /
+  `last_status` (fail > error > warn > info > ok). `next_run_at` is left to the claim. After the
+  commit `app/services/change_detect.py` (pure) compares each check with its latest run (error
+  transitions) and latest non-error run (DNSBL listings by list id, policy regressions by
+  ok = info < warn < fail), and the snapshot with the last non-error state of each entry
+  (`carry_forward` over recent snapshots); an `error` result yields only error events, a first run
+  none. Events carry a deterministic fingerprint (kind, domain_id, subject, hash of the new state)
+  and go to an injected `EventSink`; until M7-14 (delivery, dedup) the app logs them.
 - Maintenance (M7-09): every `MAINTENANCE_INTERVAL_MINUTES` the scheduler process runs the session
   purge (`purge_sessions` with the session policy; every role also purges once at startup),
   `prune_check_runs` and `prune_dns_snapshots`, each in its own transaction; a failure is logged

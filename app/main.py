@@ -20,15 +20,14 @@ from app.core.csrf import CSRFMiddleware
 from app.core.i18n import t, validate_catalogues
 from app.core.logging import RequestLoggingMiddleware, configure_logging
 from app.core.security_headers import SecurityHeadersMiddleware
+from app.dns.cache import CachingResolver
+from app.dns.factory import build_resolver
 from app.repositories.monitor_targets import known_check_ids
 from app.services.auth import SessionPolicy, purge_sessions
 from app.services.clock import SystemClock
-from app.services.scheduler import (
-    MonitorScheduler,
-    SchedulerConfig,
-    log_only_run,
-    maintenance_job,
-)
+from app.services.dns_snapshot import heartbeat_from_settings
+from app.services.monitor_run import MonitorRunExecutor
+from app.services.scheduler import MonitorScheduler, SchedulerConfig, maintenance_job
 from app.services.seed_sync import SeedSyncError, run_seed_sync
 from app.web.auth import router as auth_router
 from app.web.authentication import router as authentication_router
@@ -128,9 +127,15 @@ def start_scheduler(app: FastAPI) -> MonitorScheduler | None:
         return None
     factory = _session_factory(Request({"type": "http", "app": app}))
     clock = SystemClock()
+    executor = MonitorRunExecutor(  # M7-10; change events are logged until M7-14 delivers them
+        factory,
+        CachingResolver(build_resolver(cfg)),
+        clock,
+        heartbeat=heartbeat_from_settings(cfg),
+    )
     scheduler = MonitorScheduler(
         factory,
-        log_only_run,  # M7-10 replaces it with the run that records results
+        executor,
         SchedulerConfig.from_settings(cfg),
         clock,
         random.Random(),
