@@ -35,7 +35,7 @@ def _sensitive() -> list[str]:
 def _assert_clean(exc: BaseException, extra: tuple[str, ...] = ()) -> None:
     """No plaintext, key or token in message, repr or the cause/context chain."""
     assert exc.__cause__ is None
-    assert exc.__suppress_context__ is True or exc.__context__ is None
+    assert exc.__context__ is None
     for text in (str(exc), repr(exc), repr(exc.args)):
         for secret in (*_sensitive(), *extra):
             if secret:
@@ -231,8 +231,17 @@ def test_unencodable_plaintext_not_chained() -> None:
     lone_surrogate = "pass\ud800word"
     with pytest.raises(ValueError) as info:
         SecretCipher(KEY_OLD).encrypt(lone_surrogate)
-    assert info.value.__cause__ is None and info.value.__suppress_context__
+    assert info.value.__cause__ is None
+    assert info.value.__context__ is None
     assert lone_surrogate not in str(info.value) + repr(info.value)
+
+
+def test_decrypted_bytes_not_utf8_is_typed_and_unchained() -> None:
+    raw = b"\xffsecret-bytes\xfe"
+    token = Fernet(KEY_OLD.encode()).encrypt(raw)
+    with pytest.raises(SecretDecryptError) as info:
+        SecretCipher(KEY_OLD).decrypt(token.decode())
+    _assert_clean(info.value, (token.decode(), "secret-bytes"))
 
 
 # --- module-level functions: key from ENCRYPTION_KEY, checked on first use ---
@@ -259,14 +268,15 @@ def test_module_functions_use_env_keys(monkeypatch: pytest.MonkeyPatch) -> None:
     _env(monkeypatch, KEY_NEW)
     secrets_crypto.get_cipher.cache_clear()
     assert secrets_crypto.decrypt(new_token) == PLAINTEXT
-    with pytest.raises(SecretDecryptError):
+    with pytest.raises(SecretDecryptError) as info:
         secrets_crypto.decrypt(old_token)
+    _assert_clean(info.value, (old_token,))
 
 
 @pytest.mark.parametrize(
     "encryption_key",
-    [None, "", "e" * 40, f"{KEY_OLD},garbage-garbage"],
-    ids=["missing", "empty", "not-fernet", "bad-second"],
+    [None, "", "s3cr3t-too-short", "e" * 40, f"{KEY_OLD},garbage-garbage"],
+    ids=["missing", "empty", "settings-too-short", "not-fernet", "bad-second"],
 )
 def test_module_functions_bad_config_is_typed(
     monkeypatch: pytest.MonkeyPatch, encryption_key: str | None
@@ -289,10 +299,12 @@ def test_nothing_sensitive_is_logged(caplog: pytest.LogCaptureFixture) -> None:
         rotated = ring.rotate(token)
         assert ring.decrypt(rotated) == PLAINTEXT
         for bad in (_flip(rotated, 30), "garbage", ""):
-            with pytest.raises(SecretDecryptError):
+            with pytest.raises(SecretDecryptError) as decrypt_info:
                 ring.decrypt(bad)
-        with pytest.raises(SecretsConfigError):
+            _assert_clean(decrypt_info.value, (rotated,))
+        with pytest.raises(SecretsConfigError) as config_info:
             SecretCipher(f"{KEY_OLD},{KEY_OLD[:-1]}")
+        _assert_clean(config_info.value)
     logged = caplog.text + "".join(str(r.args) for r in caplog.records)
     for secret in (*_sensitive(), token, rotated):
         assert secret not in logged

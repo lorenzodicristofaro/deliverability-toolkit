@@ -7,14 +7,18 @@ commas, combined in a MultiFernet. The FIRST key encrypts, EVERY key decrypts, s
 prepend a new key, re-encrypt stored tokens with `rotate()`, then drop the old key.
 
 Errors are typed and carry fixed text only: no plaintext, no key material and no token ever goes
-into an exception message, its repr, its cause/context chain or a log record. This module does
-not log at all.
+into an exception message, its repr or a log record. Library errors are swallowed with
+`contextlib.suppress` and every error is raised AFTER that block, never inside an `except`
+handler, so `__cause__` and `__context__` are both None (`raise ... from None` would only hide
+the context: `__context__` would still reference e.g. a UnicodeEncodeError whose `.object` is
+the whole plaintext). This module does not log at all.
 """
 
 from __future__ import annotations
 
 import base64
 import binascii
+import contextlib
 import functools
 import re
 
@@ -65,16 +69,20 @@ def _parse_key(entry: str, position: int, total: int) -> Fernet:
         raise SecretsConfigError(f"{where} is empty")
     if _KEY_SHAPE.fullmatch(entry) is None:
         raise SecretsConfigError(f"{where} is not a 44-character URL-safe base64 Fernet key")
-    try:
+    raw: bytes | None = None
+    # raised after the block, so the error has no __context__
+    with contextlib.suppress(binascii.Error, ValueError):
         raw = base64.urlsafe_b64decode(entry)
-    except (binascii.Error, ValueError):
-        raise SecretsConfigError(f"{where} is not valid URL-safe base64") from None
+    if raw is None:
+        raise SecretsConfigError(f"{where} is not valid URL-safe base64")
     if len(raw) != _KEY_BYTES:
         raise SecretsConfigError(f"{where} does not decode to 32 bytes")
-    try:
-        return Fernet(entry)
-    except (ValueError, TypeError):
-        raise SecretsConfigError(f"{where} is not a valid Fernet key") from None
+    fernet: Fernet | None = None
+    with contextlib.suppress(ValueError, TypeError):
+        fernet = Fernet(entry)
+    if fernet is None:
+        raise SecretsConfigError(f"{where} is not a valid Fernet key")
+    return fernet
 
 
 class SecretCipher:
@@ -102,41 +110,51 @@ class SecretCipher:
         """Encrypt UTF-8 text under the primary key; returns an ASCII Fernet token."""
         if not isinstance(plaintext, str):
             raise TypeError("plaintext must be str")
-        try:
+        data: bytes | None = None
+        # Its .object is the whole plaintext: raise after the block, so no __context__.
+        with contextlib.suppress(UnicodeEncodeError):
             data = plaintext.encode("utf-8")
-        except UnicodeEncodeError:
-            # The UnicodeEncodeError object holds the whole plaintext: never chain it.
-            raise ValueError("plaintext is not encodable as UTF-8") from None
+        if data is None:
+            raise ValueError("plaintext is not encodable as UTF-8")
         return self._multi.encrypt(data).decode("ascii")
 
     def decrypt(self, token: str) -> str:
         """Decrypt a token made by any configured key; SecretDecryptError on any failure."""
         data = self._token_bytes(token)
-        try:
+        plain: bytes | None = None
+        with contextlib.suppress(InvalidToken):
             plain = self._multi.decrypt(data)
-        except InvalidToken:
-            raise SecretDecryptError("secret could not be decrypted") from None
-        try:
-            return plain.decode("utf-8")
-        except UnicodeDecodeError:
-            raise SecretDecryptError("decrypted secret is not UTF-8 text") from None
+        if plain is None:
+            raise SecretDecryptError("secret could not be decrypted")
+        text: str | None = None
+        # its .object is the decrypted plaintext
+        with contextlib.suppress(UnicodeDecodeError):
+            text = plain.decode("utf-8")
+        if text is None:
+            raise SecretDecryptError("decrypted secret is not UTF-8 text")
+        return text
 
     def rotate(self, token: str) -> str:
         """Re-encrypt a token under the primary key (keeps its original timestamp)."""
         data = self._token_bytes(token)
-        try:
-            return self._multi.rotate(data).decode("ascii")
-        except InvalidToken:
-            raise SecretDecryptError("secret could not be decrypted for rotation") from None
+        rotated: bytes | None = None
+        with contextlib.suppress(InvalidToken):
+            rotated = self._multi.rotate(data)
+        if rotated is None:
+            raise SecretDecryptError("secret could not be decrypted for rotation")
+        return rotated.decode("ascii")
 
     @staticmethod
     def _token_bytes(token: str) -> bytes:
         if not isinstance(token, str):
             raise TypeError("token must be str")
-        try:
-            return token.encode("ascii")
-        except UnicodeEncodeError:
-            raise SecretDecryptError("secret could not be decrypted") from None
+        data: bytes | None = None
+        # its .object is the whole token
+        with contextlib.suppress(UnicodeEncodeError):
+            data = token.encode("ascii")
+        if data is None:
+            raise SecretDecryptError("secret could not be decrypted")
+        return data
 
 
 @functools.cache
@@ -146,11 +164,12 @@ def get_cipher() -> SecretCipher:
     Missing or invalid configuration raises SecretsConfigError. Tests that change the
     environment call `get_cipher.cache_clear()`.
     """
-    try:
+    raw: str | None = None
+    # Its context chain can reach pydantic's ValidationError, which holds the raw input.
+    with contextlib.suppress(ConfigError):
         raw = Settings().encryption_key.get_secret_value()
-    except ConfigError:
-        # ConfigError text names variables only, but keep the chain empty like every error here.
-        raise SecretsConfigError("configuration could not be loaded (ENCRYPTION_KEY)") from None
+    if raw is None:
+        raise SecretsConfigError("configuration could not be loaded (ENCRYPTION_KEY)")
     return SecretCipher(raw)
 
 

@@ -328,9 +328,11 @@ when a profile is older than 12 months.
     `get_cipher()` (reads `Settings().encryption_key`); a missing, blank or non-Fernet entry raises
     `SecretsConfigError` naming only the entry's position. Any decrypt/rotate failure (wrong or
     removed key, tampered, truncated, non-ASCII or garbage token) raises `SecretDecryptError`.
-    Both are `SecretsError` with a stable `code` and fixed text; they are raised `from None`, so
-    no plaintext, key or token reaches a message, repr, exception chain or log. The module does
-    not log.
+    Both are `SecretsError` with a stable `code` and fixed text, raised after (never inside) the
+    `contextlib.suppress` block that swallowed the library error, so `__cause__` and
+    `__context__` are None (`from None` alone would keep `__context__`, e.g. a UnicodeEncodeError
+    holding the plaintext or pydantic's ValidationError holding the raw key). No plaintext, key or token reaches a
+    message, repr, exception chain or log. The module does not log.
   - Rotation procedure: prepend a new key (`new,old`) and restart; re-encrypt stored tokens with
     `rotate()`; when none is left under the old key, remove it and restart. Losing every key that
     encrypted a token loses that secret. Operator steps: docs/SETUP.md section 10.
