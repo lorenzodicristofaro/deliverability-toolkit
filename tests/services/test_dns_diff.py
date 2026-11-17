@@ -5,6 +5,7 @@ from typing import Any
 
 import pytest
 
+from app.dns.types import join_txt_strings
 from app.models.dns_snapshot import MAX_ENTRIES, MAX_ENTRIES_BYTES
 from app.services.dns_diff import (
     MAX_NAME_LENGTH,
@@ -16,7 +17,9 @@ from app.services.dns_diff import (
     SnapshotFormatError,
     build_entry,
     build_snapshot,
+    carry_forward,
     diff_snapshots,
+    display_text,
     from_stored,
     is_dmarc,
     is_spf,
@@ -50,22 +53,25 @@ def spf(*values: str, state: str = "ok") -> Entry:
     ("raw", "expected"),
     [
         (SPF1, SPF1),
-        ("  v=spf1   include:_spf.example.net\t-all \n", SPF1),
-        ('"v=spf1 include:_spf.example.net" " -all"', "v=spf1 include:_spf.example.net -all"),
-        ('"v=spf1 inc" "lude:_spf.example.net -all"', SPF1),  # joined, no separator added
-        ('"v=spf1 include:_spf.example.net -all"', SPF1),
-        ("V=SPF1 INCLUDE:_SPF.EXAMPLE.NET -ALL", SPF1.upper().replace("V=SPF1", "v=spf1").lower()),
+        ("  v=spf1   include:_spf.example.net\t-all \t", SPF1),  # ASCII space/tab runs only
+        ("V=SPF1 INCLUDE:_SPF.EXAMPLE.NET -ALL", SPF1),  # SPF: ASCII case folded
+        ("v=spf1 a:\u00c0.example -all", "v=spf1 a:\u00c0.example -all"),  # non-ASCII case kept
         ("v=DKIM1; k=rsa; p=AbCd", "v=DKIM1; k=rsa; p=AbCd"),  # not SPF: case kept
+        # Literal quotes are record content (the resolver already joined the strings).
+        ('"v=spf1 include:_spf.example.net -all"', '"v=spf1 include:_spf.example.net -all"'),
+        ('"v=spf1 inc" "lude:x -all"', '"v=spf1 inc" "lude:x -all"'),
         ('"unterminated', '"unterminated'),
-        ('"a" b', '"a" b'),  # not only quoted strings: left as it is
-        ('"a\\"b"', 'a"b'),
-        ('""', ""),
+        ('"a\\"b"', '"a\\"b"'),
+        ('""', '""'),
         ("", ""),
-        ("   ", ""),
-        ("a\x00b\x07c", "a�b�c"),  # controls
-        ("a\ud800b", "a�b"),  # lone surrogate
-        ("café 中文", "café 中文"),  # non-ASCII is kept
-        ("a  b", "a b"),  # unicode spaces collapse
+        (" \t ", ""),
+        # Everything but ASCII space/tab is content, kept as is for the hash.
+        ("a\x00b\x07c", "a\x00b\x07c"),
+        ("a\ud800b", "a\ud800b"),
+        ("a\xa0\u2003b", "a\xa0\u2003b"),
+        ("a\nb", "a\nb"),
+        ("v=spf1 -all\n", "v=spf1 -all\n"),
+        ("caf\u00e9 \u4e2d\u6587", "caf\u00e9 \u4e2d\u6587"),
     ],
 )
 def test_normalise_txt(raw: str, expected: str) -> None:
@@ -73,9 +79,66 @@ def test_normalise_txt(raw: str, expected: str) -> None:
 
 
 def test_txt_string_splitting_is_the_same_record() -> None:
+    # The resolver joins the character-strings of one record with no separator: two different
+    # splits of the same record reach normalisation as the same text.
     whole = normalise_txt(SPF1)
-    assert normalise_txt('"v=spf1 include:_spf.example.net " "-all"') == whole
-    assert normalise_txt('"v=spf1 include:_spf" ".example.net -all"') == whole
+    for strings in (
+        (b"v=spf1 include:_spf.example.net ", b"-all"),
+        (b"v=spf1 include:_spf", b".example.net -all"),
+        (SPF1.encode(),),
+    ):
+        assert normalise_txt(join_txt_strings(strings)) == whole
+
+
+@pytest.mark.parametrize(
+    ("good", "bad"),
+    [
+        (SPF1, f'"{SPF1}"'),  # published with literal quotes: a common SPF breakage
+        (SPF1, '"v=spf1 include:_spf.example.net" "-all"'),
+        (DMARC1, f'"{DMARC1}"'),
+        ("v=DKIM1; p=AbCd", '"v=DKIM1; p=AbCd"'),
+        ("v=spf1 -all", "v=spf1\xa0-all"),  # NBSP is not a separator
+        ("v=spf1 -all", "v=spf1\x1c-all"),
+        ("v=spf1 -all", "v=spf1\x1f-all"),
+        ("v=spf1 -all", "v=spf1\x85-all"),  # C1 NEL
+        ("v=spf1 -all", "v=spf1\n-all"),
+        ("v=spf1 -all", "v=spf1 -all\x00"),
+        ("a\x00b", "a\x01b"),  # distinct control bytes
+        ("a\x80b", "a\x9fb"),  # distinct C1 bytes
+        ("a\x1cb", "a\x1db"),
+        ("a\ud800b", "a?b"),  # lone surrogate is not "?"
+        ("a\ud800b", "a\ud801b"),
+        ("v=spf1 a:\u00e0.example -all", "v=spf1 a:\u00c0.example -all"),  # only ASCII folded
+    ],
+)
+def test_content_differences_give_different_hashes(good: str, bad: str) -> None:
+    a = entry("@", "TXT", "ok", normalise_txt(good))
+    b = entry("@", "TXT", "ok", normalise_txt(bad))
+    assert a.values[0].hash != b.values[0].hash and a.entry_hash != b.entry_hash
+    (c,) = diff_snapshots(snap(a), snap(b))
+    assert c.kind == "changed"
+
+
+@pytest.mark.parametrize(
+    ("value", "shown"),
+    [
+        ("a\x00b\x07c", "a\ufffdb\ufffdc"),
+        ("a\ud800b", "a\ufffdb"),
+        ("a\xa0b", "a\ufffdb"),
+        ("a\nb", "a\ufffdb"),
+        ("caf\u00e9 \u4e2d", "caf\u00e9 \u4e2d"),
+        ("\\u0000", "\\u0000"),  # six literal characters: content, shown as is
+        ("", ""),
+    ],
+)
+def test_display_text_replaces_non_printables_only_for_display(value: str, shown: str) -> None:
+    assert display_text(value) == shown
+    if not value:
+        return
+    stored = entry("@", "TXT", "ok", value).values[0]
+    assert stored.text == shown
+    # The hash is of the value itself, never of the display replacement.
+    assert (stored.hash == entry("@", "TXT", "ok", shown).values[0].hash) is (value == shown)
 
 
 def test_normalise_txt_is_bounded_in_work() -> None:
@@ -109,7 +172,9 @@ def test_record_kind_filters(value: str, spf_: bool, dmarc_: bool) -> None:
         ("0 .", "0 "),
         ("mail.example.com", "mail.example.com"),
         ("x y z", "x y z"),
-        ("10 mail\x00.example.com", "10 mail�.example.com"),
+        ("10 mail\x00.example.com", "10 mail\x00.example.com"),  # content, kept for the hash
+        ("10\tMAIL.example.com", "10 mail.example.com"),
+        ("10 M\u00c0IL.example.com", "10 m\u00c0il.example.com"),  # ASCII-only lower-casing
         ("999999 mail.example.com", "999999 mail.example.com"),
         ("", ""),
     ],
@@ -302,7 +367,7 @@ def test_record_reordering_is_not_a_change() -> None:
 
 
 def test_txt_multi_string_equality_is_not_a_change() -> None:
-    a = snap(spf(normalise_txt('"v=spf1 include:_spf" ".example.net -all"')))
+    a = snap(spf(normalise_txt(join_txt_strings([b"v=spf1 include:_spf", b".example.net -all"]))))
     b = snap(spf(normalise_txt(SPF1)))
     c = snap(spf(normalise_txt("  V=SPF1   include:_SPF.example.net\t-ALL ")))
     assert diff_snapshots(a, b) == () and diff_snapshots(b, c) == ()
@@ -382,13 +447,111 @@ def test_hostile_values_stay_bounded_and_safe() -> None:
         normalise_txt("‮" + "x" * 300 + "\x1b[31m"),
         normalise_txt('"' * 5000),
         normalise_txt("𐏿" * 400),
+        normalise_txt("v=spf1 \\u0000 -all"),  # six literal characters, not a NUL
     ]
     a = snap(entry("@", "TXT", "ok", *hostile))
     stored, _ = to_stored(a)
     text = json.dumps(stored)
-    assert "\\u0000" not in text and "\x00" not in text
+    # No real NUL is stored (displayed as U+FFFD); the literal six characters `\\u0000` are.
+    shown = [v["v"] for e in stored for v in e["values"] if "v" in v]
+    assert not any("\x00" in t for t in shown)
+    assert "v=spf1 \\u0000 -all" in shown
     assert len(text) <= MAX_ENTRIES_BYTES
     assert all(len(v.text or "") <= MAX_VALUE_CHARS for e in a.entries for v in e.values)
     other = snap(entry("@", "TXT", "ok", "benign"))
     (c,) = diff_snapshots(a, other)
     assert c.kind == "changed"
+
+
+def test_literal_backslash_u0000_is_content_not_a_nul() -> None:
+    value = normalise_txt("v=spf1 \\u0000 -all")
+    assert "\x00" not in value and len(value) == len("v=spf1 ") + 6 + len(" -all")
+    a = snap(spf(value))
+    stored, _ = to_stored(a)
+    assert stored[0]["values"][0]["v"] == value
+    assert from_stored(stored, a.content_hash).entries == a.entries
+    assert diff_snapshots(snap(spf(normalise_txt("v=spf1 \x00 -all"))), a)[0].kind == "changed"
+
+
+# --- carry_forward: changes across a transient error -----------------------------------------
+
+
+def _run(*snapshots: Snapshot) -> list[list[tuple[str, str, str]]]:
+    """What a consumer sees when it diffs each new snapshot against the carried baseline."""
+    baseline, seen = snapshots[0], []
+    for current in snapshots[1:]:
+        seen.append(kinds(baseline, current))
+        baseline = carry_forward(baseline, current)
+    return seen
+
+
+@pytest.mark.parametrize(
+    ("sequence", "expected"),
+    [
+        # ok X, error, ok Y: the plain pairwise diff never reports X -> Y; carried, it does.
+        (
+            [spf(SPF1), spf(state="error"), spf(SPF2)],
+            [[("@", "TXT", "inconclusive")], [("@", "TXT", "changed")]],
+        ),
+        # ok X, error, error, ok X: a transient outage, nothing changed.
+        (
+            [spf(SPF1), spf(state="error"), spf(state="error"), spf(SPF1)],
+            [[("@", "TXT", "inconclusive")], [("@", "TXT", "inconclusive")], []],
+        ),
+        # ok X, error, nodata: the record is gone, reported as removed.
+        (
+            [spf(SPF1), spf(state="error"), spf(state="nodata")],
+            [[("@", "TXT", "inconclusive")], [("@", "TXT", "removed")]],
+        ),
+        # nxdomain, error, ok X: added.
+        (
+            [spf(state="nxdomain"), spf(state="error"), spf(SPF1)],
+            [[("@", "TXT", "inconclusive")], [("@", "TXT", "added")]],
+        ),
+        # error from the start: nothing to carry, stays inconclusive until a first answer.
+        (
+            [spf(state="error"), spf(state="error"), spf(SPF1)],
+            [[("@", "TXT", "inconclusive")], [("@", "TXT", "inconclusive")]],
+        ),
+    ],
+)
+def test_carry_forward_reports_changes_across_errors(
+    sequence: list[Entry], expected: list[list[tuple[str, str, str]]]
+) -> None:
+    assert _run(*(snap(e) for e in sequence)) == expected
+
+
+def test_plain_pairwise_diff_loses_the_change_across_an_error() -> None:
+    a, b, c = snap(spf(SPF1)), snap(spf(state="error")), snap(spf(SPF2))
+    assert kinds(a, b) == kinds(b, c) == [("@", "TXT", "inconclusive")]
+
+
+def test_carry_forward_only_replaces_error_entries_and_drops_unmonitored_names() -> None:
+    ns = entry("@", "NS", "ok", "ns1.example.net")
+    dkim = entry("s1._domainkey", "TXT", "ok", "v=DKIM1; p=AA")
+    baseline = snap(spf(SPF1), ns, dkim)
+    current = snap(spf(state="error"), entry("@", "NS", "ok", "ns2.example.net"))
+    nxt = carry_forward(baseline, current)
+    got = {(e.name, e.rdtype): e for e in nxt.entries}
+    assert set(got) == {("@", "TXT"), ("@", "NS")}  # s1 is no longer monitored
+    assert got[("@", "TXT")].state == "ok"
+    assert got[("@", "TXT")].entry_hash == spf(SPF1).entry_hash
+    assert got[("@", "NS")].values[0].text == "ns2.example.net"
+    assert (
+        nxt.content_hash == snap(spf(SPF1), entry("@", "NS", "ok", "ns2.example.net")).content_hash
+    )
+
+
+def test_carry_forward_without_errors_is_the_current_snapshot() -> None:
+    current = snap(spf(SPF2))
+    assert carry_forward(snap(spf(SPF1)), current) is current
+
+
+def test_carry_forward_works_on_stored_snapshots_and_keeps_truncation() -> None:
+    long_value = "v=spf1 " + "a" * (MAX_VALUE_CHARS + 10)
+    baseline = snap(spf(long_value))
+    assert baseline.truncated
+    stored, flag = to_stored(baseline)
+    loaded = from_stored(stored, baseline.content_hash, flag)
+    nxt = carry_forward(loaded, snap(spf(state="error")))
+    assert nxt.truncated and nxt.entries[0].entry_hash == baseline.entries[0].entry_hash

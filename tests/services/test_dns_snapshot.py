@@ -24,7 +24,7 @@ from app.core.config import (
 from app.core.db import create_db_engine, create_session_factory
 from app.core.domain_names import InvalidDomainName
 from app.core.tenancy import TenantContext
-from app.dns.types import DnsQuestion, DnsRecord, DnsResult, ResultState
+from app.dns.types import DnsQuestion, DnsRecord, DnsResult, ResultState, join_txt_strings
 from app.models import DnsSnapshot, Tenant
 from app.models.dns_snapshot import MAX_ENTRIES_BYTES
 from app.repositories import repo_for
@@ -124,16 +124,56 @@ def test_collect_does_not_monitor_bimi_or_mta_sts() -> None:
 
 def test_collect_is_stable_across_record_order_and_txt_splitting() -> None:
     a = collect(zone())
+    # The resolver hands over each TXT record with its character-strings already joined.
+    split = join_txt_strings([b"v=spf1 include:_spf", b".example.net -all"])
     b = collect(
         zone(
             {
                 (DOMAIN, "MX"): ["20 mail2.example.com.", "10 mail.example.com."],
-                (DOMAIN, "TXT"): ['"v=spf1 include:_spf" ".example.net -all"'],
+                (DOMAIN, "TXT"): ["google-site-verification=abc", split],
             }
         )
     )
     assert a.content_hash == b.content_hash
     assert diff_snapshots(a, b) == ()
+
+
+@pytest.mark.parametrize(
+    ("published", "state", "kind"),
+    [
+        # Literal quotes are content: the value no longer starts with v=spf1, so it is not an SPF
+        # record (receivers ignore it too). The apex SPF entry goes to nodata: `removed`.
+        ([f'"{SPF}"'], "nodata", "removed"),
+        (['"v=spf1 include:_spf.example.net" "-all"'], "nodata", "removed"),
+        # Next to a still-valid SPF record, a quoted copy is not monitored: no change.
+        ([SPF, f'"{SPF}"'], "ok", None),
+        # NBSP right after the version: not an SPF record any more (v=spf1 must be followed by a
+        # space), so `removed`; NBSP or a control later in the record: still SPF, but changed.
+        (["v=spf1\xa0include:_spf.example.net -all"], "nodata", "removed"),
+        (["v=spf1 include:_spf.example.net\xa0-all"], "ok", "changed"),
+        (["v=spf1 include:_spf.example.net\x1c-all"], "ok", "changed"),
+    ],
+)
+def test_broken_spf_publication_is_reported_not_hidden(
+    published: list[str], state: str, kind: str | None
+) -> None:
+    good = collect(zone())
+    broken = collect(zone({(DOMAIN, "TXT"): published}))
+    assert by_key(broken)[("@", "TXT")].state == state
+    changes = [(c.name, c.rdtype, c.kind) for c in diff_snapshots(good, broken)]
+    assert changes == ([] if kind is None else [("@", "TXT", kind)])
+
+
+@pytest.mark.parametrize(
+    ("published", "kind"),
+    [(f'"{DMARC}"', "removed"), ("v=DMARC1;\xa0p=none", "changed")],
+    ids=["quoted", "nbsp"],
+)
+def test_broken_dmarc_publication_is_reported(published: str, kind: str) -> None:
+    good = collect(zone())
+    broken = collect(zone({(f"_dmarc.{DOMAIN}", "TXT"): [published]}))
+    (change,) = diff_snapshots(good, broken)
+    assert (change.name, change.kind) == ("_dmarc", kind)
 
 
 def test_domain_is_normalised_but_a_bad_domain_is_a_caller_bug() -> None:
@@ -369,6 +409,39 @@ def test_error_then_ok_is_stored_and_diffs_as_inconclusive(world: World) -> None
     newest, older = repo.list_for_domain(world.domains["a"])[:2]
     (change,) = diff_snapshots(load_snapshot(older), load_snapshot(newest))
     assert (change.name, change.kind) == ("_dmarc", "inconclusive")
+
+
+@pytest.mark.parametrize(
+    "spf",
+    [
+        "v=spf1 \\u0000 -all",  # six literal characters, not a NUL
+        "v=spf1 a:x\\u0000y -all",
+        "v=spf1 \x00 -all",  # a real NUL: kept for the hash, shown as U+FFFD
+    ],
+    ids=["literal-u0000", "literal-u0000-inside", "real-nul"],
+)
+def test_hostile_txt_is_snapshotted_end_to_end(world: World, spf: str) -> None:
+    good = store(world, collect(zone())).record
+    out = asyncio.run(
+        snapshot_domain(
+            world.repos(),
+            Scripted(zone({(DOMAIN, "TXT"): [spf]})),
+            world.domains["a"],
+            NOW + timedelta(minutes=1),
+            HB,
+        )
+    )
+    assert out is not None and out.reason == "changed" and world.count() == 2
+    loaded = world.repos().dns_snapshots.get(out.record.id)
+    (shown,) = [
+        v["v"]
+        for e in loaded.entries
+        if e["name"] == "@" and e["type"] == "TXT"
+        for v in e["values"]
+    ]
+    assert shown == spf.replace("\x00", "\ufffd")
+    (change,) = diff_snapshots(load_snapshot(good), load_snapshot(loaded))
+    assert (change.name, change.rdtype, change.kind) == ("@", "TXT", "changed")
 
 
 def test_stored_snapshot_loads_back_equal_in_content(world: World) -> None:

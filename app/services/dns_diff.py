@@ -5,14 +5,24 @@ domain (`@` apex, `_dmarc`, `<selector>._domainkey`), so they are at most `MAX_N
 characters whatever the length of the domain, and a rename does not change a snapshot.
 
 Each entry has a lookup `state` (ok, nxdomain, nodata, error) and sorted, de-duplicated,
-normalised values. Normalisation (what "the same record" means):
-- TXT: presentation-form quoted strings (`"a" "b"`) are joined as one TXT record (the resolver
-  already joins character-strings); runs of whitespace collapse to one space and the ends are
-  trimmed; non-printable characters (controls, surrogates, unassigned) become U+FFFD; an SPF
-  record (`v=spf1`) is compared case-insensitively (lower-cased), every other TXT keeps its case
-  (DKIM keys are base64). Whether DMARC tags are case-sensitive is not assumed: unverified.
-- MX: `<preference> <host>` with the preference as an int and the host lower-cased without the
-  trailing dot; NS: the host lower-cased without the trailing dot.
+normalised values. Normalisation (what "the same record" means) is deliberately narrow, so that a
+real change is never folded away:
+- Only runs of ASCII space and tab collapse to one space, and the ends are trimmed of them. Every
+  other character (NBSP, other Unicode spaces, newlines, controls, NUL) is content and is kept in
+  the comparison value: `v=spf1<NBSP>-all` (broken) and `v=spf1 -all` hash differently, and two
+  different control bytes give two different hashes. Only the stored display text replaces
+  non-printable characters (controls, surrogates, unassigned) with U+FFFD; the hash never sees
+  that replacement.
+- TXT: the resolver already joins the character-strings of a record (`join_txt_strings`), so a
+  quote reaching here is record content, not presentation syntax. A record published with
+  literal quotes (`"v=spf1 ... -all"`) is a different record from the unquoted one (and is not an
+  SPF record: see `is_spf`). An SPF record (`v=spf1`) is compared case-insensitively (ASCII
+  letters lower-cased, as the ticket requires); every other TXT keeps its case (DKIM keys are
+  base64). Known limitation: lower-casing SPF hides a change that is only a macro-letter case
+  change (`%{l}` -> `%{L}`, which RFC 7208 gives a different meaning: URL-escaping). Whether
+  DMARC tags are case-sensitive is not assumed: unverified.
+- MX: `<preference> <host>` with the preference as an int and the host ASCII lower-cased without
+  the trailing dot; NS: the host ASCII lower-cased without the trailing dot.
 
 Bounds. Per value `MAX_VALUE_CHARS` characters of text are stored, but the value hash (SHA-256 of
 the full normalised value) always covers everything, so a change beyond the cut is still seen.
@@ -25,6 +35,13 @@ The diff is order-insensitive, compares entry hashes, and is conservative: an en
 `error` on either side, or an entry that exists on only one side (the name was not monitored on
 the other), is `inconclusive`, never added or removed. Two absent states (nxdomain, nodata) are
 the same "no record".
+
+Consumers (alerting, M7-14) must NOT simply diff consecutive snapshots. `diff_snapshots` is a
+pure two-snapshot function: over A (ok, X), B (error), C (ok, Y) it reports `inconclusive` for
+A->B and again for B->C, and the change X -> Y is never reported. A consumer must compare each
+entry against its LAST NON-ERROR state: keep a baseline, diff it against the new snapshot, then
+advance the baseline with `carry_forward(baseline, new)`, which keeps the baseline's entry for
+every name the new snapshot could not evaluate.
 """
 
 from __future__ import annotations
@@ -49,7 +66,8 @@ MAX_RAW_CHARS: Final = 1 << 16
 
 ChangeKind = Literal["added", "removed", "changed", "inconclusive"]
 _HASH_RE: Final = re.compile(r"[0-9a-f]{64}")
-_WS_RE: Final = re.compile(r"\s+")
+_WS_RE: Final = re.compile(r"[ \t]+")
+_ASCII_LOWER: Final = str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz")
 _REPLACEMENT: Final = "�"
 
 
@@ -58,49 +76,33 @@ class SnapshotFormatError(ValueError):
 
 
 def _sha(text: str) -> str:
-    return hashlib.sha256(text.encode("utf-8", "replace")).hexdigest()
+    # surrogatepass: a lone surrogate hashes as itself, never as a shared "?".
+    return hashlib.sha256(text.encode("utf-8", "surrogatepass")).hexdigest()
 
 
 # --- normalisation --------------------------------------------------------------------------
 
 
 def _clean(text: str) -> str:
-    text = text[:MAX_RAW_CHARS]
-    text = _WS_RE.sub(" ", text)
-    text = "".join(c if c.isprintable() else _REPLACEMENT for c in text)
-    return text.strip(" ")
+    """The comparison form: bounded, ASCII space/tab runs collapsed, ends trimmed. Nothing else
+    is touched (see the module docstring)."""
+    return _WS_RE.sub(" ", text[:MAX_RAW_CHARS]).strip(" ")
 
 
-def _unquote(text: str) -> str | None:
-    """The joined contents if `text` is only quoted character-strings (`"a" "b"`), else None."""
-    i, n = 0, len(text)
-    parts: list[str] = []
-    while i < n:
-        while i < n and text[i] in " \t":
-            i += 1
-        if i == n:
-            break
-        if text[i] != '"':
-            return None
-        i += 1
-        chunk: list[str] = []
-        while i < n and text[i] != '"':
-            if text[i] == "\\" and i + 1 < n:
-                i += 1
-            chunk.append(text[i])
-            i += 1
-        if i >= n:
-            return None  # unterminated quote: leave the value as it is
-        i += 1
-        parts.append("".join(chunk))
-    return "".join(parts) if parts else None
+def _ascii_lower(text: str) -> str:
+    """Lower-case ASCII letters only: `str.lower` would also fold non-ASCII (`À` -> `à`)."""
+    return text.translate(_ASCII_LOWER)
+
+
+def display_text(value: str) -> str:
+    """The stored, human-facing form of a normalised value: non-printable characters become
+    U+FFFD (same length). Never used for hashing."""
+    return "".join(c if c.isprintable() else _REPLACEMENT for c in value)
 
 
 def normalise_txt(raw: str) -> str:
-    text = raw[:MAX_RAW_CHARS]
-    joined = _unquote(text) if text.lstrip().startswith('"') else None
-    value = _clean(text if joined is None else joined)
-    return value.lower() if is_spf(value) else value
+    value = _clean(raw)
+    return _ascii_lower(value) if is_spf(value) else value
 
 
 def _is_version(value: str, prefix: str) -> bool:
@@ -118,7 +120,7 @@ def is_dmarc(value: str) -> bool:
 
 
 def _host(text: str) -> str:
-    return _clean(text).lower().removesuffix(".")
+    return _ascii_lower(_clean(text)).removesuffix(".")
 
 
 def normalise_ns(raw: str) -> str:
@@ -171,7 +173,7 @@ def build_entry(name: str, rdtype: str, state: str, normalised: Iterable[str]) -
     if state == "ok" and not distinct:
         raise SnapshotFormatError("ok_without_values")
     shown = distinct[:MAX_VALUES_PER_ENTRY]
-    kept = tuple(Value(_sha(v), v[:MAX_VALUE_CHARS]) for v in shown)
+    kept = tuple(Value(_sha(v), display_text(v[:MAX_VALUE_CHARS])) for v in shown)
     cut = len(distinct) > len(shown) or any(len(v) > MAX_VALUE_CHARS for v in shown)
     return Entry(name, rdtype, state, kept, len(distinct), _entry_hash(distinct), cut)
 
@@ -303,7 +305,11 @@ def _texts(e: Entry | None) -> tuple[str, ...]:
 
 
 def diff_snapshots(before: Snapshot, after: Snapshot) -> tuple[Change, ...]:
-    """Changes from `before` to `after`, sorted by (name, rdtype); empty when nothing changed."""
+    """Changes from `before` to `after`, sorted by (name, rdtype); empty when nothing changed.
+
+    Two snapshots only: a change spanning an `error` snapshot (ok X, error, ok Y) is reported as
+    `inconclusive` twice and never as X -> Y. To see it, diff against a baseline advanced with
+    `carry_forward` (module docstring)."""
     old = {(e.name, e.rdtype): e for e in before.entries}
     new = {(e.name, e.rdtype): e for e in after.entries}
     changes: list[Change] = []
@@ -329,6 +335,29 @@ def diff_snapshots(before: Snapshot, after: Snapshot) -> tuple[Change, ...]:
     return tuple(changes)
 
 
+def carry_forward(baseline: Snapshot, current: Snapshot) -> Snapshot:
+    """The next baseline after `current`: `current`, except that every entry `current` could not
+    evaluate (state `error`) is replaced by the `baseline` entry of the same (name, rdtype) when
+    that one is not `error` itself. Names only in `baseline` are no longer monitored and are
+    dropped, so the result never has more entries than `current`. Pure.
+
+    Use: `changes = diff_snapshots(baseline, current); baseline = carry_forward(baseline,
+    current)`. Over A (ok X), B (error), C (ok Y) the second diff is then X -> Y `changed`."""
+    old = {(e.name, e.rdtype): e for e in baseline.entries}
+    entries: list[Entry] = []
+    carried = False
+    for e in current.entries:
+        prev = old.get((e.name, e.rdtype))
+        if e.state == "error" and prev is not None and prev.state != "error":
+            entries.append(prev)
+            carried = True
+        else:
+            entries.append(e)
+    if not carried:
+        return current
+    return build_snapshot(entries, truncated=current.truncated or baseline.truncated)
+
+
 __all__ = [
     "HASH_LENGTH",
     "MAX_NAME_LENGTH",
@@ -345,7 +374,9 @@ __all__ = [
     "Value",
     "build_entry",
     "build_snapshot",
+    "carry_forward",
     "diff_snapshots",
+    "display_text",
     "from_stored",
     "is_dmarc",
     "is_spf",

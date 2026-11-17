@@ -150,9 +150,12 @@ from domain and tenant; accessed through `CheckRunRepository` (tenant) and, for 
 names RELATIVE to the domain (`@`, `_dmarc`, `<selector>._domainkey`): apex SPF TXT, `_dmarc` TXT,
 MX, NS and the tenant's enabled DKIM selectors (BIMI and MTA-STS are not monitored). A lookup that
 did not complete is stored as `error`, never as "removed"; a diff with `error` on either side (or an
-entry on one side only) is `inconclusive`. Values are normalised (TXT string splitting, whitespace,
-SPF case, hostnames) and stored as SHA-256 plus bounded text; `content_hash` covers the full
-normalised content. A snapshot is stored only when its hash differs from the newest one or
+entry on one side only) is `inconclusive`. Consumers (alerting) must diff against the last non-error
+state of each entry (`carry_forward`), or a change across a transient error is lost. Values are
+normalised narrowly (TXT strings joined by the resolver; quotes are content; only ASCII space/tab
+runs collapse; ASCII case for SPF and hostnames) and stored as SHA-256 of the value plus bounded
+display text (non-printables shown as U+FFFD, never hashed that way); `content_hash` covers the
+full normalised content. A snapshot is stored only when its hash differs from the newest one or
 `DNS_SNAPSHOT_HEARTBEAT_HOURS` passed. Composite FK (domain_id, tenant_id) to `domains`, cascade
 from domain and tenant; accessed through `DnsSnapshotRepository` (tenant) and, for retention only,
 `DnsSnapshotRetentionRepository`.
