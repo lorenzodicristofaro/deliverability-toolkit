@@ -86,6 +86,10 @@ def _esp_form(_w: World) -> dict[str, str]:
     return {"esp_id": "example-esp"}
 
 
+def _monitor(_w: World) -> dict[str, Any]:
+    return {"check_ids": ["spf"], "interval_seconds": 86400}
+
+
 Payload = Callable[[World], Any] | None
 
 # (method, route path) -> request payload. Must list every route with a numeric path id.
@@ -109,6 +113,10 @@ ID_ROUTES: dict[tuple[str, str], Payload] = {
     ("GET", "/api/v1/domains/{domain_id}/esps"): None,
     ("PUT", "/api/v1/domains/{domain_id}/esps/{esp_id}"): _esp_hosts,
     ("DELETE", "/api/v1/domains/{domain_id}/esps/{esp_id}"): None,
+    ("GET", "/api/v1/domains/{domain_id}/monitor"): None,
+    ("POST", "/api/v1/domains/{domain_id}/monitor"): _monitor,
+    ("PATCH", "/api/v1/domains/{domain_id}/monitor"): _monitor,
+    ("DELETE", "/api/v1/domains/{domain_id}/monitor"): None,
 }
 
 

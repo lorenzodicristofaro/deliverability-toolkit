@@ -29,6 +29,7 @@ import pkgutil
 import re
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from enum import Enum
 from pathlib import Path
 from typing import Any
@@ -52,6 +53,7 @@ from app.repositories.content_rules import ContentRuleRecord
 from app.repositories.custom_checks import CustomCheckRecord
 from app.repositories.dkim_selectors import DkimSelectorRecord
 from app.repositories.domain_esps import DomainEspRecord
+from app.repositories.monitor_targets import MonitorTargetRecord
 from app.web import deps
 from tests.tenancy.conftest import (
     A_DOMAINS,
@@ -251,6 +253,17 @@ B_ESP = "b-private-esp"  # tenant B's assignment; `{esp_id}` in ESP paths
 
 def _esp_hosts(_w: World, _role: str) -> dict[str, Any]:
     return {"return_path_host": None, "tracking_host": None}
+
+
+_MONITOR_404 = "monitor.error.not_found"
+
+
+def _monitor_body(_w: World, _role: str) -> dict[str, Any]:
+    return {"check_ids": ["spf"], "interval_seconds": 86400}
+
+
+def _monitor_patch(_w: World, _role: str) -> dict[str, Any]:
+    return {"enabled": False}
 
 
 def _rule_sample(_w: World, _role: str) -> dict[str, Any]:
@@ -492,6 +505,21 @@ MATRIX: dict[tuple[str, str], Entry] = {
     ("DELETE", "/api/v1/domains/{domain_id}/esps/{esp_id}"): Entry(
         Kind.DOMAIN, not_found=_ESPS_404
     ),
+    # Monitor target API (app.api.v1.monitors, M7-11): `monitor.read` / `monitor.manage` on the
+    # domain, after `domain.read`. Every role gets 404 on a foreign or unassigned domain; tenant
+    # B's own target (`b_monitor`) must stay unchanged. The tenant list is readable by every
+    # member (filtered per domain); per role and verb: tests/api/test_monitors.py.
+    ("GET", "/api/v1/monitors"): Entry(
+        Kind.COLLECTION, own=_by_role(200, 200), not_found=_MONITOR_404
+    ),
+    ("GET", "/api/v1/domains/{domain_id}/monitor"): Entry(Kind.DOMAIN, not_found=_MONITOR_404),
+    ("POST", "/api/v1/domains/{domain_id}/monitor"): Entry(
+        Kind.DOMAIN, body=_monitor_body, not_found=_MONITOR_404
+    ),
+    ("PATCH", "/api/v1/domains/{domain_id}/monitor"): Entry(
+        Kind.DOMAIN, body=_monitor_patch, not_found=_MONITOR_404
+    ),
+    ("DELETE", "/api/v1/domains/{domain_id}/monitor"): Entry(Kind.DOMAIN, not_found=_MONITOR_404),
 }
 
 # Public routes by (method, path): a new method on an exempt path is NOT exempt. Keep this
@@ -785,6 +813,25 @@ def b_esp(w: World) -> DomainEspRecord:
     return created
 
 
+def b_monitor(w: World) -> MonitorTargetRecord:
+    """Tenant B's monitor target on its secret domain, created on first use. The world baseline
+    does not cover monitor targets."""
+    w.db.expire_all()
+    repository = repo_for(TenantContext(w.tenants["b"], w.users["b_owner"]), w.db).monitor_targets
+    existing = repository.get_for_domain(w.domains["secret"])
+    if existing is not None:
+        return existing
+    created = repository.create(
+        w.domains["secret"],
+        check_ids=["spf"],
+        interval_seconds=3600,
+        next_run_at=datetime(2030, 1, 1, tzinfo=UTC),
+    )
+    assert created is not None
+    w.db.commit()
+    return created
+
+
 def _path(w: World, case: Case) -> str:
     if "{custom_check_id}" in case.leaf.path:
         return case.leaf.path.replace("{custom_check_id}", str(b_custom_check(w).id))
@@ -850,6 +897,7 @@ def _check_case(world: World, logs: pytest.LogCaptureFixture, case: Case) -> Non
         else None
     )
     esp_before = b_esp(world) if "/esps" in case.leaf.path else None
+    monitor_before = b_monitor(world) if "/monitor" in case.leaf.path else None
     tenant = "b" if case.target.startswith("b_session") else "a"
     fresh = entry.kind in (Kind.SESSION, Kind.SWITCH)  # these consume/rotate the session
     body = entry.body(world, case.role) if entry.body is not None else None
@@ -881,6 +929,10 @@ def _check_case(world: World, logs: pytest.LogCaptureFixture, case: Case) -> Non
         assert b_selector(world) == selector_before, "tenant B's selector changed"
     if esp_before is not None:
         assert b_esp(world) == esp_before, "tenant B's ESP assignment changed"
+    if monitor_before is not None:
+        assert b_monitor(world) == monitor_before, "tenant B's monitor target changed"
+        if response.status_code == 200 and case.leaf.key == ("GET", "/api/v1/monitors"):
+            assert monitor_before.id not in {i["id"] for i in response.json()["items"]}
     after_a = world.state("a")
     if case.target == "smuggle" and response.status_code == 303:
         # The UI create ignores the smuggled tenant_id: the domain lands in tenant A only.
