@@ -276,7 +276,11 @@ Tickets (docs/tickets/M7-*.md, split 2026-11-13; model in brackets):
   - [ ] Follow-up (low): watch wall-clock tests under -n auto on CI: test_content_rules_engine.py:242/277, test_spf.py:374, test_received.py:565, test_authres.py:738, test_content_rules_admin.py:657
 - [x] M7-01 guarded outbound HTTP client + ARCHITECTURE decision record (opus)
 - [ ] Follow-up (low): tests/parsers/test_message.py::test_fold_bomb_is_bounded_and_fast failed once in two local PostgreSQL full runs under load (timing test, flaky candidate)
-- [ ] M7-02 custom check kind http_fetch via guarded client (opus; depends M7-01)
+- [x] M7-02 custom check kind http_fetch via guarded client (opus; depends M7-01)
+  - [ ] Follow-up (medium, maintainer decision pending): domains are added without ownership verification and public suffixes (github.io, co.uk) are accepted, so http_fetch with host `{domain}` can still read up to 256 chars from any public host registered as a domain; also no rate limit on POST /custom-checks/test. Options: domain verification, refuse public suffixes, rate limit /test. Must be decided before custom checks become schedulable.
+  - [ ] Follow-up (low): web UI editor for http_fetch definitions (API-only in M7)
+  - [ ] Follow-up (low): wire per-host HTTP rate limiting (M7-09 RateKind.HTTP_HOST) when custom checks become schedulable
+  - [ ] Follow-up (low): web/API kind race on custom-check update (harmless, last writer wins with a validated definition); optional precondition in the service update transaction
 - [x] M7-03 DNSBL/URIBL engine, refusal detection (opus)
   - [ ] Follow-up (low): move the private loader helpers (_StrictLoader, _list, _text, ...) imported by app/checks/dnsbl_schema.py from app/esp/profile.py and app/dns/knowledge.py into a shared public module
 - [x] M7-04 seeds/dnsbl.yaml + docs/DNSBL.md, unverified entries to the maintainer (sonnet; depends M7-03)

@@ -14,4 +14,19 @@ Acceptance criteria:
 - Tests table-driven, no network (fake client seam from M7-01): 200 match, 200 mismatch, 404, 500, redirect ok, redirect blocked, timeout, oversize, regex catastrophic, non-UTF-8 body, huge header, API create/update validation with permission tests unchanged (existing custom-check endpoints keep their tenancy/permission tests green; add one case per role for creating an http_fetch definition).
 - SPEC section 5 line "HTTP fetch matches" (SPEC.md line 145) already matches this scope; no wording change needed. Flag to the maintainer only if the coder finds the implemented scope differs (for example a restricted host rule is narrower than "HTTP fetch matches").
 New i18n keys: CUSTOM_HTTP_BLOCKED, CUSTOM_HTTP_UNREACHABLE, CUSTOM_HTTP_TOO_LARGE, CUSTOM_HTTP_STATUS_MISMATCH, CUSTOM_HTTP_BODY_MISMATCH (.title/.detail, remediation from the definition where a finding) (en + it); remove CUSTOM_KIND_UNAVAILABLE usage for http_fetch only if no other kind uses it
-Status: todo
+Status: done (7e449c1, QA APPROVE round 2; Opus coder, Opus QA)
+
+Round 1 summary: QA blocker, off-domain redirects were followed and read back (GET proxy). Fixed in round 2 by following redirects hop by hop with follow_redirects=False; an off-domain target is refused before any request (reason redirect_off_domain).
+
+Widened scope (GM decisions, see docs/HANDOFF.md "Parked"): custom check model + migration 0014 + test, repository, service, web form/template, docs/CONTENT.md, and the five test files. Extra files: tests/checks/test_custom_http.py, app/api/v1/checks.py (`_prepare_all` gets fetch limits via SettingsDep).
+
+GM decisions:
+- Host rule by construction (template host must be the target domain or a subdomain).
+- Fetch is capped at the remaining run budget.
+- Downgrade of 0014 refuses while http_fetch rows exist.
+- Web UI is API-only: 422 on a posted http_fetch, notice on the edit page.
+- KIND_UNAVAILABLE keys removed.
+- Extra i18n key: CUSTOM_HTTP_HEADER_MISMATCH.
+- Body not matched within the cap gives error `body_truncated`.
+
+Scope flag for the maintainer: the implemented scope is narrower than SPEC.md line ~146 "HTTP fetch matches" (own domain/subdomain only, default ports, GET only, one header check, API-only in the UI). The "no wording change needed" note above no longer holds.
