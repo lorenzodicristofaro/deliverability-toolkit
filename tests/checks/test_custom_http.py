@@ -307,9 +307,17 @@ class Fetcher:
         *,
         resolver: Any,
         limits: FetchLimits | None = None,
+        follow_redirects: bool | None = None,
         allow_truncated: bool = False,
     ) -> FetchResult | FetchError:
-        self.calls.append({"url": url, "limits": limits, "allow_truncated": allow_truncated})
+        self.calls.append(
+            {
+                "url": url,
+                "limits": limits,
+                "follow_redirects": follow_redirects,
+                "allow_truncated": allow_truncated,
+            }
+        )
         return await _fetch(
             url,
             resolver=resolver,
@@ -317,7 +325,7 @@ class Fetcher:
             headers=None,
             body=None,
             limits=limits or FetchLimits(),
-            follow_redirects=None,
+            follow_redirects=follow_redirects,
             allow_truncated=allow_truncated,
             transport_factory=self.transport,
             classifier=default_classifier,
@@ -414,6 +422,14 @@ OUTCOMES = [
         "blocked",
     ),
     (
+        "redirect to public ip literal",
+        _http(),
+        redirect_to(f"https://{PUBLIC}/"),
+        "error",
+        ["CUSTOM_HTTP_BLOCKED"],
+        "redirect_off_domain",
+    ),
+    (
         "redirect https to http",
         _http(),
         redirect_to("http://example.com/x"),
@@ -428,6 +444,24 @@ OUTCOMES = [
         "error",
         ["CUSTOM_HTTP_BLOCKED"],
         "port_not_allowed",
+    ),
+    (
+        "redirect cap",
+        _http(),
+        lambda request: httpx2.Response(
+            302, headers={"location": f"/n{len(request.url.path)}{request.url.path}"}
+        ),
+        "error",
+        ["CUSTOM_HTTP_UNREACHABLE"],
+        "too_many_redirects",
+    ),
+    (
+        "redirect without location",
+        _http(),
+        reply(302),
+        "error",
+        ["CUSTOM_HTTP_UNREACHABLE"],
+        "protocol_error",
     ),
     (
         "redirect loop",
@@ -567,6 +601,91 @@ async def test_outcomes(
     if status == "error":
         assert all(f.severity == "low" for f in result.findings)
         assert "remediation_text" not in result.findings[0].params
+
+
+OFF_DOMAIN = [
+    ("other site", "https://victim.org/secret"),
+    ("sibling name", "https://evil-example.com/"),
+    ("suffix trick", "https://example.com.evil.org/"),
+    ("protocol relative", "//victim.org/secret"),
+    ("parent of the domain", "https://com/"),
+]
+
+
+@pytest.mark.parametrize(("case", "location"), OFF_DOMAIN, ids=[c[0] for c in OFF_DOMAIN])
+async def test_off_domain_redirect_is_refused_before_any_request(case: str, location: str) -> None:
+    """A tenant domain redirecting elsewhere must not turn the check into a read-back proxy."""
+    resolver = {**RESOLVER, "victim.org": PUBLIC, "evil-example.com": PUBLIC}
+    resolver |= {"example.com.evil.org": PUBLIC}
+    definition = _http(body_pattern="never", header={"name": "etag"})
+    result, fetcher = await _run(definition, redirect_to(location), resolver=resolver)
+    assert result.status == "error"
+    assert _codes(result) == ["CUSTOM_HTTP_BLOCKED"]
+    assert result.data["reason"] in ("redirect_off_domain", "blocked")
+    (item,) = result.findings
+    assert item.evidence == ()
+    assert set(item.params) == {"check_key", "host", "reason"}
+    assert "final_host" not in result.data and "status" not in result.data
+    # Only the first, on-domain request was ever made.
+    assert [r.headers["host"] for r in fetcher.transport.requests] == ["example.com"]
+    assert [c["url"] for c in fetcher.calls] == ["https://example.com/"]
+    assert all(c["follow_redirects"] is False for c in fetcher.calls)
+
+
+async def test_off_domain_then_back_on_domain_is_still_refused() -> None:
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        if request.headers["host"] == "victim.org":
+            return httpx2.Response(302, headers={"location": "https://example.com/final"})
+        if request.url.path == "/":
+            return httpx2.Response(302, headers={"location": "https://victim.org/x"})
+        return httpx2.Response(200, content=b"final ok")
+
+    resolver = {**RESOLVER, "victim.org": PUBLIC}
+    result, fetcher = await _run(_http(), handler, resolver=resolver)
+    assert result.status == "error" and result.data["reason"] == "redirect_off_domain"
+    assert "victim.org" not in [r.headers["host"] for r in fetcher.transport.requests]
+
+
+@pytest.mark.parametrize(
+    ("location", "final"),
+    [
+        ("/final", "example.com"),
+        ("https://www.example.com/x", "www.example.com"),
+        ("https://a.b.example.com/x", "a.b.example.com"),
+        ("https://EXAMPLE.com./x", "example.com"),
+    ],
+)
+async def test_on_domain_redirects_are_followed(location: str, final: str) -> None:
+    resolver = {**RESOLVER, "a.b.example.com": PUBLIC}
+    result, fetcher = await _run(_http(), redirect_to(location, 301), resolver=resolver)
+    assert result.status == "ok" and result.data["final_host"] == final
+    assert result.data["hops"] == 2 and len(fetcher.calls) == 2
+
+
+async def test_redirects_from_a_subdomain_host_may_reach_the_domain_itself() -> None:
+    result, _ = await _run(_http(host="www.{domain}"), redirect_to("https://example.com/x"))
+    assert result.status == "ok" and result.data["final_host"] == "example.com"
+
+
+async def test_redirect_hops_respect_the_operator_cap() -> None:
+    limits = FetchLimits(max_redirects=0)
+    result, fetcher = await _run(_http(), redirect_to("/final"), fetch_limits=limits)
+    assert result.data["reason"] == "too_many_redirects"
+    assert len(fetcher.transport.requests) == 1
+
+
+async def test_redirect_hops_share_the_run_budget() -> None:
+    clock = [0.0]
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        clock[0] += 5.0  # every hop costs 5 s of a 12 s budget
+        return httpx2.Response(302, headers={"location": f"/h{clock[0]:.0f}"})
+
+    budget = RunBudget(12.0, clock=lambda: clock[0])
+    result, fetcher = await _run(_http(), handler, budget=budget)
+    assert result.data["reason"] == "run_budget_exceeded"
+    assert len(fetcher.transport.requests) == 3
+    assert [c["limits"].total_timeout for c in fetcher.calls] == [12.0, 7.0, 2.0]
 
 
 async def test_redirect_reports_final_host_and_hops() -> None:

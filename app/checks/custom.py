@@ -53,8 +53,14 @@ HTTP fetch (`http_fetch`, M7-02). The URL is built from the definition (`render_
 host under the target domain, path, no port) and re-parsed with the guarded client's policy
 (`app.net.policy.parse_url`) before any request; a parsed URL whose scheme, host or text differs
 is `error` (`url_mismatch`). The only I/O is `fetcher`, by default `app.net.guarded_http.fetch`
-(GET; redirects followed by the client under its per-hop policy; body truncated at the
-definition's `max_body_bytes`). Limits are the caller's `fetch_limits` (the operator settings,
+(GET, body truncated at the definition's `max_body_bytes`), called once per hop with
+`follow_redirects=False`: redirects are followed here, at most `max_redirects` of the limits, and
+every redirect target must be the target domain or a host under it (no IP literal) BEFORE it is
+requested; any other target is `CUSTOM_HTTP_BLOCKED` (`redirect_off_domain`, `error`) and nothing
+of the redirect (host, status, body, headers) is reported. https -> http is `scheme_not_allowed`,
+a revisited URL or too many hops `too_many_redirects`, a missing or bad `Location`
+`protocol_error`; each hop's request still goes through the client's full egress policy.
+Limits are the caller's `fetch_limits` (the operator settings,
 `limits_from_settings`) with the total deadline capped at what is left of the run budget; no
 limits is `error` (`fetch_unconfigured`), never a fetch with defaults. Status rules:
 - every client error is `error`, never `ok` and never a finding about the site:
@@ -85,7 +91,7 @@ from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field, replace
 from decimal import Decimal
 from typing import Any, Final, Protocol
-from urllib.parse import urlsplit
+from urllib.parse import urljoin, urlsplit
 
 from app.checks.dnsutil import classify
 from app.checks.models import CheckContext, CheckResult, Finding, Severity, Target, finding
@@ -101,6 +107,7 @@ from app.core.custom_check_schema import (
     validate_remediation_text,
     validate_severity,
 )
+from app.core.domain_names import to_ascii_domain
 from app.core.safe_regex import (
     MAX_MATCHES,
     MAX_TEXT_BYTES,
@@ -111,7 +118,7 @@ from app.core.safe_regex import (
 from app.dns.types import DnsQuestion, Resolver
 from app.net import FetchError, FetchErrorKind, FetchLimits, FetchResult
 from app.net import fetch as guarded_fetch
-from app.net.policy import parse_url
+from app.net.policy import MAX_URL_LENGTH, parse_url
 
 CODES: tuple[str, ...] = (
     "CUSTOM_CHECK_FAILED",
@@ -123,6 +130,7 @@ CODES: tuple[str, ...] = (
     "CUSTOM_HTTP_BODY_MISMATCH",
     "CUSTOM_HTTP_HEADER_MISMATCH",
 )
+_REDIRECT_STATUSES: Final = frozenset({301, 302, 303, 307, 308})  # as the guarded client
 _BLOCKED_KINDS: Final = frozenset(
     {FetchErrorKind.blocked, FetchErrorKind.scheme_not_allowed, FetchErrorKind.port_not_allowed}
 )
@@ -137,6 +145,7 @@ class Fetcher(Protocol):
         *,
         resolver: Resolver,
         limits: FetchLimits | None = None,
+        follow_redirects: bool | None = None,
         allow_truncated: bool = False,
     ) -> FetchResult | FetchError: ...
 
@@ -347,6 +356,14 @@ class CustomDnsCheck:
         extra = {"reason": reason, "detail": error.detail, "hop": error.hop}
         return _Outcome([found], False, {**data, **extra})
 
+    def _redirect_off_domain(self, host: str, data: dict[str, Any], hop: int) -> _Outcome:
+        """A redirect leaving the target domain: refused before it is requested. Nothing about
+        the redirect target (host, status, body, headers) is reported."""
+        reason = "redirect_off_domain"
+        params = {"check_key": self._key, "host": host, "reason": reason}
+        found = finding("CUSTOM_HTTP_BLOCKED", "low", params, remediation=False)
+        return _Outcome([found], False, {**data, "reason": reason, "hop": hop})
+
     async def _evaluate_http(
         self,
         ctx: CheckContext,
@@ -376,34 +393,74 @@ class CustomDnsCheck:
         ):
             return self._error("url_mismatch", **data)
 
-        remaining = self._budget.remaining()
-        if remaining <= 0:
-            return self._error(_RUN_BUDGET_EXCEEDED, **data)
-        limits = replace(
-            base,
-            total_timeout=min(base.total_timeout, remaining),
-            max_body_bytes=parsed.max_body_bytes,
-        )
-        try:
-            async with asyncio.timeout(remaining):
-                response = await self._fetcher(
-                    url, resolver=ctx.resolver, limits=limits, allow_truncated=True
-                )
-        except TimeoutError:
-            return self._error(_RUN_BUDGET_EXCEEDED, **data)
-        if self._budget.remaining() <= 0:  # an answer past the budget gives no verdict either
-            return self._error(_RUN_BUDGET_EXCEEDED, **data)
-        if isinstance(response, FetchError):
-            cut = limits.total_timeout < base.total_timeout and response.detail == "deadline"
-            if response.kind is FetchErrorKind.timeout and cut:
-                return self._error(_RUN_BUDGET_EXCEEDED, **data)
-            return self._fetch_error(response, host, data)
+        domain = to_ascii_domain(target.domain)  # render_url already accepted it
+        # Redirects are followed here, one request per hop, never by the client: every target
+        # must be the domain or a host under it BEFORE it is requested (a tenant must not turn
+        # the check into a proxy to an arbitrary host with read-back).
+        current, checked_scheme = url, checked.scheme
+        visited = {checked.url}
+        hops = 0
+        while True:
+            remaining = self._budget.remaining()
+            if remaining <= 0:
+                return self._error(_RUN_BUDGET_EXCEEDED, **data, hops=hops)
+            limits = replace(
+                base,
+                total_timeout=min(base.total_timeout, remaining),
+                max_body_bytes=parsed.max_body_bytes,
+            )
+            try:
+                async with asyncio.timeout(remaining):
+                    response = await self._fetcher(
+                        current,
+                        resolver=ctx.resolver,
+                        limits=limits,
+                        follow_redirects=False,
+                        allow_truncated=True,
+                    )
+            except TimeoutError:
+                return self._error(_RUN_BUDGET_EXCEEDED, **data, hops=hops)
+            if self._budget.remaining() <= 0:  # an answer past the budget gives no verdict
+                return self._error(_RUN_BUDGET_EXCEEDED, **data, hops=hops)
+            if isinstance(response, FetchError):
+                cut = limits.total_timeout < base.total_timeout and response.detail == "deadline"
+                if response.kind is FetchErrorKind.timeout and cut:
+                    return self._error(_RUN_BUDGET_EXCEEDED, **data, hops=hops)
+                return self._fetch_error(replace(response, hop=hops), host, data)
+            hops += 1
+            if response.status not in _REDIRECT_STATUSES:
+                break
+            # A redirect: no body, header or status of it reaches the result.
+            if hops > base.max_redirects:
+                error = FetchError(FetchErrorKind.too_many_redirects, "cap", hops)
+                return self._fetch_error(error, host, data)
+            location = response.headers.get("location", "").strip()
+            try:
+                following = urljoin(current, location) if location else ""
+            except ValueError:
+                following = ""
+            if not following or len(location) > MAX_URL_LENGTH:
+                error = FetchError(FetchErrorKind.protocol_error, "bad_location", hops)
+                return self._fetch_error(error, host, data)
+            nxt = parse_url(following, base.allowed_ports, hop=hops)
+            if isinstance(nxt, FetchError):
+                return self._fetch_error(nxt, host, data)
+            if nxt.ip is not None or not (nxt.host == domain or nxt.host.endswith("." + domain)):
+                return self._redirect_off_domain(host, data, hops)
+            if checked_scheme == "https" and nxt.scheme == "http":
+                error = FetchError(FetchErrorKind.scheme_not_allowed, "https_downgrade", hops)
+                return self._fetch_error(error, host, data)
+            if nxt.url in visited:
+                error = FetchError(FetchErrorKind.too_many_redirects, "loop", hops)
+                return self._fetch_error(error, host, data)
+            visited.add(nxt.url)
+            current, checked_scheme = nxt.url, nxt.scheme
 
         final_host = urlsplit(response.url).hostname or ""
         data.update(
             status=response.status,
             final_host=final_host,
-            hops=len(response.hops),
+            hops=hops,
             body_bytes=len(response.body),
             truncated=response.truncated,
         )

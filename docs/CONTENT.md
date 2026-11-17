@@ -322,9 +322,11 @@ Outcomes:
   (final status not in `expected_status`; body and header are not evaluated),
   `CUSTOM_HTTP_BODY_MISMATCH` (`body_no_match`), `CUSTOM_HTTP_HEADER_MISMATCH` (`header_missing`
   or `header_no_match`).
-- Redirects are followed by the client (default at most 3, `OUTBOUND_HTTP_MAX_REDIRECTS`), each hop
-  under the full egress policy; a redirect may leave the target domain, and the result shows the
-  final host.
+- Redirects (default at most 3, `OUTBOUND_HTTP_MAX_REDIRECTS`) are followed by the check one hop
+  at a time, each hop under the full egress policy, and only within the target domain: a redirect
+  to any other host (or to an IP literal) is refused before it is requested,
+  `CUSTOM_HTTP_BLOCKED` with reason `redirect_off_domain` (`error`), with nothing of the redirect
+  reported. So a tenant cannot use a redirect to read another site through the check.
 - Budget: the fetch shares the custom checks' 12 s run budget; its deadline is the smaller of the
   client's 20 s and what is left. No budget left, or the fetch cut by it, is `error`
   (`run_budget_exceeded`).

@@ -344,7 +344,7 @@
   "finding.CUSTOM_CHECK_ERROR.title": "Custom check could not be evaluated",
   "finding.CUSTOM_CHECK_FAILED.detail": "Custom check {check_key} did not pass for the {rrtype} records of {name} (reason: {reason}).",
   "finding.CUSTOM_CHECK_FAILED.title": "Custom check did not pass",
-  "finding.CUSTOM_HTTP_BLOCKED.detail": "Custom check {check_key} was not allowed to fetch from {host} (reason: {reason}): the address, scheme or port is not permitted. Nothing can be concluded about the site.",
+  "finding.CUSTOM_HTTP_BLOCKED.detail": "Custom check {check_key} was not allowed to fetch from {host} (reason: {reason}): the address, scheme, port or redirect target is not permitted (a redirect may only stay within the domain). Nothing can be concluded about the site.",
   "finding.CUSTOM_HTTP_BLOCKED.title": "Custom HTTP check blocked by the outbound policy",
   "finding.CUSTOM_HTTP_BODY_MISMATCH.detail": "Custom check {check_key}: the page from {host} (final host {final_host}, status {status}) does not match the expected pattern.",
   "finding.CUSTOM_HTTP_BODY_MISMATCH.title": "Custom HTTP check: content does not match",
