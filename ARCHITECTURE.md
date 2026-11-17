@@ -442,6 +442,8 @@ Scheduler (M7-09, all bounded, out of range fails startup): `SCHEDULER_TICK_SECO
 `SCHEDULER_HTTP_HOST_RUNS_PER_MINUTE` (10), `SCHEDULER_TENANT_RUNS_PER_MINUTE` (30) (each 1..600,
 per key and per process), `MAINTENANCE_INTERVAL_MINUTES` (60, 5..1440). Defaults are project
 choices, not DNSBL operators' published limits.
+`MONITOR_MAX_TARGETS_PER_TENANT` (M7-11; default 100, 1..1000, out of range fails startup): monitor
+targets one tenant may hold; creating one more is refused (422). Lowering it removes nothing.
 
 ## 12. Observability
 

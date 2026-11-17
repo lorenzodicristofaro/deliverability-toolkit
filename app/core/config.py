@@ -59,6 +59,11 @@ SCHEDULER_RUNS_PER_MINUTE_MAX = 600
 DEFAULT_MAINTENANCE_INTERVAL_MINUTES = 60
 MAINTENANCE_INTERVAL_MINUTES_MIN = 5
 MAINTENANCE_INTERVAL_MINUTES_MAX = 1440
+# Monitor targets per tenant (M7-11). Project choice, not a vendor limit. The maximum is the
+# repository page size (app.repositories.base.MAX_LIMIT), so a tenant's targets fit one read.
+DEFAULT_MONITOR_MAX_TARGETS_PER_TENANT = 100
+MONITOR_MAX_TARGETS_PER_TENANT_MIN = 1
+MONITOR_MAX_TARGETS_PER_TENANT_MAX = 1000
 
 RESOLVER_ADDR_INVALID_KEY = "config.resolver_addr.invalid"
 
@@ -305,6 +310,12 @@ class Settings(BaseSettings):
         default=DEFAULT_MAINTENANCE_INTERVAL_MINUTES,
         ge=MAINTENANCE_INTERVAL_MINUTES_MIN,
         le=MAINTENANCE_INTERVAL_MINUTES_MAX,
+    )
+    # Monitor targets a tenant may hold (M7-11); creating one more answers 422 limit_reached.
+    monitor_max_targets_per_tenant: int = Field(
+        default=DEFAULT_MONITOR_MAX_TARGETS_PER_TENANT,
+        ge=MONITOR_MAX_TARGETS_PER_TENANT_MIN,
+        le=MONITOR_MAX_TARGETS_PER_TENANT_MAX,
     )
 
     @field_validator("secret_key", "encryption_key", mode="after")
