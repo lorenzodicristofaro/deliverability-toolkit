@@ -289,7 +289,9 @@ Tickets (docs/tickets/M7-*.md, split 2026-11-13; model in brackets):
 - [x] M7-05c DNSBL list enablement by instance admin: table, migration, repo, API, admin UI, per-request `enabled_ids` wiring (opus; depends M7-05)
 - [ ] M7-05b Spamhaus via DQS key, key via secret service (opus; depends M7-03b, M7-05, M7-05c, M7-14b; schedule after M7-14b)
 - [x] M7-06 monitor_targets model, migration, repository (sonnet)
-- [ ] M7-07 check_runs history model, migration, retention (sonnet; depends M7-06)
+- [x] M7-07 check_runs history model, migration, retention (sonnet; depends M7-06)
+  - Status: done (4628d94, QA APPROVE round 2; round 1: check_id width 96, ARCHITECTURE section 5 reconciled, byte cap on stored JSON, fixed by Opus).
+  - [ ] Follow-up (low): .env.example lacks CHECK_RUN_RETENTION_DAYS (default 90, 1..3650); see also the ENCRYPTION_KEY .env.example follow-up under M7-14b
 - [ ] M7-08 DNS snapshots + diff (sonnet; depends M7-06)
 - [ ] M7-09 scheduler core: rate limits, jitter, concurrency, session purge (sonnet; depends M7-06, M7-07)
 - [ ] M7-10 scheduled run executor + change detection (sonnet; depends M7-05, M7-07, M7-08, M7-09)

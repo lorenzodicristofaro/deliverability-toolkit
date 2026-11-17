@@ -14,3 +14,4 @@ Acceptance criteria:
 - Tests with fake checks and fake DNS (no network): first run has no events (baseline), unchanged run none, change, revert, listing appears/disappears, error in the middle, exception in a check isolated, tenant context correctness.
 New i18n keys: none
 Status: todo
+Note (from M7-07, merged 4628d94): write runs through repo_for(ctx).check_runs; findings stored as {code, params} only (no rendered text); check_id column width is 96.

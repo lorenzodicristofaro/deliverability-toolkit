@@ -13,5 +13,7 @@ Acceptance criteria:
 - Retention per ARCHITECTURE section 5: configurable setting for raw run retention (days, bounded), `prune_check_runs(now, policy)` deletes by tenant-agnostic system method that is explicitly named; aggregates are not part of this ticket. Tested with a fake clock.
 - Cross-tenant isolation tests; migration up/down on SQLite and PostgreSQL.
 New i18n keys: none
-Status: todo
+Status: done (4628d94, QA APPROVE round 2). Round 1 (Sonnet): check_id width 64 too small for custom ids (now 96); ARCHITECTURE section 5 reconciled (single check_runs table, no check_results); findings byte cap measured on the stored JSON text. Fixed by an Opus coder.
+Files changed outside the original scope (all accepted by GM): ARCHITECTURE.md (sections 5, 11), app/core/config.py (CHECK_RUN_RETENTION_DAYS, default 90, range 1..3650), tests/migrations/test_0012_check_runs.py, tests/tenancy/test_id_range.py.
+Usage for later tickets: repository is repo_for(ctx).check_runs; findings stored as {code, params} only; prune via app/services/retention.prune_check_runs(session, now, policy) (system method).
 Note: the migration chain head is now 0011 (monitor_targets); the new revision follows it.

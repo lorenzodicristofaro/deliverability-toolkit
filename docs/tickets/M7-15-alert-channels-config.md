@@ -19,3 +19,4 @@ Notes from M7-14b follow-ups (low priority, may be split out):
 - `get_cipher()` is cached with functools.cache; with new callers here, add a shared conftest fixture that clears the cache (today only tests/core/test_secrets_crypto.py does).
 - No command exists yet to re-encrypt stored secrets after key rotation; docs/SETUP.md section 10 says it comes with this ticket.
 Status: todo
+Note: the migration chain head is now 0012 (check_runs, M7-07); the new revision follows it (or a later head if M7-08/M7-14 merge first).
