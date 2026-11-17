@@ -4,8 +4,8 @@ pairing, the enumerations, every string length (CHECK on `length()`, which count
 SQLite and PostgreSQL alike), a size cap on the JSON columns, exactly one remediation source and
 remediation_key on global rows only.
 
-`kind` deliberately excludes `http_fetch` (reserved, deferred to M7 with the guarded outbound
-client; see M5-22): the CHECK refuses it even for a raw insert.
+`kind` is one of the three DNS kinds or `http_fetch` (M7-02, outbound HTTP through the guarded
+client); the CHECK refuses anything else even for a raw insert (migration 0014 added `http_fetch`).
 
 `definition` is stored opaquely as a JSON object; its schema is not checked here. The repository
 (`app.repositories.custom_checks`) validates it on every write path with the M5-22 schema
@@ -43,9 +43,7 @@ from app.core.i18n import SUPPORTED_LANGUAGES
 from app.models.base import Base
 
 SCOPES = ("global", "tenant")
-KINDS = ("dns_exists", "dns_matches", "dns_value_range")
-# Reserved for M7 (outbound HTTP through the guarded client); refused by the DB and repository.
-RESERVED_KINDS = ("http_fetch",)
+KINDS = ("dns_exists", "dns_matches", "dns_value_range", "http_fetch")
 SEVERITIES = ("critical", "high", "medium", "low", "info")
 # remediation_text carries one entry per supported language, all required.
 REMEDIATION_LANGUAGES: tuple[str, ...] = tuple(SUPPORTED_LANGUAGES)

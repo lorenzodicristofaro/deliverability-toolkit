@@ -14,8 +14,8 @@ as is a tenant-scoped call with no active tenant. A denied permission is `ScopeF
 and so is a tenant-path write to a global row. A duplicate `check_key` in the scope is 409.
 
 Validation is the repository's (field checks plus the M5-22 schema on every write path); this
-service only maps its reasons to i18n keys. `http_fetch` is refused first, whatever else the body
-holds, as `kind_unavailable` (422, M7). `remediation_key` is accepted on the global path only
+service only maps its reasons to i18n keys; `http_fetch` (M7-02) is validated like any other kind.
+`remediation_key` is accepted on the global path only
 and must name a message present in every catalogue (`validate_remediation_key`), so a finding
 carrying it always renders.
 
@@ -23,7 +23,11 @@ Dry run (`test`): needs `rules.read` on the active tenant (so never a client vie
 `check.run` on the domain named in the body (`DomainService` visibility first: a foreign,
 missing or out-of-range id is 404). The definition is validated like a stored one and evaluated
 by the same evaluator and runner as a domain run, and is stored nowhere. Every permission
-decision happens before the evaluator or any DNS query.
+decision happens before the evaluator or any DNS query or HTTP fetch.
+
+`fetch_limits` (`run_checks_for`, `prepare_test`) are the guarded client's limits from the
+operator settings (`app.net.limits_from_settings`), passed by the router; an `http_fetch` check
+built without them reports `error` instead of fetching.
 
 Domain runs (`run_checks_for`): the enabled global rows plus the context tenant's enabled rows,
 read only through the tenant repository, so another tenant's checks never run on this tenant's
@@ -62,7 +66,7 @@ from app.core.permissions import (
     can,
 )
 from app.core.tenancy import TenantContext
-from app.models.custom_check import RESERVED_KINDS
+from app.net import FetchLimits
 from app.repositories import GlobalCustomCheckRepository, repo_for
 from app.repositories.base import DEFAULT_LIMIT, MAX_LIMIT, coerce_id
 from app.repositories.custom_checks import (
@@ -85,7 +89,6 @@ TEST_FIELDS: Final = frozenset({"domain_id", "kind", "definition", "severity", "
 _DEFAULT_TEST_SEVERITY: Final = "medium"
 
 INVALID_DEFINITION_KEY: Final = "api.custom_checks.error.invalid_definition"
-KIND_UNAVAILABLE_KEY: Final = "api.custom_checks.error.kind_unavailable"
 SCOPE_FORBIDDEN_KEY: Final = "api.custom_checks.error.scope_forbidden"
 NOT_FOUND_KEY: Final = "api.custom_checks.error.not_found"
 NAME_TOO_LONG_KEY: Final = "api.custom_checks.error.name_too_long"
@@ -94,8 +97,6 @@ DUPLICATE_KEY: Final = "api.custom_checks.error.duplicate"
 
 def field_key(field: str, reason: str) -> str:
     """The i18n key of a rejected field."""
-    if field == "kind" and reason in ("reserved", "kind_unavailable"):
-        return KIND_UNAVAILABLE_KEY
     if field == "name" and reason == "too_long":
         return NAME_TOO_LONG_KEY
     return INVALID_DEFINITION_KEY
@@ -155,7 +156,9 @@ class DryRun:
     check: CustomDnsCheck
 
 
-def _record_check(record: CustomCheckRecord, budget: RunBudget) -> CustomDnsCheck:
+def _record_check(
+    record: CustomCheckRecord, budget: RunBudget, fetch_limits: FetchLimits | None
+) -> CustomDnsCheck:
     return CustomDnsCheck(
         check_key=record.check_key,
         kind=record.kind,
@@ -165,10 +168,13 @@ def _record_check(record: CustomCheckRecord, budget: RunBudget) -> CustomDnsChec
         remediation_key=record.remediation_key,
         scope=record.scope,
         budget=budget,
+        fetch_limits=fetch_limits,
     )
 
 
-def run_checks_for(ctx: TenantContext, db: Session) -> list[CustomDnsCheck]:
+def run_checks_for(
+    ctx: TenantContext, db: Session, fetch_limits: FetchLimits | None = None
+) -> list[CustomDnsCheck]:
     """The custom checks of a domain run of `ctx`'s tenant, in id order (global and own rows)."""
     store = repo_for(ctx, db).custom_checks
     records: list[CustomCheckRecord] = []
@@ -180,7 +186,7 @@ def run_checks_for(ctx: TenantContext, db: Session) -> list[CustomDnsCheck]:
     shared = RunBudget()
     spent = RunBudget(0.0)
     return [
-        _record_check(record, shared if n < MAX_RUN_CUSTOM_CHECKS else spent)
+        _record_check(record, shared if n < MAX_RUN_CUSTOM_CHECKS else spent, fetch_limits)
         for n, record in enumerate(records)
     ]
 
@@ -243,16 +249,12 @@ class CustomChecksAdminService:
 
     @staticmethod
     def _payload(scope: RuleScope, data: Mapping[str, Any]) -> dict[str, Any]:
-        """Only fields the API may set; unknown names (scope, tenant_id...) are not echoed.
-        `http_fetch` is refused before anything else."""
+        """Only fields the API may set; unknown names (scope, tenant_id...) are not echoed."""
         allowed = GLOBAL_WRITE_FIELDS if scope is RuleScope.GLOBAL else TENANT_WRITE_FIELDS
         if not data:
             raise CustomCheckFieldInvalid("body", "empty")
         if any(name not in allowed for name in data):
             raise CustomCheckFieldInvalid("body", "unknown_field")
-        kind = data.get("kind")
-        if isinstance(kind, str) and kind in RESERVED_KINDS:
-            raise CustomCheckFieldInvalid("kind", "kind_unavailable")
         if data.get("remediation_key") is not None:
             try:
                 validate_remediation_key(data["remediation_key"])
@@ -352,7 +354,9 @@ class CustomChecksAdminService:
             raise DomainRefused(403, "api.error.forbidden")
         return self._ctx.tenant_id, view.id, view.name
 
-    def prepare_test(self, data: Mapping[str, Any]) -> DryRun:
+    def prepare_test(
+        self, data: Mapping[str, Any], fetch_limits: FetchLimits | None = None
+    ) -> DryRun:
         """Authorize and validate a dry run; returns the check to run, touching no DNS."""
         self.check_test()
         if any(name not in TEST_FIELDS for name in data):
@@ -376,5 +380,6 @@ class CustomChecksAdminService:
             remediation_text=remediation,
             scope=RuleScope.TENANT.value,
             remediation_optional=True,
+            fetch_limits=fetch_limits,
         )
         return DryRun(tenant_id, domain_id, name, check)

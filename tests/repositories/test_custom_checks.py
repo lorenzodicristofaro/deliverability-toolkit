@@ -30,6 +30,7 @@ from app.models.custom_check import (
     MAX_REMEDIATION_JSON_LENGTH,
     MAX_REMEDIATION_LENGTH,
 )
+from app.net import FetchError, FetchLimits, FetchResult
 from app.repositories import GlobalCustomCheckRepository, repo_for
 from app.repositories.base import TenantScopeError
 from app.repositories.custom_checks import (
@@ -54,6 +55,13 @@ DEFINITIONS: dict[str, dict[str, Any]] = {
     "dns_exists": {"name": "_esp.{domain}", "rrtype": "TXT"},
     "dns_matches": {"name": "{domain}", "rrtype": "TXT", "pattern": "include:esp\\.example"},
     "dns_value_range": {"name": "_limit.{domain}", "rrtype": "TXT", "min": 0, "max": 10},
+    "http_fetch": {
+        "host": "mta-sts.{domain}",
+        "path": "/.well-known/mta-sts.txt",
+        "expected_status": [200],
+        "body_pattern": "^version: STSv1",
+        "header": {"name": "content-type", "pattern": "^text/plain"},
+    },
 }
 
 
@@ -282,7 +290,6 @@ VIOLATIONS = [
     ("global with tenant_id", _row(scope="'global'", tenant="1")),
     ("tenant without tenant_id", _row(tenant="NULL")),
     ("unknown tenant", _row(tenant="99")),
-    ("reserved kind http_fetch", _row(kind="'http_fetch'")),
     ("unknown kind", _row(kind="'dns_whatever'")),
     ("null kind", _row(kind="NULL")),
     ("unknown severity", _row(severity="'urgent'")),
@@ -618,7 +625,6 @@ INVALID = [
     ("description", "d\x00", "nul"),
     ("description", "d\udc00", "surrogate"),
     ("description", "bell\x07", "control_char"),
-    ("kind", "http_fetch", "reserved"),
     ("kind", "glob", "invalid_choice"),
     ("kind", None, "invalid_choice"),
     ("kind", "DNS_EXISTS", "invalid_choice"),
@@ -820,7 +826,21 @@ def test_definition_size_limit_matches_db(world: World) -> None:
 
 REPOS = ["tenant", "global"]
 _NAME = "definition.name"
+_HTTP: dict[str, Any] = {"host": "{domain}", "expected_status": [200]}
 SCHEMA_REJECTED = [
+    ("http_fetch", {**_HTTP, "host": "evil.example"}, "definition.host", "placeholder_missing"),
+    ("http_fetch", {**_HTTP, "host": "{domain}.evil"}, "definition.host", "placeholder_position"),
+    ("http_fetch", {**_HTTP, "path": "@evil.example"}, "definition.path", "path_start"),
+    ("http_fetch", {**_HTTP, "path": "/a%40b"}, "definition.path", "path_chars"),
+    ("http_fetch", {**_HTTP, "port": 8443}, "definition", "unknown_key"),
+    ("http_fetch", {**_HTTP, "scheme": "file"}, "definition.scheme", "invalid_choice"),
+    (
+        "http_fetch",
+        {**_HTTP, "body_pattern": "(a"},
+        "definition.body_pattern",
+        "regex_invalid_syntax",
+    ),
+    ("http_fetch", {"host": "{domain}"}, "definition.expected_status", "required"),
     ("dns_exists", {"name": "@", "rrtype": "TXT"}, _NAME, "placeholder_missing"),
     (
         "dns_value_range",
@@ -904,14 +924,25 @@ def test_update_validates_the_resulting_kind_and_definition(world: World, where:
 
 
 @pytest.mark.parametrize("where", REPOS)
-def test_http_fetch_refused_on_every_write_path(world: World, where: str) -> None:
+def test_http_fetch_accepted_and_validated_on_every_write_path(world: World, where: str) -> None:
+    """M7-02: `http_fetch` is a kind like the others; its definition is checked on every path."""
     repo, create, existing = _write_target(world, where)
-    with pytest.raises(CustomCheckInvalid) as err:
-        create(_check(check_key="w.http", kind="http_fetch"))
-    assert (err.value.field, err.value.reason) == ("kind", "reserved")
+    created = create(_check(check_key="w.http", kind="http_fetch"))
+    assert created.kind == "http_fetch"
+    assert dict(created.definition)["expected_status"] == (200,)  # frozen on the way out
+    toggled = repo.update(created.id, {"enabled": False})  # no definition change: no re-check
+    assert toggled is not None and dict(toggled.definition) == dict(created.definition)
+    # kind alone: the stored dns_matches definition is not an http_fetch one.
     with pytest.raises(CustomCheckInvalid) as err:
         repo.update(existing, {"kind": "http_fetch"})
-    assert (err.value.field, err.value.reason) == ("kind", "reserved")
+    assert (err.value.field, err.value.reason) == ("definition", "unknown_key")
+    world.session.rollback()
+    updated = repo.update(existing, {"kind": "http_fetch", "definition": DEFINITIONS["http_fetch"]})
+    assert updated is not None and updated.kind == "http_fetch"
+    # a later definition change is checked against the stored http_fetch kind.
+    with pytest.raises(CustomCheckInvalid) as err:
+        repo.update(existing, {"definition": {**DEFINITIONS["http_fetch"], "path": "x"}})
+    assert (err.value.field, err.value.reason) == ("definition.path", "path_start")
 
 
 @pytest.mark.parametrize("where", REPOS)
@@ -969,6 +1000,31 @@ async def test_evaluator_accepts_a_real_stored_record(
     assert [f.code for f in result.findings] == ["CUSTOM_CHECK_FAILED"]
     assert result.findings[0].params.get("remediation_text") == text
     assert result.findings[0].remediation_key == rec.remediation_key
+
+
+async def test_evaluator_accepts_a_real_stored_http_fetch_record(world: World) -> None:
+    # Frozen nested definition (tuple statuses, read-only header mapping) straight from storage.
+    rec = world.repo("a").create(_check(check_key="a.http", kind="http_fetch"))
+    calls: list[str] = []
+
+    async def fetcher(url: str, **_: Any) -> FetchResult | FetchError:
+        calls.append(url)
+        return FetchResult(url=url, status=404, headers={}, body=b"", truncated=False)
+
+    check = CustomDnsCheck(
+        check_key=rec.check_key,
+        kind=rec.kind,
+        definition=rec.definition,
+        severity=rec.severity,
+        remediation_text=rec.remediation_text,
+        scope=rec.scope,
+        fetch_limits=FetchLimits(),
+        fetcher=fetcher,
+    )
+    result = await check.run(CheckContext(resolver=_NoRecord()), Target(domain="example.com"))
+    assert calls == ["https://mta-sts.example.com/.well-known/mta-sts.txt"]
+    assert [f.code for f in result.findings] == ["CUSTOM_HTTP_STATUS_MISMATCH"]
+    assert result.findings[0].params.get("remediation_text") == TEXT
 
 
 def test_none_json_is_sql_null(world: World) -> None:

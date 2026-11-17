@@ -29,9 +29,9 @@ the resulting pair; other updates (say, disabling a row) do not.
 `remediation_key` (an i18n key) is global-only: a tenant check must carry its own
 `remediation_text`, so it cannot borrow another check's text (reason "global_only", DB CHECK too).
 
-`http_fetch` is a reserved kind (M7, guarded outbound client): refused here with reason
-"reserved" and by the DB CHECK. `CustomCheckInvalid` names the field and a stable reason, never
-the value.
+`http_fetch` (M7-02) is validated like the DNS kinds, by the same schema on every write path: its
+URL parts (scheme, host template under `{domain}`, path, no port), statuses, patterns and caps.
+`CustomCheckInvalid` names the field and a stable reason, never the value.
 """
 
 from __future__ import annotations
@@ -67,7 +67,6 @@ from app.models.custom_check import (
     MAX_KEY_LENGTH,
     MAX_NAME_LENGTH,
     MAX_REMEDIATION_KEY_LENGTH,
-    RESERVED_KINDS,
     CustomCheck,
 )
 from app.repositories.base import DEFAULT_LIMIT, MAX_LIMIT, TenantScopeError, coerce_id
@@ -220,8 +219,6 @@ def _pattern(field: str, value: object, maximum: int, pattern: re.Pattern[str]) 
 
 
 def _kind(value: object) -> str:
-    if isinstance(value, str) and value in RESERVED_KINDS:
-        raise CustomCheckInvalid("kind", "reserved")
     if not isinstance(value, str) or value not in KINDS:
         raise CustomCheckInvalid("kind", "invalid_choice")
     return value

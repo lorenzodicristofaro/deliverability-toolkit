@@ -24,12 +24,12 @@ from app.core.permissions import MembershipGrant, Principal, RuleScope
 from app.core.tenancy import TenantContext
 from app.dns.types import DnsQuestion, DnsRecord, DnsResult, ResultState
 from app.models import CustomCheck, Domain, MembershipRole, Tenant, User
+from app.net import FetchLimits
 from app.repositories import GlobalCustomCheckRepository, repo_for
 from app.services import custom_checks_admin as admin
 from app.services.custom_checks_admin import (
     DUPLICATE_KEY,
     INVALID_DEFINITION_KEY,
-    KIND_UNAVAILABLE_KEY,
     MAX_RUN_CUSTOM_CHECKS,
     NAME_TOO_LONG_KEY,
     CheckKeyConflict,
@@ -393,28 +393,54 @@ def test_invalid_definition_is_422_and_stores_nothing(
     assert world.rows() == 0
 
 
+HTTP_FETCH: dict[str, Any] = {"host": "{domain}", "expected_status": [200]}
+
+
 @pytest.mark.parametrize(
-    "values",
+    ("definition", "field"),
     [
-        {"kind": "http_fetch", "definition": {"url": "https://x.example"}},
-        {"kind": "http_fetch", "definition": {}, "name": "n" * 500, "severity": "nope"},
+        ({"url": "https://x.example"}, "definition"),
+        ({}, "definition"),
+        ({**HTTP_FETCH, "host": "evil.example"}, "definition.host"),
+        ({**HTTP_FETCH, "path": "//evil.example/"}, "definition.path"),
+        ({**HTTP_FETCH, "body_pattern": "(a"}, "definition.body_pattern"),
     ],
 )
 @pytest.mark.parametrize("scope", [TENANT, GLOBAL])
-def test_http_fetch_is_kind_unavailable(
-    world: World, values: dict[str, Any], scope: RuleScope
+def test_http_fetch_definition_is_validated(
+    world: World, definition: dict[str, Any], field: str, scope: RuleScope
 ) -> None:
+    """M7-02: `http_fetch` is accepted; its definition is refused like any other kind's."""
     service = world.service("root" if scope is GLOBAL else "owner")
     with pytest.raises(CustomCheckFieldInvalid) as caught:
-        service.create(scope, check(**values))
-    assert (caught.value.field, caught.value.key) == ("kind", KIND_UNAVAILABLE_KEY)
+        service.create(scope, check(kind="http_fetch", definition=definition))
+    assert (caught.value.field, caught.value.key) == (field, INVALID_DEFINITION_KEY)
     target = service.create(scope, check())
     with pytest.raises(CustomCheckFieldInvalid) as caught:
-        service.update(scope, target.id, {"kind": "http_fetch"})
-    assert caught.value.key == KIND_UNAVAILABLE_KEY
+        service.update(scope, target.id, {"kind": "http_fetch", "definition": definition})
+    assert caught.value.key == INVALID_DEFINITION_KEY
     with pytest.raises(CustomCheckFieldInvalid) as caught:
-        world.service("owner").prepare_test(dry(world, kind="http_fetch"))
-    assert caught.value.key == KIND_UNAVAILABLE_KEY
+        world.service("owner").prepare_test(dry(world, kind="http_fetch", definition=definition))
+    assert caught.value.key == INVALID_DEFINITION_KEY
+
+
+@pytest.mark.parametrize("scope", [TENANT, GLOBAL])
+def test_http_fetch_is_created_updated_and_dry_run_with_the_given_limits(
+    world: World, scope: RuleScope
+) -> None:
+    service = world.service("root" if scope is GLOBAL else "owner")
+    created = service.create(scope, check(kind="http_fetch", definition=HTTP_FETCH))
+    assert created.kind == "http_fetch"
+    target = service.create(scope, check(check_key="acme.other"))
+    updated = service.update(scope, target.id, {"kind": "http_fetch", "definition": HTTP_FETCH})
+    assert updated.kind == "http_fetch"
+    limits = FetchLimits(allowed_ports=(443,))
+    dry_run = world.service("owner").prepare_test(
+        dry(world, kind="http_fetch", definition=HTTP_FETCH), limits
+    )
+    assert dry_run.check._fetch_limits is limits
+    ctx = TenantContext(world.tenant_a, world.users["owner"])
+    assert all(c._fetch_limits is limits for c in run_checks_for(ctx, world.db, limits))
 
 
 def test_name_too_long_has_its_own_key(world: World) -> None:

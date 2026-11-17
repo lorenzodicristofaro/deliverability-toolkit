@@ -15,7 +15,6 @@ from app.core.custom_check_schema import (
     RRTYPES,
     SEVERITIES,
     DefinitionInvalid,
-    KindUnavailable,
     NameRenderError,
     parse_definition,
     render_name,
@@ -24,7 +23,7 @@ from app.core.custom_check_schema import (
 )
 from app.core.safe_regex import MAX_PATTERN_LENGTH
 from app.dns.types import ALLOWED_RDTYPES
-from app.models.custom_check import KINDS, MAX_REMEDIATION_LENGTH, RESERVED_KINDS
+from app.models.custom_check import KINDS, MAX_REMEDIATION_LENGTH
 
 LONG_LABEL = "a" * 63
 TEXT = {"en": "Publish it.", "it": "Pubblicalo."}
@@ -312,25 +311,15 @@ def test_size_cap_measures_ascii_json() -> None:
     assert parse_definition("dns_matches", within).rule is not None
 
 
-@pytest.mark.parametrize("definition", [_def(), {}, None, "x", {"url": "https://x.example"}])
-def test_http_fetch_is_refused_with_a_typed_error(definition: object) -> None:
-    with pytest.raises(KindUnavailable) as err:
-        parse_definition("http_fetch", definition)
-    assert (err.value.field, err.value.reason) == ("kind", "kind_unavailable")
-    assert isinstance(err.value, DefinitionInvalid)
-
-
 @pytest.mark.parametrize("kind", ["", "glob", "DNS_EXISTS", None, 5, True, ["dns_exists"]])
 def test_unknown_kinds(kind: object) -> None:
     with pytest.raises(DefinitionInvalid) as err:
         parse_definition(kind, _def())
     assert (err.value.field, err.value.reason) == ("kind", "invalid_choice")
-    assert not isinstance(err.value, KindUnavailable)
 
 
 def test_enumerations_agree_with_the_model_and_dns_layer() -> None:
-    assert RESERVED_KINDS == ("http_fetch",)
-    assert "http_fetch" not in KINDS
+    assert KINDS == ("dns_exists", "dns_matches", "dns_value_range", "http_fetch")
     assert RRTYPES <= ALLOWED_RDTYPES
     assert PLACEHOLDER == "{domain}"
 

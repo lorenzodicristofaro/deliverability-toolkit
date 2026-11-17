@@ -22,6 +22,7 @@ from sqlalchemy import func, select
 from app.api.v1 import checks as api_checks
 from app.api.v1 import custom_checks as custom_api
 from app.api.v1.domain_esps import esp_profiles
+from app.checks import custom as custom_module
 from app.checks.models import CheckContext
 from app.core import i18n
 from app.core.config import Settings
@@ -29,6 +30,7 @@ from app.core.db import create_db_engine, create_session_factory
 from app.core.i18n import t
 from app.main import create_app
 from app.models import CustomCheck, User
+from app.net import FetchError, FetchLimits, FetchResult
 from app.services import custom_checks_admin as admin
 from tests.api.test_domains import KEY, World, _seed, call
 from tests.checks.test_acceptance_m3 import (
@@ -311,10 +313,16 @@ KEYS = "api.custom_checks.error."
     ("body", "key", "field", "reason"),
     [
         (
-            check(kind="http_fetch", definition={"url": "https://x.example"}),
-            "kind_unavailable",
-            "kind",
-            "kind_unavailable",
+            check(kind="http_fetch", definition={"host": "evil.example", "expected_status": [200]}),
+            "invalid_definition",
+            "definition.host",
+            "placeholder_missing",
+        ),
+        (
+            check(kind="http_fetch", definition={"url": "https://evil.example"}),
+            "invalid_definition",
+            "definition",
+            "unknown_key",
         ),
         (check(name="n" * 201), "name_too_long", "name", "too_long"),
         (
@@ -343,12 +351,96 @@ def test_invalid_body_is_422_without_the_value(
     assert rows(rig.world) == 0
 
 
-def test_http_fetch_update_is_422_kind_unavailable(rig: Rig) -> None:
+def test_http_fetch_update_validates_the_resulting_definition(rig: Rig) -> None:
     target = make(rig.world)
-    response = call(
-        rig.world, "owner", "PATCH", f"{URL}/{target['id']}", json={"kind": "http_fetch"}
-    )
-    assert_problem(response, KEYS + "kind_unavailable", "kind", "kind_unavailable")
+    path = f"{URL}/{target['id']}"
+    response = call(rig.world, "owner", "PATCH", path, json={"kind": "http_fetch"})
+    assert_problem(response, KEYS + "invalid_definition", "definition", "unknown_key")
+    body = {"kind": "http_fetch", "definition": HTTP_FETCH}
+    response = call(rig.world, "owner", "PATCH", path, json=body)
+    assert response.status_code == 200, response.text
+    assert (response.json()["kind"], response.json()["definition"]) == ("http_fetch", HTTP_FETCH)
+
+
+# --- http_fetch (M7-02) --------------------------------------------------------------------------
+
+HTTP_FETCH = {"host": "{domain}", "path": "/.well-known/x", "expected_status": [200]}
+
+
+@pytest.mark.parametrize(
+    ("who", "query", "status"),
+    [
+        ("anon", "", 401),
+        ("owner", "", 201),
+        ("admin", "", 201),
+        ("analyst", "", 403),
+        ("viewer", "", 403),
+        ("root", "", 404),
+        ("b_owner", "", 201),
+        ("owner", GLOBAL_Q, 403),
+        ("admin", GLOBAL_Q, 403),
+        ("analyst", GLOBAL_Q, 403),
+        ("viewer", GLOBAL_Q, 403),
+        ("root", GLOBAL_Q, 201),
+    ],
+)
+def test_http_fetch_create_per_role(rig: Rig, who: str, query: str, status: int) -> None:
+    tenant = "b" if who == "b_owner" else "a"
+    body = check(kind="http_fetch", definition=HTTP_FETCH)
+    response = call(rig.world, who, "POST", URL + query, json=body, tenant=tenant)
+    assert response.status_code == status, response.text
+    assert rows(rig.world) == (1 if status == 201 else 0)
+    if status == 201:
+        assert response.json()["kind"] == "http_fetch"
+        assert response.json()["scope"] == ("global" if query else "tenant")
+
+
+class FakeFetch:
+    """Stands in for the guarded client: records the URL and limits, answers a canned result."""
+
+    def __init__(self, status: int = 200) -> None:
+        self.status = status
+        self.calls: list[tuple[str, FetchLimits | None]] = []
+
+    async def __call__(
+        self, url: str, *, limits: FetchLimits | None = None, **_: Any
+    ) -> FetchResult | FetchError:
+        self.calls.append((url, limits))
+        return FetchResult(url=url, status=self.status, headers={}, body=b"", truncated=False)
+
+
+@pytest.fixture
+def fake_fetch(monkeypatch: pytest.MonkeyPatch) -> FakeFetch:
+    fake = FakeFetch()
+    monkeypatch.setattr(custom_module, "guarded_fetch", fake)
+    return fake
+
+
+def test_http_fetch_dry_run_uses_the_guarded_client_with_operator_limits(
+    rig: Rig, fake_fetch: FakeFetch
+) -> None:
+    body = dry(rig.world, kind="http_fetch", definition=HTTP_FETCH)
+    response = call(rig.world, "analyst", "POST", TEST_URL, json=body)
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "ok"
+    ((url, limits),) = fake_fetch.calls
+    assert url == f"https://{D}/.well-known/x"
+    assert limits is not None
+    assert limits.allowed_ports == rig.world.settings.outbound_http_ports()
+    assert limits.max_redirects == rig.world.settings.outbound_http_max_redirects
+    assert rows(rig.world) == 0
+
+
+def test_http_fetch_in_a_domain_run(rig: Rig, fake_fetch: FakeFetch) -> None:
+    w = rig.world
+    make(w, check_key="own.http", kind="http_fetch", definition=HTTP_FETCH)
+    fake_fetch.status = 503
+    result = run_all(w).json()[-1]
+    assert (result["check_id"], result["status"]) == ("custom:tenant:own.http", "warn")
+    assert [f["code"] for f in result["findings"]] == ["CUSTOM_HTTP_STATUS_MISMATCH"]
+    ((url, limits),) = fake_fetch.calls
+    assert url == f"https://{D}/.well-known/x"
+    assert limits is not None and limits.allowed_ports == w.settings.outbound_http_ports()
 
 
 @pytest.mark.parametrize("raw", [b"{", b"[1]", b'{"a": 1, "a": 2}', b'{"x": NaN}'])
@@ -499,7 +591,12 @@ def test_dry_run_foreign_active_tenant_is_404(rig: Rig, evaluator_spy: list[str]
 @pytest.mark.parametrize(
     ("overrides", "key", "field"),
     [
-        ({"kind": "http_fetch", "definition": {}}, "kind_unavailable", "kind"),
+        ({"kind": "http_fetch", "definition": {}}, "invalid_definition", "definition"),
+        (
+            {"kind": "http_fetch", "definition": {**HTTP_FETCH, "host": "169.254.169.254"}},
+            "invalid_definition",
+            "definition.host",
+        ),
         (
             {"definition": {"name": "evil.example", "rrtype": "TXT", "pattern": "x"}},
             "invalid_definition",
