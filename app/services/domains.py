@@ -11,6 +11,9 @@ The `Principal` comes from the auth dependencies (app.web.deps), which load a cl
 DomainAccess grants for the active tenant (M1-19); a principal without grants sees no domains
 (fail closed).
 
+Rename (M7-21a): a changed name resets ownership verification to `unverified` and drops any
+pending token, in the same transaction (`DomainRepository.rename`).
+
 TODO(M10): write audit log entries for create/rename/delete/access changes.
 """
 
@@ -81,6 +84,15 @@ class DomainView:
     # under another name because they did not satisfy the host rule for the old one.
     esp_hosts_rewritten: int = 0
     esp_hosts_unmatched: int = 0
+    # Ownership verification (M7-21a); the pending token's hash never reaches a view.
+    verification_status: str = "unverified"
+    verified_at: datetime | None = None
+    verification_method: str | None = None
+    token_expires_at: datetime | None = None
+
+    @property
+    def verified(self) -> bool:
+        return self.verification_status == "verified"
 
     @classmethod
     def from_record(
@@ -93,6 +105,10 @@ class DomainView:
             record.created_at,
             esp_hosts_rewritten,
             esp_hosts_unmatched,
+            record.verification_status,
+            record.verified_at,
+            record.verification_method,
+            record.token_expires_at,
         )
 
 

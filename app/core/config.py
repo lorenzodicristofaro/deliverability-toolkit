@@ -64,6 +64,11 @@ MAINTENANCE_INTERVAL_MINUTES_MAX = 1440
 DEFAULT_MONITOR_MAX_TARGETS_PER_TENANT = 100
 MONITOR_MAX_TARGETS_PER_TENANT_MIN = 1
 MONITOR_MAX_TARGETS_PER_TENANT_MAX = 1000
+# Lifetime of a domain ownership verification token (M7-21a). Project choice: long enough to
+# publish a TXT record and wait for caches, short enough that a leaked token soon stops working.
+DEFAULT_DOMAIN_VERIFY_TOKEN_TTL_HOURS = 72
+DOMAIN_VERIFY_TOKEN_TTL_HOURS_MIN = 1
+DOMAIN_VERIFY_TOKEN_TTL_HOURS_MAX = 720
 
 RESOLVER_ADDR_INVALID_KEY = "config.resolver_addr.invalid"
 
@@ -316,6 +321,12 @@ class Settings(BaseSettings):
         default=DEFAULT_MONITOR_MAX_TARGETS_PER_TENANT,
         ge=MONITOR_MAX_TARGETS_PER_TENANT_MIN,
         le=MONITOR_MAX_TARGETS_PER_TENANT_MAX,
+    )
+    # Hours a domain verification token stays valid (M7-21a); after that, start again.
+    domain_verify_token_ttl_hours: int = Field(
+        default=DEFAULT_DOMAIN_VERIFY_TOKEN_TTL_HOURS,
+        ge=DOMAIN_VERIFY_TOKEN_TTL_HOURS_MIN,
+        le=DOMAIN_VERIFY_TOKEN_TTL_HOURS_MAX,
     )
 
     @field_validator("secret_key", "encryption_key", mode="after")

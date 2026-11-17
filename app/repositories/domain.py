@@ -10,13 +10,15 @@ from __future__ import annotations
 
 from collections.abc import Collection, Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
+from typing import Any, cast
 
-from sqlalchemy import Table, UniqueConstraint
+from sqlalchemy import CursorResult, Table, UniqueConstraint, update
 from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.exc import IntegrityError
 
 from app.models import Domain
+from app.models.domain import normalize_domain_name
 from app.repositories.base import DEFAULT_LIMIT, MAX_LIMIT, TenantScopedRepository, coerce_id
 
 # The per-tenant unique name constraint (naming convention in app.models.base).
@@ -57,15 +59,50 @@ class DomainNameTaken(Exception):
     session is unusable until the caller rolls it back."""
 
 
+def _utc(value: datetime | None) -> datetime | None:
+    """SQLite returns naive datetimes for timezone-aware columns; they were stored as UTC."""
+    if value is None:
+        return None
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+
+
+# Every verification column back to "never verified, nothing pending" (rename, M7-21a).
+_UNVERIFIED: dict[str, object] = {
+    "verification_status": "unverified",
+    "verified_at": None,
+    "verification_method": None,
+    "verification_token_hash": None,
+    "verification_token_expires_at": None,
+}
+
+
 @dataclass(frozen=True, slots=True)
 class DomainRecord:
+    """A domain row. The pending token's hash is NOT here: only `pending_token_hash` reads it."""
+
     id: int
     name: str
     created_at: datetime
+    verification_status: str = "unverified"
+    verified_at: datetime | None = None
+    verification_method: str | None = None
+    token_expires_at: datetime | None = None
+
+    @property
+    def verified(self) -> bool:
+        return self.verification_status == "verified"
 
     @classmethod
     def from_model(cls, row: Domain) -> DomainRecord:
-        return cls(id=row.id, name=row.name, created_at=row.created_at)
+        return cls(
+            id=row.id,
+            name=row.name,
+            created_at=row.created_at,
+            verification_status=row.verification_status,
+            verified_at=_utc(row.verified_at),
+            verification_method=row.verification_method,
+            token_expires_at=_utc(row.verification_token_expires_at),
+        )
 
 
 def _check_page(limit: object, offset: object) -> None:
@@ -114,16 +151,67 @@ class DomainRepository(TenantScopedRepository[Domain]):
 
     def rename(self, id_: object, name: str) -> Domain | None:
         """Change the name; None if the domain is missing/foreign/malformed, DomainNameTaken if
-        another domain of the tenant already has `name`."""
+        another domain of the tenant already has `name`. A changed name resets ownership
+        verification (M7-21a): status `unverified`, pending token cleared; proof for the old
+        name says nothing about the new one. The same name again changes nothing."""
         current = self.get(id_)
         if current is None:
             return None
         other = self.get_by_name(name)
         if other is not None and other.id != current.id:
             raise DomainNameTaken
+        values: dict[str, object] = {"name": name}
+        if normalize_domain_name(name) != current.name:
+            values.update(_UNVERIFIED)
         try:
-            return self.update(current.id, {"name": name})
+            return self.update(current.id, values)
         except IntegrityError as exc:
             if not is_name_conflict(exc):
                 raise
             raise DomainNameTaken from exc
+
+    # --- ownership verification (M7-21a) -------------------------------------------------------
+
+    def pending_token_hash(self, id_: object) -> str | None:
+        """The stored hash of the domain's pending token (None: none pending, or no domain)."""
+        row = self.get(id_)
+        return None if row is None else row.verification_token_hash
+
+    def set_pending_token(self, id_: object, token_hash: str, expires_at: datetime) -> Domain | None:
+        """Store a new pending token (its hash) and expiry, replacing any previous one; the
+        status is unchanged. None if the domain is missing/foreign/malformed."""
+        if len(token_hash) != 64 or expires_at.tzinfo is None:
+            raise ValueError("token hash must be SHA-256 hex and expiry timezone-aware")
+        return self.update(
+            id_,
+            {"verification_token_hash": token_hash, "verification_token_expires_at": expires_at},
+        )
+
+    def mark_verified(
+        self, id_: object, *, name: str, token_hash: str, method: str, at: datetime
+    ) -> bool:
+        """Verified, by one conditional UPDATE: only while the row still has `name` and the
+        pending `token_hash` (a rename or a re-issue since the DNS lookup wins). Clears the
+        token. False if nothing matched."""
+        pk = coerce_id(id_)
+        if pk is None or at.tzinfo is None:
+            return False
+        stmt = (
+            update(Domain)
+            .where(
+                self._tenant_criterion(),
+                Domain.id == pk,
+                Domain.name == name,
+                Domain.verification_token_hash == token_hash,
+            )
+            .values(
+                verification_status="verified",
+                verified_at=at,
+                verification_method=method,
+                verification_token_hash=None,
+                verification_token_expires_at=None,
+            )
+            .execution_options(synchronize_session="fetch")
+        )
+        result = self._session.execute(stmt)
+        return int(cast(CursorResult[Any], result).rowcount) == 1
