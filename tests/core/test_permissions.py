@@ -62,6 +62,8 @@ ROLE_EXPECTED: dict[str, dict[Action, set[str]]] = {
         ACT.CONTENT_ANALYZE: TENANT_LEVEL,
         ACT.RULES_READ: TENANT_LEVEL,
         ACT.RULES_MANAGE: OWN_RULES,
+        ACT.MONITOR_READ: DOMAIN_ALL,
+        ACT.MONITOR_MANAGE: DOMAIN_ALL,
     },
     "admin": {
         ACT.TENANT_READ: TENANT_LEVEL,
@@ -77,6 +79,8 @@ ROLE_EXPECTED: dict[str, dict[Action, set[str]]] = {
         ACT.CONTENT_ANALYZE: TENANT_LEVEL,
         ACT.RULES_READ: TENANT_LEVEL,
         ACT.RULES_MANAGE: OWN_RULES,
+        ACT.MONITOR_READ: DOMAIN_ALL,
+        ACT.MONITOR_MANAGE: DOMAIN_ALL,
     },
     "analyst": {
         ACT.TENANT_READ: TENANT_LEVEL,
@@ -87,12 +91,15 @@ ROLE_EXPECTED: dict[str, dict[Action, set[str]]] = {
         ACT.MESSAGE_ANALYZE: TENANT_LEVEL,
         ACT.CONTENT_ANALYZE: TENANT_LEVEL,
         ACT.RULES_READ: TENANT_LEVEL,
+        ACT.MONITOR_READ: DOMAIN_ALL,
+        ACT.MONITOR_MANAGE: DOMAIN_ALL,
     },
     "client_viewer": {
         ACT.TENANT_READ: TENANT_LEVEL,
         ACT.DOMAIN_LIST: TENANT_LEVEL,
         ACT.DOMAIN_READ: {"own_assigned_domain"},
         ACT.CHECK_RUN: {"own_assigned_domain"},
+        ACT.MONITOR_READ: {"own_assigned_domain"},
     },
     "none": {},
 }
@@ -145,8 +152,8 @@ MATRIX = [
 
 
 def test_matrix_size() -> None:
-    # 5 role kinds x admin flag x active flag x 15 actions x 9 situations.
-    assert len(MATRIX) == 5 * 2 * 2 * 15 * 9 == 2700
+    # 5 role kinds x admin flag x active flag x 17 actions x 9 situations.
+    assert len(MATRIX) == 5 * 2 * 2 * 17 * 9 == 3060
 
 
 @pytest.mark.parametrize(("role", "admin", "active", "action", "situation"), MATRIX)
@@ -181,6 +188,8 @@ def test_action_list_is_the_m1_set_plus_later_milestone_actions() -> None:
         "content.analyze",  # M5-04
         "rules.read",  # M5-04
         "rules.manage",  # M5-04
+        "monitor.read",  # M7-11
+        "monitor.manage",  # M7-11
     }
 
 
@@ -1127,3 +1136,90 @@ def test_m5_toggles_are_independent() -> None:
     s = _p(memberships=(_grant("owner", toggles={"rules.read": False}),))
     assert can(s, Action.RULES_READ, TenantResource(A)) is False
     assert can(s, Action.RULES_MANAGE, RuleScopeResource(RuleScope.TENANT, A)) is True
+
+
+# --- M7-11: monitor.read / monitor.manage (ticket M7-11) --------------------------------------
+# Domain-level. read: owner/admin/analyst everywhere, client viewer on assigned domains only;
+# manage: owner/admin/analyst, never a client viewer (no toggle or assignment grants it). Each is
+# deniable on its own by a toggle keyed by its value; the instance admin flag adds nothing.
+
+MONITOR_TOGGLES: dict[str, dict[str, Any]] = {
+    "none": {},
+    "read_true": {"monitor.read": True},
+    "read_false": {"monitor.read": False},
+    "read_none": {"monitor.read": None},
+    "read_str_true": {"monitor.read": "true"},
+    "manage_true": {"monitor.manage": True},
+    "manage_false": {"monitor.manage": False},
+    "manage_one": {"monitor.manage": 1},
+    "all_true": _ALL_TOGGLES_TRUE,
+    "unrelated_false": {"check.run": False, "domain.read": False, "dns.tools": False},
+}
+
+
+def _monitor_expected(action: Action, role: str, toggle: str, state: str, resource: str) -> bool:
+    if state not in {"member", "instance_admin_member"}:
+        return False
+    denied_by = {
+        Action.MONITOR_READ: {"read_false", "read_none", "read_str_true"},
+        Action.MONITOR_MANAGE: {"manage_false", "manage_one"},
+    }[action]
+    if toggle in denied_by:
+        return False
+    if role == "client_viewer":
+        return action is Action.MONITOR_READ and resource == "assigned"
+    return resource in {"assigned", "unassigned"}
+
+
+@pytest.mark.parametrize(
+    ("action", "role", "toggle", "state", "resource"),
+    [
+        pytest.param(a, r, t, st, res, id=f"{a}-{r}-{t}-{st}-{res}")
+        for a, r, t, st, res in itertools.product(
+            (Action.MONITOR_READ, Action.MONITOR_MANAGE),
+            CHECK_ROLES,
+            MONITOR_TOGGLES,
+            CHECK_STATES,
+            CHECK_RESOURCES,
+        )
+    ],
+)
+def test_monitor_roles_x_toggles_x_states(
+    action: Action, role: str, toggle: str, state: str, resource: str
+) -> None:
+    p = _check_principal(role, MONITOR_TOGGLES[toggle], state)
+    expected = _monitor_expected(action, role, toggle, state, resource)
+    res = CHECK_RESOURCES[resource]
+    assert can(p, action, res) is expected
+    assert can(p, action.value, res) is expected
+    if not expected:
+        with pytest.raises(PermissionDenied):
+            require(p, action, res)
+
+
+def test_monitor_toggles_are_independent_of_check_run_and_each_other() -> None:
+    res = DomainResource(A, ASSIGNED)
+    p = _p(memberships=(_grant("analyst", toggles={"monitor.manage": False}),))
+    assert can(p, Action.MONITOR_MANAGE, res) is False
+    assert can(p, Action.MONITOR_READ, res) is True
+    assert can(p, Action.CHECK_RUN, res) is True
+    q = _p(memberships=(_grant("analyst", toggles={"check.run": False}),))
+    assert can(q, Action.MONITOR_READ, res) is True
+    assert can(q, Action.MONITOR_MANAGE, res) is True
+
+
+def test_monitor_role_in_other_tenant_does_not_leak() -> None:
+    # Owner in B must not give manage in A, where the user is only a client viewer on ASSIGNED.
+    p = _p(memberships=(_grant("client_viewer"), _grant("owner", B)))
+    assert can(p, Action.MONITOR_READ, DomainResource(A, ASSIGNED)) is True
+    assert can(p, Action.MONITOR_MANAGE, DomainResource(A, ASSIGNED)) is False
+    assert can(p, Action.MONITOR_READ, DomainResource(A, UNASSIGNED)) is False
+    assert can(p, Action.MONITOR_READ, DomainResource(B, ASSIGNED)) is False
+
+
+@pytest.mark.parametrize("action", [Action.MONITOR_READ, Action.MONITOR_MANAGE])
+def test_monitor_actions_need_a_domain_resource(action: Action) -> None:
+    p = _p(memberships=(_grant("owner"),))
+    assert can(p, action, TenantResource(A)) is False
+    assert can(p, action, InstanceResource()) is False
+    assert can(None, action, DomainResource(A, ASSIGNED)) is False

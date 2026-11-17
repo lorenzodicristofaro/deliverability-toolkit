@@ -256,6 +256,16 @@ newest snapshot of each domain is never pruned (it is the baseline of the next d
 - Offline message/header analysis requires `message.analyze` (GM decision 2026-11-07, M4-06):
   tenant-level, owner, admin, analyst; never client viewer; deniable per user by toggle and
   independent of `dns.tools`/`check.run`. The analyzer does no DNS/network and M4 stores nothing.
+- Scheduled monitoring (M7-11) has two domain-level actions, each deniable per user by its own
+  toggle (`{"monitor.read": false}`, `{"monitor.manage": false}`) and independent of `check.run`:
+  `monitor.manage` (create/change/delete a domain's monitor target) is owner, admin, analyst,
+  because SPEC section 3 gives the analyst "run all checks, see all domains" and a schedule only
+  runs checks repeatedly (no credentials involved); never client viewer. `monitor.read` (see the
+  target, later its history) is owner, admin, analyst on every domain, plus client viewer on
+  assigned domains only (read-only dashboards). No anonymous access. The repository does not know
+  DomainAccess: `app/services/monitors.py` decides `domain.read` + `monitor.read` (and
+  `monitor.manage` for writes) with `can()` before touching it, and filters the tenant list per
+  domain. A tenant holds at most `MONITOR_MAX_TARGETS_PER_TENANT` targets (section 11).
 - DNSBL lookups must detect "refused/blocked" return codes (e.g. 127.255.255.x
   conventions) and report them as `error`, not `listed`.
 

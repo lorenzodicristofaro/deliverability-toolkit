@@ -16,9 +16,11 @@ Rules (SPEC section 3, ARCHITECTURE section 4 items 3 and 6):
 - Client viewers read only domains assigned through DomainAccess.
 - Role matrix (tenant-level / domain-level actions beyond the domain CRUD set):
     owner, admin, analyst: dns.tools, check.run, message.analyze, content.analyze, rules.read
+    owner, admin, analyst: monitor.read, monitor.manage (all domains of the tenant)
     owner, admin:          rules.manage (scope `tenant`, own active tenant only)
-    client_viewer:         check.run (assigned domains only); never dns.tools, message.analyze,
-                           content.analyze, rules.read or rules.manage
+    client_viewer:         check.run, monitor.read (assigned domains only); never dns.tools,
+                           message.analyze, content.analyze, rules.read, rules.manage or
+                           monitor.manage
     instance admin flag:   instance.manage, rules.manage (scope `global` only), whatever the
                            tenant role (or none)
 - Per-user feature toggles can only deny: a toggle keyed by the action value that is not exactly
@@ -80,6 +82,16 @@ class Action(enum.StrEnum):
     # that same, active tenant, deniable per user with `{"rules.manage": false}`; the instance
     # admin flag adds nothing there (maintainer decision 2026-11-04 applies unchanged).
     RULES_MANAGE = "rules.manage"
+    # Scheduled monitoring of one tenant domain (M7-11). Domain-level, both deniable per user with
+    # `{"monitor.read": false}` / `{"monitor.manage": false}`. `monitor.read`: see a domain's
+    # monitor target (and, later, its history); owner/admin/analyst on every domain, client
+    # viewers only on assigned domains (read-only dashboards, SPEC section 3). `monitor.manage`:
+    # create/change/delete a target; owner/admin/analyst, because SPEC section 3 gives the analyst
+    # "run all checks" and a schedule only runs checks repeatedly (no credentials involved); never
+    # client viewers. Separate from `check.run` so a schedule can be switched off per user without
+    # taking away interactive checks, and vice versa.
+    MONITOR_READ = "monitor.read"
+    MONITOR_MANAGE = "monitor.manage"
 
 
 # --- Resources -------------------------------------------------------------------------------
@@ -136,10 +148,14 @@ _RESOURCE_KIND: Mapping[Action, type[Resource]] = MappingProxyType(
         Action.CONTENT_ANALYZE: TenantResource,
         Action.RULES_READ: TenantResource,
         Action.RULES_MANAGE: RuleScopeResource,
+        Action.MONITOR_READ: DomainResource,
+        Action.MONITOR_MANAGE: DomainResource,
     }
 )
 
 # --- Role matrix (SPEC section 3) ------------------------------------------------------------
+
+_MONITOR_ALL = frozenset({Action.MONITOR_READ, Action.MONITOR_MANAGE})
 
 _DOMAIN_ALL = frozenset(
     {
@@ -167,7 +183,8 @@ ROLE_ACTIONS: Mapping[MembershipRole, frozenset[Action]] = MappingProxyType(
                 Action.RULES_MANAGE,  # tenant scope only; global goes through the instance flag
             }
         )
-        | _DOMAIN_ALL,
+        | _DOMAIN_ALL
+        | _MONITOR_ALL,
         # Domains and inviting users; not owner settings.
         MembershipRole.ADMIN: frozenset(
             {
@@ -181,9 +198,11 @@ ROLE_ACTIONS: Mapping[MembershipRole, frozenset[Action]] = MappingProxyType(
                 Action.RULES_MANAGE,  # tenant scope only; global goes through the instance flag
             }
         )
-        | _DOMAIN_ALL,
-        # Sees all domains, runs checks, uses the raw DNS tools and the message/content
-        # analyzers, reads rules; no user/integration/rule management, no domain changes.
+        | _DOMAIN_ALL
+        | _MONITOR_ALL,
+        # Sees all domains, runs checks (also on a schedule), uses the raw DNS tools and the
+        # message/content analyzers, reads rules; no user/integration/rule management, no domain
+        # changes.
         MembershipRole.ANALYST: frozenset(
             {
                 Action.TENANT_READ,
@@ -195,13 +214,21 @@ ROLE_ACTIONS: Mapping[MembershipRole, frozenset[Action]] = MappingProxyType(
                 Action.CONTENT_ANALYZE,
                 Action.RULES_READ,
             }
-        ),
+        )
+        | _MONITOR_ALL,
         # Read-only, assigned domains only (enforced in `_domain_allowed`). Runs checks on those
         # domains (M3 has no persistence: viewing the Authentication tab IS running the check).
-        # No raw DNS tools, no message/content analyzer, no rules: not in this set, so no toggle
-        # or DomainAccess grant can give them.
+        # Reads the monitor target of those domains, never manages one. No raw DNS tools, no
+        # message/content analyzer, no rules, no monitor.manage: not in this set, so no toggle or
+        # DomainAccess grant can give them.
         MembershipRole.CLIENT_VIEWER: frozenset(
-            {Action.TENANT_READ, Action.DOMAIN_LIST, Action.DOMAIN_READ, Action.CHECK_RUN}
+            {
+                Action.TENANT_READ,
+                Action.DOMAIN_LIST,
+                Action.DOMAIN_READ,
+                Action.CHECK_RUN,
+                Action.MONITOR_READ,
+            }
         ),
     }
 )
