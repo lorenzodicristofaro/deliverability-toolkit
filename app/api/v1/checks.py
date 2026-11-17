@@ -61,6 +61,7 @@ from app.core.domain_names import InvalidDomainName, to_dns_name
 from app.core.permissions import Action, DomainResource, TenantResource, can
 from app.core.tenancy import TenantContext
 from app.dns.types import Resolver
+from app.net import FetchLimits, limits_from_settings
 from app.services.checks import (
     InvalidTarget,
     UnknownCheck,
@@ -76,7 +77,7 @@ from app.services.dnsbl_admin import enabled_list_ids
 from app.services.domain_esps import ESP_CHECK_ID, ProfileSource, resolve_esp_run
 from app.services.domain_registry import prepare_domain_registry
 from app.services.domains import DomainService, DomainServiceError, DomainView
-from app.web.deps import CurrentSession, DbDep, tenant_ctx
+from app.web.deps import CurrentSession, DbDep, SettingsDep, tenant_ctx
 
 router = APIRouter(tags=["checks"])
 
@@ -209,7 +210,7 @@ def _prepare(
 
 
 def _prepare_all(
-    access: _CheckTarget, db: Session, profiles: ProfileSource
+    access: _CheckTarget, db: Session, profiles: ProfileSource, fetch_limits: FetchLimits
 ) -> tuple[CheckRegistry, list[str]]:
     """The registry and ids of `all`: built-ins (DKIM on the tenant's selectors, DNSBL on the
     instance's enabled lists, `esp` with detection, M6-13) plus the tenant's custom checks; ends
@@ -218,7 +219,7 @@ def _prepare_all(
     try:
         registry = registry_for(resolve_probe_selectors(access.ctx, db))
         registry = with_dnsbl_enabled(registry, enabled_list_ids(db))
-        custom = run_checks_for(access.ctx, db)
+        custom = run_checks_for(access.ctx, db, fetch_limits)
         esp = resolve_esp_run(access.ctx, db, access.view.id, profiles)
         registry = registry.with_checks([esp.check])
     finally:
@@ -266,11 +267,13 @@ async def run_domain_check(
     db: DbDep,
     resolver: ResolverDep,
     profiles: ProfilesDep,
+    settings: SettingsDep,
     check_id: str,
 ) -> Response:
     ctx = _context(resolver, access.ctx.tenant_id, access.view.id)
     if check_id == ALL:
-        everything, ids = await run_in_threadpool(_prepare_all, access, db, profiles)
+        limits = limits_from_settings(settings)  # http_fetch custom checks (M7-02)
+        everything, ids = await run_in_threadpool(_prepare_all, access, db, profiles, limits)
         return await _run_many(request, ids, access.view.name, ctx, everything)
     registry = await run_in_threadpool(_prepare, access, db, [check_id], profiles)
     try:

@@ -29,7 +29,7 @@ from app.cli import content as cli_content
 from app.cli.main import app as cli_app
 from app.core import i18n
 from app.core.config import Settings
-from app.core.custom_check_schema import KindUnavailable, parse_definition
+from app.core.custom_check_schema import DefinitionInvalid, parse_definition
 from app.core.db import create_db_engine, create_session_factory
 from app.core.i18n import t
 from app.core.tenancy import TenantContext
@@ -438,7 +438,7 @@ def test_the_guard_itself_blocks_connections(attempts: list[Any]) -> None:
         socket.create_connection(("192.0.2.1", 80), timeout=1)
 
 
-# --- 4. custom checks: DNS kinds end to end, http_fetch refused everywhere -----------------------
+# --- 4. custom checks: DNS kinds end to end; http_fetch (M7-02) API-only, validated everywhere --
 
 
 def make_check(w: World, who: str = "owner", tenant: str = "a", **overrides: Any) -> dict[str, Any]:
@@ -581,11 +581,13 @@ def _custom_rows(w: World) -> int:
     return count
 
 
-def test_http_fetch_is_rejected_at_schema_api_and_ui(world: World, zone: Zone) -> None:
+def test_free_form_http_fetch_is_rejected_at_schema_api_and_ui(world: World, zone: Zone) -> None:
+    """M5 refused `http_fetch` outright; since M7-02 it is a kind whose URL is built from parts,
+    so a free-form URL is still refused everywhere, and the form does not offer the kind."""
     # schema
-    with pytest.raises(KindUnavailable) as raised:
+    with pytest.raises(DefinitionInvalid) as raised:
         parse_definition("http_fetch", {"url": "https://x.example"})
-    assert (raised.value.field, raised.value.reason) == ("kind", "kind_unavailable")
+    assert (raised.value.field, raised.value.reason) == ("definition", "unknown_key")
 
     # API: create (tenant and global) and the dry run
     body = {
@@ -599,7 +601,7 @@ def test_http_fetch_is_rejected_at_schema_api_and_ui(world: World, zone: Zone) -
     for who, query in (("owner", ""), ("root", GLOBAL_Q)):
         response = call(world, who, "POST", CUSTOM + query, json=body)
         assert response.status_code == 422
-        assert response.json()["detail"]["key"] == "api.custom_checks.error.kind_unavailable"
+        assert response.json()["detail"]["key"] == "api.custom_checks.error.invalid_definition"
     dry = call(
         world,
         "owner",
@@ -639,7 +641,7 @@ def test_http_fetch_is_rejected_at_schema_api_and_ui(world: World, zone: Zone) -
         headers={**html, "Content-Type": "application/x-www-form-urlencoded"},
     )
     assert posted.status_code == 422
-    assert t("api.custom_checks.error.kind_unavailable", "en") in posted.text
+    assert t("web.custom_checks.error.api_only", "en") in posted.text
 
     assert _custom_rows(world) == 0
     assert zone.queries == []  # no DNS for a refused kind

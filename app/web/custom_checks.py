@@ -20,8 +20,12 @@ Routes (all need a session; anonymous GET -> 303 /login, anonymous POST -> 401):
 - POST /custom-checks/{id}/delete        delete
 
 The form builds the definition from flat fields (kind, record type, name template, pattern or
-min/max); the validation is the service's, so a posted `http_fetch` is refused there
-(`kind_unavailable`, 422) although the select shows it disabled. The remediation key exists on the
+min/max); the validation is the service's. `http_fetch` (M7-02) is API-only in M7: the select
+shows it disabled, a posted `http_fetch` (create, update or dry run) is refused here with
+`web.custom_checks.error.api_only` (422) before the service, and an existing `http_fetch` check is
+never overwritten from the form: its edit page shows a notice instead of the form, and a save
+posted to it is refused (422) whatever the body says. Enable/disable and delete work for every
+kind (they never touch the definition). The remediation key exists on the
 global form only (the service refuses it on the tenant path). Bodies are urlencoded and
 size-capped by `_read_capped`; NUL and lone surrogates are refused before the service and never
 echoed. Everything derived from stored or posted values is autoescaped (no `|safe`) and shown
@@ -49,7 +53,8 @@ from app.checks.registry import CheckRegistry
 from app.core.custom_check_schema import RRTYPES, SEVERITIES
 from app.core.permissions import RuleScope
 from app.core.tenancy import TenantContext
-from app.models.custom_check import KINDS, RESERVED_KINDS
+from app.models.custom_check import KINDS
+from app.net import limits_from_settings
 from app.repositories.base import MAX_LIMIT, parse_id
 from app.repositories.custom_checks import CustomCheckRecord
 from app.services.checks import run_check
@@ -62,7 +67,7 @@ from app.services.custom_checks_admin import (
 )
 from app.services.domains import DomainService, DomainServiceError
 from app.web.authentication import finding_params  # noqa: F401  registers the filter and test
-from app.web.deps import AuthSession, CurrentSession, DbDep
+from app.web.deps import AuthSession, CurrentSession, DbDep, SettingsDep
 from app.web.dns_tools import visible  # registers the `visible` filter
 from app.web.templating import render
 
@@ -90,7 +95,9 @@ _TEXT_FIELDS: Final = (
     "remediation_key",
 )
 _DEFAULT_KIND: Final = "dns_exists"
-SELECTABLE_KINDS: Final = tuple(k for k in KINDS if k not in RESERVED_KINDS)
+# Created and edited through the API only (M7-02): no form fields for them yet.
+API_ONLY_KINDS: Final = ("http_fetch",)
+SELECTABLE_KINDS: Final = tuple(k for k in KINDS if k not in API_ONLY_KINDS)
 
 _FLASH: Final = {
     "created": "web.custom_checks.flash.created",
@@ -121,6 +128,7 @@ INVALID_FORM_KEY: Final = "web.custom_checks.error.invalid_form"
 INVALID_CHARS_KEY: Final = "web.custom_checks.error.invalid_chars"
 TOO_LARGE_KEY: Final = "web.custom_checks.error.too_large"
 NO_DOMAIN_KEY: Final = "web.custom_checks.error.no_domain"
+API_ONLY_KEY: Final = "web.custom_checks.error.api_only"
 
 __all__ = ["MAX_SAVE_BYTES", "PAGE_SIZE", "router", "visible"]
 
@@ -303,8 +311,8 @@ def _to_number(text: str) -> int | float | str:
 
 def _definition(texts: dict[str, str]) -> dict[str, Any]:
     """The definition of the posted kind from the flat fields. A value that is not a number is
-    passed through as text so the service refuses it (`not_a_number`); an unknown kind (including
-    `http_fetch`) gets an empty definition and is refused on the kind first."""
+    passed through as text so the service refuses it (`not_a_number`); an unknown kind gets an
+    empty definition and is refused on the kind first (`http_fetch` never gets here)."""
     kind = texts["kind"]
     if kind not in SELECTABLE_KINDS:
         return {}
@@ -342,6 +350,8 @@ def _save_data(
     if any(_bad_chars(v) for v in (*texts.values(), enabled, domain)):
         return {}, echo, INVALID_CHARS_KEY
     echo.update({**texts, "enabled": enabled == "1", "domain_id": domain})
+    if texts["kind"] in API_ONLY_KINDS:
+        return {}, echo, API_ONLY_KEY
     if test:
         data: dict[str, Any] = {
             "kind": texts["kind"],
@@ -490,7 +500,8 @@ def _form_page(
         record=record,
         form=values if values is not None else _form_values(record),
         kinds=SELECTABLE_KINDS,
-        reserved_kinds=sorted(RESERVED_KINDS),
+        api_only_kinds=API_ONLY_KINDS,
+        api_only=record is not None and record.kind in API_ONLY_KINDS,
         rrtypes=sorted(RRTYPES),
         severities=SEVERITIES,
         domains=_test_domains(db, auth) if can_test else [],
@@ -559,7 +570,25 @@ async def _save(
     target: int | None,
 ) -> Response:
     """Create (`target` None) or update a check from the form. The caller has already checked the
-    permission (and the row's visibility), so the body is read only for an allowed caller."""
+    permission (and the row's visibility), so the body is read only for an allowed caller. An
+    API-only check (`http_fetch`) is never updated from the form: refused before the body."""
+    if target is not None:
+        try:
+            current = await run_in_threadpool(service.get_check, scope, target)
+        except CustomChecksAdminError as exc:
+            return _failure(request, exc)
+        if current.kind in API_ONLY_KINDS:
+            return await run_in_threadpool(
+                _form_page,
+                request,
+                service,
+                db,
+                auth,
+                scope,
+                target,
+                status_code=422,
+                plain_error=API_ONLY_KEY,
+            )
     form, status, problem = await _body_form(request, db, MAX_SAVE_BYTES)
     if form is None:
         return await run_in_threadpool(
@@ -647,6 +676,7 @@ async def checks_test(
     auth: CurrentSession,
     db: DbDep,
     resolver: ResolverDep,
+    settings: SettingsDep,
     scope: str | None = None,
     check: str | None = None,
 ) -> Response:
@@ -686,7 +716,7 @@ async def checks_test(
 
     def prepare() -> DryRun:
         try:
-            return service.prepare_test(data)
+            return service.prepare_test(data, limits_from_settings(settings))
         finally:
             db.rollback()  # no connection is held during the DNS work
 

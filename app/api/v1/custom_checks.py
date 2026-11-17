@@ -10,13 +10,17 @@ Status codes (401, 403, 404, 409, 413 and 415 bodies are `{"detail": <i18n>}`):
 - 404 no active tenant on the tenant path, a check that is missing/foreign/malformed id, or on
   `/test` a domain that is missing, foreign, unassigned or out of range;
 - 409 duplicate check_key in the scope; 413 body over MAX_BODY_BYTES; 415 not `application/json`;
-- 422 `{key, message, field, reason}`, never echoing the rejected value; `http_fetch` is
-  `api.custom_checks.error.kind_unavailable`.
+- 422 `{key, message, field, reason}`, never echoing the rejected value.
+
+Kinds: the three DNS kinds and `http_fetch` (M7-02; definition rules in
+`app.core.custom_check_schema`). `http_fetch` is created and edited through this API only (the web
+form does not offer it in M7). Its fetches, in a domain run or `/test`, go through the guarded
+client (`app.net.fetch`) with the operator's limits (`limits_from_settings`).
 
 `POST /test` body: `domain_id`, `kind`, `definition`, optional `severity` (default medium) and
 `remediation_text`. It answers 200 with the `CheckResult` wire JSON of the check runner, exactly
-as a domain run would print it; a DNS failure is DATA (status `error`), never `ok`. Nothing is
-stored.
+as a domain run would print it; a DNS or HTTP failure is DATA (status `error`), never `ok`.
+Nothing is stored.
 
 Permission is decided before the body is read, so a denied caller gets 403 whatever it sent.
 Dependencies are solved in parameter order: `ManageScope` / `TestAccess` must stay before `Body`.
@@ -41,6 +45,7 @@ from app.checks.registry import CheckRegistry
 from app.core.i18n import t
 from app.core.permissions import RuleScope
 from app.core.tenancy import TenantContext
+from app.net import limits_from_settings
 from app.repositories.base import DEFAULT_LIMIT, MAX_LIMIT, parse_id
 from app.repositories.custom_checks import CustomCheckRecord
 from app.services.checks import run_check
@@ -51,7 +56,7 @@ from app.services.custom_checks_admin import (
     CustomChecksAdminService,
     DryRun,
 )
-from app.web.deps import CurrentSession, DbDep
+from app.web.deps import CurrentSession, DbDep, SettingsDep
 from app.web.templating import request_language
 
 router = APIRouter(prefix="/custom-checks", tags=["custom-checks"])
@@ -215,12 +220,14 @@ async def test_custom_check(
     db: DbDep,
     body: Body,
     resolver: ResolverDep,
+    settings: SettingsDep,
 ) -> Response:
     data = _json_object(request, body)
+    limits = limits_from_settings(settings)
 
     def prepare() -> DryRun:
         try:
-            return service.prepare_test(data)
+            return service.prepare_test(data, limits)
         finally:
             db.rollback()  # no connection is held during the DNS work
 

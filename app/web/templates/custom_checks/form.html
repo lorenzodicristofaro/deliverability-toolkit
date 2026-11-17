@@ -8,6 +8,10 @@
 <h1>{{ heading }}</h1>
 <p>{{ scope_text[scope] }}</p>
 {% include "custom_checks/_error.html" %}
+{% if api_only %}
+<p data-testid="custom-api-only">{{ t("web.custom_checks.form.api_only") }}</p>
+<p><a href="/custom-checks?scope={{ scope }}">{{ t("web.custom_checks.action.cancel") }}</a></p>
+{% else %}
 <form class="dns-form" method="post" action="{% if record %}/custom-checks/{{ record.id }}/edit{% else %}/custom-checks{% endif %}?scope={{ scope }}" data-testid="custom-form">
   <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
   <p>
@@ -26,7 +30,7 @@
     <label for="cc-kind">{{ t("web.custom_checks.field.kind") }}</label>
     <select id="cc-kind" name="kind">
       {% for k in kinds %}<option value="{{ k }}"{% if form.kind == k %} selected{% endif %}>{{ kind_text[k] }}</option>{% endfor %}
-      {% for k in reserved_kinds %}<option value="{{ k }}" disabled>{{ kind_text[k] }} ({{ t("web.custom_checks.kind.http_fetch_unavailable") }})</option>{% endfor %}
+      {% for k in api_only_kinds %}<option value="{{ k }}" disabled>{{ kind_text[k] }} ({{ t("web.custom_checks.kind.http_fetch_api_only") }})</option>{% endfor %}
     </select>
   </p>
   <p>
@@ -87,6 +91,7 @@
   <button type="submit">{{ t("web.custom_checks.action.save") }}</button>
   <a href="/custom-checks?scope={{ scope }}">{{ t("web.custom_checks.action.cancel") }}</a>
 </form>
+{% endif %}
 {% if result %}
 <section data-testid="custom-test-result">
   <h2>{{ t("web.custom_checks.test.result") }}</h2>

@@ -271,12 +271,12 @@ host can turn a slow-but-finite rule into a timeout; that is reported, never hid
 exposure: the worker pool is process-wide, so a tenant admin can keep slots busy and push other
 tenants' analyses to `busy` or `not_evaluated` (TODO.md follow-up).
 
-## Custom checks (DNS kinds; http_fetch is deferred to M7)
+## Custom checks (DNS kinds, and http_fetch since M7-02)
 
 A custom check is a declarative definition stored per tenant or globally and run with the checks
 of a domain. The schema is `app/core/custom_check_schema.py`, the evaluator `app/checks/custom.py`.
 
-Kinds in M5 (all DNS, through the resolver of the run):
+DNS kinds (M5, through the resolver of the run):
 
 | Kind | Definition keys | Result |
 |---|---|---|
@@ -284,11 +284,59 @@ Kinds in M5 (all DNS, through the resolver of the run):
 | `dns_matches` | `name`, `rrtype`, `pattern` | `ok` if at least one record matches the regex (inline flags such as `(?i)`; no flag key) |
 | `dns_value_range` | `name`, `rrtype` (TXT only), `min`, `max` | `ok` if every value is a plain decimal in the range (exact `Decimal` comparison) |
 
-`http_fetch` is a reserved kind. It is refused by the schema (`kind_unavailable`), the REST API
-(422), the UI (disabled option; a posted form is refused) and the evaluator, until M7 provides the
-guarded outbound client. Nothing outside DNS is fetched in M5.
+### `http_fetch` (M7-02)
 
-Rules of the definition:
+An HTTP GET through the guarded outbound client (`app/net/guarded_http.py`, ARCHITECTURE section
+9) and nothing else. It is created and edited through the REST API only in M7: the UI shows the
+kind disabled ("API only"), refuses a posted `http_fetch` form (create, edit or dry run) and shows
+an existing `http_fetch` check read-only (a notice instead of the edit form; a save posted to it is
+refused, 422), so the form never overwrites its definition. Enable/disable and delete work in the
+UI for every kind.
+
+| Key | Required | Rule |
+|---|---|---|
+| `host` | yes | `{domain}` or lowercase ASCII host labels + `.{domain}` (letters, digits, inner hyphens; no underscore, no IDN in either form, no uppercase): only the target domain or a host under it |
+| `expected_status` | yes | 1 to 10 distinct integers in 100..599 |
+| `scheme` | no | `https` (default) or `http` |
+| `path` | no | default `/`; starts with `/` (not `//`), at most 512 characters, only letters, digits and ``-._~!$&'()*+,;=:/?`` (no `%`, `@`, `#`, backslash, `{`, `}`, whitespace or control characters); a `?query` is allowed |
+| `body_pattern` | no | regex through `safe_regex.compile_checked`, run on the body decoded as UTF-8 with replacement |
+| `max_body_bytes` | no | 1..262144 (default 65536), below the client's 1 MiB cap; the body is read up to it |
+| `header` | no | `{name, pattern?}`; `name` is one of the response headers the client returns (`cache-control`, `content-language`, `content-length`, `content-type`, `etag`, `expires`, `last-modified`, `location`, `retry-after`), lowercase; `pattern` as `body_pattern` |
+
+There is no port key: the scheme's default port is always used, and the operator's
+`OUTBOUND_HTTP_ALLOWED_PORTS` still applies (`http` when port 80 is not allowed is `blocked`). The
+URL is built from these parts for each target, never taken as a string, and re-parsed with the
+client's own policy before the request. Unknown keys are refused, the definition is capped at
+4096 characters of JSON, and every write path (API, repository, dry run) validates it.
+
+Outcomes:
+
+- Every client failure is `error`, never `ok` and never a finding about the site:
+  `CUSTOM_HTTP_BLOCKED` (`blocked`, `scheme_not_allowed`, `port_not_allowed`: an internal or
+  special-purpose address, also after a redirect, an https -> http redirect, a port outside the
+  allowlist), `CUSTOM_HTTP_TOO_LARGE` (`too_large`: headers over the client caps; or
+  `body_truncated`: the pattern did not match within `max_body_bytes`, so no verdict),
+  `CUSTOM_HTTP_UNREACHABLE` (`dns_error`, `timeout`, `tls_error`, `connect_error`,
+  `protocol_error`, `too_many_redirects`). `reason` is the client's error kind.
+- Requirement not met, with the configured severity and remediation: `CUSTOM_HTTP_STATUS_MISMATCH`
+  (final status not in `expected_status`; body and header are not evaluated),
+  `CUSTOM_HTTP_BODY_MISMATCH` (`body_no_match`), `CUSTOM_HTTP_HEADER_MISMATCH` (`header_missing`
+  or `header_no_match`).
+- Redirects (default at most 3, `OUTBOUND_HTTP_MAX_REDIRECTS`) are followed by the check one hop
+  at a time, each hop under the full egress policy, and only within the target domain: a redirect
+  to any other host (or to an IP literal) is refused before it is requested,
+  `CUSTOM_HTTP_BLOCKED` with reason `redirect_off_domain` (`error`), with nothing of the redirect
+  reported. So a tenant cannot use a redirect to read another site through the check.
+- Budget: the fetch shares the custom checks' 12 s run budget; its deadline is the smaller of the
+  client's 20 s and what is left. No budget left, or the fetch cut by it, is `error`
+  (`run_budget_exceeded`).
+- The response is untrusted. Finding params carry only the check key, the built host, the final
+  host, the status and the expected statuses; a body or header value appears only as evidence (at
+  most 256 characters, non-printable characters replaced, escaped by renderers). Bodies and
+  headers are never logged.
+
+Rules (the name rule is for DNS kinds; ids, budget, remediation and roles apply to every kind):
+
 
 - `name` is `{domain}` alone, or lowercase ASCII labels followed by `.{domain}`; a label may start with an underscore (for example `_dmarc`); the rendered name
   can only be the target domain or a name under it. IDN is refused. Allowed record types: A, AAAA,
@@ -302,13 +350,13 @@ Rules of the definition:
 - Could not evaluate is `error`, never `ok`: any DNS state other than ok, nxdomain or nodata, a
   regex timeout, a non-numeric value on a range, an invalid stored definition, a name that cannot
   be built, more than 64 records, or a budget that ran out. Codes: `CUSTOM_CHECK_FAILED`,
-  `CUSTOM_CHECK_ERROR`, `CUSTOM_KIND_UNAVAILABLE`.
+  `CUSTOM_CHECK_ERROR`, and the `CUSTOM_HTTP_*` codes of `http_fetch` above.
 - Budget: all custom checks of one domain run share one 12 s budget (below the 15 s per-check
   deadline of the check service); a check that starts with none left is `error`
   (`run_budget_exceeded`) without a DNS query. At most 50 custom checks query DNS per run: the
   51st and later report `error` without a query, so none silently disappears. Matching against
   one check's records shares a 10 s regex budget, with a 1 s timeout per search.
-- Remediation, shown only on `CUSTOM_CHECK_FAILED`: either plain text in `en` and `it` stored with
+- Remediation, shown only on `CUSTOM_CHECK_FAILED` and the `http_fetch` mismatch codes: either plain text in `en` and `it` stored with
   the definition (`params["remediation_text"]`, escaped by renderers, never raw HTML), or, for a
   global row only, a `remediation_key` naming a message present in every catalogue. A tenant
   check cannot use a key.

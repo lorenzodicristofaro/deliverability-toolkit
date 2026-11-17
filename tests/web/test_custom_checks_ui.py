@@ -26,8 +26,10 @@ from app.core import i18n
 from app.core.config import Settings
 from app.core.db import create_db_engine, create_session_factory
 from app.core.i18n import LOCALES_DIR, t
+from app.core.tenancy import TenantContext
 from app.main import create_app
 from app.models import CustomCheck, Membership, MembershipRole, User
+from app.repositories import GlobalCustomCheckRepository, repo_for
 from app.services.custom_checks_admin import CustomChecksAdminService
 from app.web.templating import env
 from tests.checks.test_acceptance_m3 import Scripted, txt
@@ -491,14 +493,41 @@ def test_tenant_tab_shows_global_rows_read_only(world: World) -> None:
     assert f"/custom-checks/{gid}/edit?scope=global" in admin_page
 
 
+API_ONLY = "web.custom_checks.error.api_only"
+HTTP_DEFINITION = {"host": "{domain}", "path": "/x", "expected_status": [200]}
+
+
+def http_row(w: World, scope: str = "tenant") -> int:
+    """An http_fetch check created the only way M7 allows: not through the form (API/service)."""
+    values = {
+        "check_key": f"http.{scope}",
+        "name": "HTTP check",
+        "kind": "http_fetch",
+        "definition": HTTP_DEFINITION,
+        "severity": "medium",
+        "remediation_text": {"en": "Fix the page.", "it": "Correggi la pagina."},
+    }
+    if scope == "global":
+        record = GlobalCustomCheckRepository(w.db).create(values, actor=None)
+    else:
+        ctx = TenantContext(tenant_id=w.tenant_a, principal=w.users["owner"])
+        record = repo_for(ctx, w.db).custom_checks.create(values)
+    w.db.commit()
+    return record.id
+
+
 def test_http_fetch_is_disabled_in_the_form_and_refused_when_posted(
     world: World, spy: list[str]
 ) -> None:
+    """M7-02: http_fetch is API-only in M7; the form neither offers nor accepts it."""
+    for lang in ("en", "it"):
+        assert t("web.custom_checks.kind.http_fetch_api_only", lang)
+        assert t(API_ONLY, lang)
     page = get(world, "owner", "/custom-checks/new").text
     option = re.search(r'<option value="http_fetch"[^>]*>', page)
     assert option is not None
     assert "disabled" in option.group(0)
-    assert "coming in a later release" in page
+    assert t("web.custom_checks.kind.http_fetch_api_only", "en") in page
     selectable = re.findall(r'<option value="(dns_[a-z_]+)"[^>]*>', page)
     assert selectable == ["dns_exists", "dns_matches", "dns_value_range"]
     for scope, who in (("tenant", "owner"), ("global", "root")):
@@ -509,11 +538,52 @@ def test_http_fetch_is_disabled_in_the_form_and_refused_when_posted(
             form(kind="http_fetch", check_key=f"http.{scope}"),
         )
         assert r.status_code == 422
-        assert "kind_unavailable" in r.text
-        assert t("api.custom_checks.error.kind_unavailable", "en") in r.text
+        assert t(API_ONLY, "en") in r.text
     assert count(world) == 0
-    # the dry run refuses it too, before any DNS query
+    # the dry run refuses it too, before the service and any DNS query or fetch
     assert dry(world, kind="http_fetch").status_code == 422
+    assert spy == []
+
+
+@pytest.mark.parametrize(("scope", "who"), [("tenant", "owner"), ("global", "root")])
+def test_existing_http_fetch_check_is_never_overwritten_from_the_form(
+    world: World, spy: list[str], scope: str, who: str
+) -> None:
+    row_id = http_row(world, scope)
+    before = [(r.kind, r.definition, r.name) for r in stored(world)]
+    page = get(world, who, f"/custom-checks/{row_id}/edit?scope={scope}")
+    assert page.status_code == 200
+    assert 'data-testid="custom-api-only"' in page.text
+    assert t("web.custom_checks.form.api_only", "en") in page.text
+    assert 'data-testid="custom-form"' not in page.text
+    # A save posted anyway (any kind, any definition) is refused before the service.
+    for kind in ("dns_exists", "http_fetch"):
+        r = send(
+            world,
+            who,
+            f"/custom-checks/{row_id}/edit?scope={scope}",
+            form(kind=kind, name="Renamed"),
+        )
+        assert r.status_code == 422
+        assert t(API_ONLY, "en") in r.text
+    assert [(r.kind, r.definition, r.name) for r in stored(world)] == before
+    assert spy == []
+    # Enable/disable and delete still work and keep the definition.
+    r = send(world, who, f"/custom-checks/{row_id}/toggle?scope={scope}", {"enabled": "0"})
+    assert r.status_code == 303
+    (row,) = stored(world)
+    assert row.enabled is False and row.definition == HTTP_DEFINITION
+    r = send(world, who, f"/custom-checks/{row_id}/delete?scope={scope}")
+    assert r.status_code == 303 and count(world) == 0
+
+
+def test_http_fetch_save_refusal_keeps_permission_checks_first(world: World) -> None:
+    row_id = http_row(world)
+    # analyst: no rules.manage -> 403 before anything; another tenant -> 404.
+    r = send(world, "analyst", f"/custom-checks/{row_id}/edit", form())
+    assert r.status_code == 403
+    assert get(world, "analyst", f"/custom-checks/{row_id}/edit").status_code == 403
+    assert count(world) == 1
 
 
 @pytest.mark.parametrize(

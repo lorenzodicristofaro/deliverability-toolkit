@@ -312,6 +312,15 @@ data `seeds/dnsbl.yaml` (`docs/DNSBL.md`). Registered in `load_builtin_checks`, 
 - **Permissions.** Same as every check: `check.run` on a tenant domain, `dns.tools` on the free
   route; the CLI has none.
 
+### Custom checks (`custom:<scope>:<key>`, M5-22, M7-02)
+
+Declarative checks stored per tenant or globally and run after the built-ins of an `all` domain
+run; rules, kinds and codes are in docs/CONTENT.md ("Custom checks"). DNS kinds report
+`CUSTOM_CHECK_FAILED` / `CUSTOM_CHECK_ERROR`. `http_fetch` (M7-02) fetches only through the
+guarded client: client failures are `error` (`CUSTOM_HTTP_BLOCKED`, `CUSTOM_HTTP_UNREACHABLE`,
+`CUSTOM_HTTP_TOO_LARGE`), unmet requirements are findings with the configured severity
+(`CUSTOM_HTTP_STATUS_MISMATCH`, `CUSTOM_HTTP_BODY_MISMATCH`, `CUSTOM_HTTP_HEADER_MISMATCH`).
+
 ## Surfaces
 
 All three call `app/services/checks.py` and print the same `CheckResult` JSON.

@@ -507,12 +507,12 @@ async def test_invalid_stored_definition_is_error_and_never_queries(
 @pytest.mark.parametrize(
     "definition", [EXISTS["definition"], {}, None, {"url": "http://x.example"}]
 )
-async def test_http_fetch_refused_and_never_queries(definition: object) -> None:
+async def test_invalid_http_fetch_is_error_and_never_queries(definition: object) -> None:
+    """M7-02: `http_fetch` is a real kind (tests/checks/test_custom_http.py); an invalid one is
+    `error` like any other invalid definition."""
     dns = Dns(values=("x",))
     result = await _run({"kind": "http_fetch", "definition": definition}, dns)
-    assert result.status == "error"
-    assert [f.code for f in result.findings] == ["CUSTOM_KIND_UNAVAILABLE"]
-    assert result.data["reason"] == "kind_unavailable"
+    _assert_error(result, "invalid_definition")
     assert dns.questions == []
 
 
@@ -699,7 +699,7 @@ async def test_result_ids_and_serialization() -> None:
 
 
 def test_codes_have_title_and_detail_only() -> None:
-    assert len(set(CODES)) == 3
+    assert len(set(CODES)) == len(CODES) == 8
     for lang in ("en", "it"):
         data = json.loads((Path(LOCALES_DIR) / f"{lang}.json").read_text(encoding="utf-8"))
         for code in CODES:
@@ -712,9 +712,9 @@ async def test_every_finding_renders_with_its_params(lang: str) -> None:
     cases = [
         await _run(EXISTS, Dns(ResultState.nxdomain)),
         await _run(EXISTS, Dns(ResultState.timeout)),
-        await _run({"kind": "http_fetch", "definition": {}}, Dns()),
     ]
-    assert {r.findings[0].code for r in cases} == set(CODES)
+    # The CUSTOM_HTTP_* codes render in tests/checks/test_custom_http.py.
+    assert {r.findings[0].code for r in cases} == {"CUSTOM_CHECK_FAILED", "CUSTOM_CHECK_ERROR"}
     for result in cases:
         item = result.findings[0]
         assert t(item.title_key, lang, **item.params)
