@@ -1,4 +1,4 @@
-"""M7-10 scheduled run executor: checks, history, snapshots, target status, change events.
+"""M7-10 / M7-10b scheduled run executor: checks, history, snapshots, target status, change events.
 
 Fake checks (scripted per run), a scripted resolver and a fake clock: no network, no sleeping.
 Runs on SQLite and, when TEST_DATABASE_URL is set, on PostgreSQL (shared DB fixture).
@@ -21,12 +21,30 @@ from app.core.db import create_db_engine, create_session_factory
 from app.core.tenancy import TenantContext
 from app.dns.types import DnsQuestion, DnsRecord, DnsResult, ResultState
 from app.models import CheckRun, DnsSnapshot, Tenant
+from app.models.check_run import MAX_FINDINGS
 from app.repositories import repo_for
+from app.repositories.dns_snapshots import DnsSnapshotRecord
 from app.repositories.monitor_targets import DueTarget
-from app.services import monitor_run
+from app.services import domain_registry, monitor_run
 from app.services.change_detect import ChangeEvent
-from app.services.dns_diff import build_entry, normalise_txt
-from app.services.monitor_run import MonitorRunExecutor, RunOutcome, log_events, summary_status
+from app.services.checks import default_registry
+from app.services.dns_diff import (
+    Snapshot,
+    SnapshotFormatError,
+    build_entry,
+    build_snapshot,
+    carry_forward,
+    normalise_txt,
+    to_stored,
+)
+from app.services.dns_snapshot import load_snapshot
+from app.services.monitor_run import (
+    HISTORY_LIMIT,
+    MonitorRunExecutor,
+    RunOutcome,
+    log_events,
+    summary_status,
+)
 from app.services.scheduler import ScheduledRun
 
 NOW = datetime(2026, 11, 17, 12, 0, tzinfo=UTC)
@@ -297,17 +315,37 @@ async def test_listing_appears_and_disappears(world: World) -> None:
     assert kinds(cleared) == [("listing_cleared", "zen")]
 
 
+async def test_unreadable_list_history_still_stores_the_run(
+    world: World, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    due = world.target()
+    await world.run(due)
+
+    def broken(*_: Any, **__: Any) -> Any:
+        raise RuntimeError("history secret detail")
+
+    monkeypatch.setattr(monitor_run, "_runs_newest_first", broken)
+    world.checks["dnsbl"].set(listed("zen"), data={"lists": lists(zen="listed", sbl="not_listed")})
+    with caplog.at_level(logging.ERROR, logger="app.monitor_run"):
+        out = await world.run(due)
+    assert kinds(out) == [] and len(world.rows()) == 4  # no listing judged, the run is stored
+    assert any(
+        getattr(r, "event", "") == "monitor_run.lists_baseline_failed" for r in caplog.records
+    )
+    assert "history secret detail" not in caplog.text
+
+
 async def test_error_in_the_middle_gives_only_error_events(world: World) -> None:
     due = world.target()
     bl = world.checks["dnsbl"]
     bl.set(listed("zen"), data={"lists": lists(zen="listed", sbl="not_listed")})
     await world.run(due)
-    # One list errors: the whole run is error; its other findings must not become events.
+    # One list errors: the whole run is error; the list still listed is no new event.
     bl.set(
         finding("DNSBL_LIST_ERROR", "medium", {"list_id": "sbl"}),
-        listed("spamhaus"),
+        listed("zen"),
         evaluated=False,
-        data={"lists": lists(zen="not_listed", sbl="error")},
+        data={"lists": lists(zen="listed", sbl="error")},
     )
     world.zone(spf=ResultState.servfail)
     errored = await world.run(due)
@@ -315,13 +353,125 @@ async def test_error_in_the_middle_gives_only_error_events(world: World) -> None
     assert [r.status for r in world.rows()][-2:] == ["error", "ok"]  # dnsbl error, spf ok
     still = await world.run(due)
     assert kinds(still) == []
-    # Back: compared with the last non-error run (zen listed): nothing new, nothing cleared.
+    # Back: each list against its last evaluated outcome (zen listed): nothing new or cleared.
     bl.set(listed("zen"), data={"lists": lists(zen="listed", sbl="not_listed")})
     world.zone(spf=SPF_Y)  # changed while it could not be read: still seen as a change
     back = await world.run(due)
     assert kinds(back) == [("check_error_cleared", "dnsbl"), ("record_changed", "@ TXT")]
     assert back is not None
     assert (back.events[1].before, back.events[1].after) == (txt_hash(SPF_X), txt_hash(SPF_Y))
+
+
+def list_error(list_id: str) -> Finding:
+    return finding("DNSBL_LIST_ERROR", "medium", {"list_id": list_id, "list": list_id.upper()})
+
+
+async def test_a_list_failing_for_good_does_not_block_another_lists_events(world: World) -> None:
+    due = world.target()
+    bl = world.checks["dnsbl"]
+
+    def step(zen: str) -> None:
+        found = [listed("zen")] if zen == "listed" else []
+        bl.set(
+            *found,
+            list_error("sbl"),
+            evaluated=False,
+            data={"lists": lists(zen=zen, sbl="error")},
+        )
+
+    step("not_listed")
+    assert kinds(await world.run(due)) == []  # first run: the baseline
+    step("listed")
+    assert kinds(await world.run(due)) == [("new_listing", "zen")]
+    assert kinds(await world.run(due)) == []
+    step("not_listed")
+    assert kinds(await world.run(due)) == [("listing_cleared", "zen")]
+    # the overall status is unchanged: every run is `error` because `sbl` is
+    assert [r.status for r in world.rows() if r.check_id == "dnsbl"] == ["error"] * 4
+
+
+async def test_a_list_in_error_then_recovered_is_judged_on_its_own_last_outcome(
+    world: World,
+) -> None:
+    due = world.target()
+    bl = world.checks["dnsbl"]
+    bl.set(listed("zen"), data={"lists": lists(zen="listed", sbl="not_listed")})
+    await world.run(due)
+    bl.set(list_error("zen"), evaluated=False, data={"lists": lists(zen="error", sbl="not_listed")})
+    # zen in error: never a false "cleared", only the check's error event
+    assert kinds(await world.run(due)) == [("check_error_started", "dnsbl")]
+    assert kinds(await world.run(due)) == []
+    bl.set(data={"lists": lists(zen="not_listed", sbl="not_listed")})
+    assert kinds(await world.run(due)) == [
+        ("check_error_cleared", "dnsbl"),
+        ("listing_cleared", "zen"),
+    ]
+
+
+async def test_new_listing_is_reported_against_truncated_baseline_findings(world: World) -> None:
+    """M7-10b (c): truncated stored findings do not suppress `new_listing`. A list whose finding
+    was cut from the stored baseline reads as not listed there, so it is reported again with the
+    same fingerprint (M7-14 dedups it)."""
+    due = world.target()
+    bl = world.checks["dnsbl"]
+    many = [f"l{i:03d}" for i in range(MAX_FINDINGS + 1)]
+    bl.set(*map(listed, many), data={"lists": lists(**dict.fromkeys(many, "listed"))})
+    await world.run(due)
+    stored = next(r for r in world.rows() if r.check_id == "dnsbl")
+    assert stored.findings_truncated and len(stored.findings) == MAX_FINDINGS
+    outcomes = {**dict.fromkeys(many, "listed"), "zen": "listed"}
+    bl.set(*map(listed, [*many, "zen"]), data={"lists": lists(**outcomes)})
+    out = await world.run(due)
+    assert kinds(out) == [("new_listing", many[-1]), ("new_listing", "zen")]
+
+
+async def test_baselines_survive_more_error_runs_than_the_page(world: World) -> None:
+    """M7-10b (a): more than `HISTORY_LIMIT` error runs (and error snapshots) between the
+    baseline and the recovery: listings, regressions and record changes are still seen."""
+    due = world.target()
+    await world.run(due)  # baseline: zen clean, spf ok, SPF_X
+    world.checks["dnsbl"].set(evaluated=False)  # whole-check error: no per-list detail
+    world.checks["spf"].set(evaluated=False)
+    world.zone(spf=ResultState.servfail)
+    await world.run(due)
+    with world.factory.begin() as s:
+        repos = repo_for(world.ctx("a"), s)
+        error_snap = repos.dns_snapshots.latest(world.domains["a"])
+        assert error_snap is not None
+        start = world.clock.at - timedelta(minutes=30)
+        for i in range(HISTORY_LIMIT + 10):
+            at = start + timedelta(seconds=i)
+            for check_id in ("dnsbl", "spf"):
+                rec = repos.check_runs.record(
+                    world.domains["a"],
+                    check_id=check_id,
+                    status="error",
+                    started_at=at,
+                    duration_ms=0,
+                    source="scheduled",
+                    findings=[{"code": "CHECK_INTERNAL_ERROR", "params": {"reason": "timeout"}}],
+                )
+                assert rec is not None
+            snap = repos.dns_snapshots.record(
+                world.domains["a"],
+                taken_at=at,
+                content_hash=error_snap.content_hash,
+                entries=[dict(e) for e in error_snap.entries],
+            )
+            assert snap is not None
+    world.checks["dnsbl"].set(listed("zen"), data={"lists": lists(zen="listed", sbl="not_listed")})
+    world.checks["spf"].set(finding("SPF_TOO_MANY_LOOKUPS", "high", {"count": 11}))
+    world.zone(spf=SPF_Y)
+    out = await world.run(due)
+    assert kinds(out) == [
+        ("check_error_cleared", "dnsbl"),
+        ("new_listing", "zen"),
+        ("check_error_cleared", "spf"),
+        ("policy_regression", "spf"),
+        ("record_changed", "@ TXT"),
+    ]
+    assert out is not None
+    assert (out.events[-1].before, out.events[-1].after) == (txt_hash(SPF_X), txt_hash(SPF_Y))
 
 
 async def test_error_is_stored_as_error_and_never_ok(world: World) -> None:
@@ -372,6 +522,63 @@ async def test_id_missing_from_the_registry_is_error_too(world: World) -> None:
     del world.checks["dmarc"]
     await world.run(due)  # not in unknown_check_ids, but the registry lacks it
     assert {r.check_id: r.status for r in world.rows()} == {"dmarc": "error", "spf": "ok"}
+
+
+async def test_runner_failure_records_every_check_as_error(
+    world: World, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def broken(*_: Any, **__: Any) -> Any:
+        raise RuntimeError("runner secret detail")
+
+    due = world.target(checks=("dmarc", "dnsbl", "spf"))
+    await world.run(due)
+    monkeypatch.setattr(monitor_run, "run_checks", broken)
+    with caplog.at_level(logging.ERROR, logger="app.monitor_run"):
+        out = await world.run(due, unknown=("dmarc",))
+    assert out is not None and out.status == "error" and out.recorded == 3
+    latest = {r.check_id: r for r in world.rows()[-3:]}
+    assert {k: (r.status, [dict(f.params) for f in r.findings]) for k, r in latest.items()} == {
+        "dmarc": ("error", [{"reason": "unknown_check"}]),
+        "dnsbl": ("error", [{"reason": "runner_failed"}]),
+        "spf": ("error", [{"reason": "runner_failed"}]),
+    }
+    # error events only: no listing, no "cleared", no regression; the snapshot still ran
+    assert kinds(out) == [
+        ("check_error_started", "dmarc"),
+        ("check_error_started", "dnsbl"),
+        ("check_error_started", "spf"),
+    ]
+    assert out.snapshot == "unchanged"
+    assert any(getattr(r, "event", "") == "monitor_run.checks_failed" for r in caplog.records)
+    assert "runner secret detail" not in caplog.text
+
+
+async def test_prepare_registry_records_error_when_the_enablement_is_unreadable(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def broken(db: Session) -> frozenset[str]:
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(domain_registry, "enabled_list_ids", broken)
+    ctx = world.ctx("a")
+    with world.factory() as s:
+        registry = monitor_run.prepare_registry(ctx, s, ["dnsbl", "spf"])
+        # the API mode lets the failure through unchanged (its typed error response)
+        with pytest.raises(RuntimeError):
+            domain_registry.prepare_domain_registry(ctx, s, ["dnsbl"], strict=True)
+    check_ctx = CheckContext(resolver=world.resolver, clock=world.clock.now)
+    result = await registry.get("dnsbl").run(check_ctx, Target(domain=world.names["a"]))
+    assert result.status == "error"
+    assert [f.code for f in result.findings] == ["DNSBL_ENABLEMENT_UNAVAILABLE"]
+
+
+def test_prepare_registry_without_dkim_or_dnsbl_is_the_default(world: World) -> None:
+    with world.factory() as s:
+        assert (
+            domain_registry.prepare_domain_registry(world.ctx("a"), s, ["spf"], strict=True) is None
+        )
+        registry = monitor_run.prepare_registry(world.ctx("a"), s, ["spf"])
+    assert registry.all_ids() == default_registry().all_ids()
 
 
 async def test_snapshot_failure_is_isolated(
@@ -516,3 +723,81 @@ async def test_runs_of_two_targets_concurrently(world: World) -> None:
     )
     assert all(o is not None for o in outs)
     assert len(world.rows("a")) == 2 and len(world.rows("b")) == 2
+
+
+# --- snapshot baseline (M7-10b: lazy, equal to folding the whole history) ------------------------
+
+S_X, S_Y = ("ok", ["v=spf1 -all"]), ("ok", ["v=spf1 ~all"])
+S_ERR, S_NX = ("error", []), ("nxdomain", [])
+
+
+def stored_snap(i: int, **entries: Any) -> DnsSnapshotRecord:
+    """A stored snapshot record; key `apex` is `@`; `bad=True` makes it malformed."""
+    if entries.pop("bad", False):
+        return DnsSnapshotRecord(i, 1, NOW, "0" * 64, ({"junk": 1},), False)
+    snap = build_snapshot(
+        build_entry("@" if k == "apex" else k, "TXT", state, values)
+        for k, (state, values) in entries.items()
+    )
+    rows, truncated = to_stored(snap)
+    return DnsSnapshotRecord(i, 1, NOW, snap.content_hash, tuple(rows), truncated)
+
+
+def folded(newest_first: list[DnsSnapshotRecord]) -> Snapshot | None:
+    """The M7-10 definition: fold oldest to newest with carry_forward."""
+    base: Snapshot | None = None
+    for record in reversed(newest_first):
+        try:
+            snap = load_snapshot(record)
+        except SnapshotFormatError:
+            continue
+        base = snap if base is None else carry_forward(base, snap)
+    return base
+
+
+SNAPSHOT_HISTORIES: list[list[dict[str, Any]]] = [
+    [],
+    [{"bad": True}],
+    [{"apex": S_X}],
+    [{"apex": S_ERR}],
+    [{"apex": S_ERR}, {"apex": S_X}],
+    [{"apex": S_ERR}, {"apex": S_ERR}, {"apex": S_ERR}, {"apex": S_Y}, {"apex": S_X}],
+    [{"apex": S_ERR}, {"bad": True}, {"apex": S_NX}],
+    # the entry was not monitored in between: the chain ends there, it stays error
+    [{"apex": S_ERR}, {"_dmarc": S_X}, {"apex": S_X}],
+    [{"apex": S_ERR, "_dmarc": S_ERR}, {"apex": S_ERR, "_dmarc": S_Y}, {"apex": S_X}],
+    [{"apex": S_X, "_dmarc": S_ERR}, {"apex": S_ERR, "_dmarc": S_ERR}, {"_dmarc": S_NX}],
+    [{"bad": True}, {"apex": S_ERR}, {"apex": S_X}],
+]
+
+
+@pytest.mark.parametrize("history", SNAPSHOT_HISTORIES, ids=repr)
+def test_snapshot_baseline_equals_the_fold_of_the_whole_history(
+    history: list[dict[str, Any]],
+) -> None:
+    records = [stored_snap(i, **dict(h)) for i, h in enumerate(history)]
+    got, want = monitor_run.snapshot_baseline(records), folded(records)
+    if want is None:
+        assert got is None
+        return
+    assert got is not None
+    assert [(e.name, e.rdtype, e.state, e.entry_hash) for e in got.entries] == [
+        (e.name, e.rdtype, e.state, e.entry_hash) for e in want.entries
+    ]
+    assert got.content_hash == want.content_hash
+
+
+def test_snapshot_baseline_reads_no_further_than_needed() -> None:
+    consumed: list[int] = []
+
+    def records(errors: int) -> Iterator[DnsSnapshotRecord]:
+        for i in range(1000):
+            consumed.append(i)
+            yield stored_snap(i, apex=S_ERR if i < errors else S_X)
+
+    got = monitor_run.snapshot_baseline(records(70))
+    assert got is not None and got.entries[0].state == "ok"
+    assert consumed == list(range(71))  # 70 error snapshots, then the one resolving the entry
+    consumed.clear()
+    monitor_run.snapshot_baseline(records(0))
+    assert consumed == [0]  # nothing in error: the newest snapshot is the baseline

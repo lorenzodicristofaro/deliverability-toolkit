@@ -54,7 +54,6 @@ from app.api.v1._common import Body, _error, _parse, _Strict
 from app.api.v1.dns_tools import Backend
 from app.api.v1.domain_esps import esp_profiles
 from app.api.v1.domains import _domain_id
-from app.checks.dkim import DkimCheck
 from app.checks.dnsbl import DnsblCheck
 from app.checks.models import CheckContext, CheckResult
 from app.checks.registry import CheckRegistry
@@ -75,6 +74,7 @@ from app.services.custom_checks_admin import run_checks_for
 from app.services.dkim_probe_selectors import registry_for, resolve_probe_selectors
 from app.services.dnsbl_admin import enabled_list_ids
 from app.services.domain_esps import ESP_CHECK_ID, ProfileSource, resolve_esp_run
+from app.services.domain_registry import prepare_domain_registry
 from app.services.domains import DomainService, DomainServiceError, DomainView
 from app.web.deps import CurrentSession, DbDep, tenant_ctx
 
@@ -199,11 +199,7 @@ def _prepare(
     """The registry of a domain run (None: no DKIM, no DNSBL and no ESP, the default one); ends
     the transaction."""
     try:
-        registry = None
-        if DkimCheck.id in ids:
-            registry = registry_for(resolve_probe_selectors(access.ctx, db))
-        if DnsblCheck.id in ids:
-            registry = with_dnsbl_enabled(registry or default_registry(), enabled_list_ids(db))
+        registry = prepare_domain_registry(access.ctx, db, ids, strict=True)
         if ESP_CHECK_ID in ids:
             esp = resolve_esp_run(access.ctx, db, access.view.id, profiles)
             registry = (registry or default_registry()).with_checks([esp.check])

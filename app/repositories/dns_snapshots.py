@@ -87,6 +87,18 @@ class DnsSnapshotRecord:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class SnapshotCursor:
+    """A position in the newest-first order: `list_for_domain(before=...)` lists what follows."""
+
+    taken_at: datetime
+    id: int
+
+    @classmethod
+    def after(cls, record: DnsSnapshotRecord) -> SnapshotCursor:
+        return cls(record.taken_at, record.id)
+
+
 def _content_hash(value: object) -> str:
     if not isinstance(value, str) or not HASH_RE.fullmatch(value):
         raise DnsSnapshotInvalid("content_hash", "malformed")
@@ -181,16 +193,32 @@ class DnsSnapshotRepository:
         return None if row is None else DnsSnapshotRecord.from_model(row)
 
     def list_for_domain(
-        self, domain_id: object, *, limit: int = DEFAULT_LIMIT
+        self,
+        domain_id: object,
+        *,
+        limit: int = DEFAULT_LIMIT,
+        before: SnapshotCursor | None = None,
     ) -> list[DnsSnapshotRecord]:
         """Newest-first snapshots of the domain, at most `limit`; empty for a missing, foreign or
-        malformed domain."""
+        malformed domain. `before` (keyset, M7-10b): only snapshots older than that position in
+        the (taken_at DESC, id DESC) order, e.g. `SnapshotCursor.after(last_record)`."""
         size = _limit(limit)
+        criteria: list[ColumnElement[bool]] = []
+        if before is not None:
+            if not isinstance(before, SnapshotCursor) or type(before.id) is not int:
+                raise DnsSnapshotInvalid("before", "malformed")
+            at = _aware(before.taken_at, "before")
+            criteria.append(
+                or_(
+                    DnsSnapshot.taken_at < at,
+                    and_(DnsSnapshot.taken_at == at, DnsSnapshot.id < before.id),
+                )
+            )
         did = coerce_id(domain_id)
         if did is None:
             return []
         stmt = (
-            self._select(DnsSnapshot.domain_id == did)
+            self._select(DnsSnapshot.domain_id == did, *criteria)
             .order_by(DnsSnapshot.taken_at.desc(), DnsSnapshot.id.desc())
             .limit(size)
         )

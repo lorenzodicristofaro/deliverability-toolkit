@@ -510,6 +510,71 @@ def test_latest_per_check_with_no_runs(world: World) -> None:
     assert world.repo().latest_per_check(world.domains["a1"]) == []
 
 
+# --- latest non-error run (M7-10b) ----------------------------------------------------------------
+
+
+def test_latest_non_error_survives_any_number_of_error_runs(world: World) -> None:
+    world.record(check_id="dnsbl", at=_hours(0), status="ok")
+    baseline = world.record(check_id="dnsbl", at=_hours(1), status="fail")
+    for h in range(2, 2 + MAX_LIMIT + 5):  # more error runs than any page could hold
+        world.record(check_id="dnsbl", at=_hours(h), status="error")
+    world.record(check_id="spf", at=_hours(5000), status="ok")  # another check
+    world.record("a2", check_id="dnsbl", at=_hours(5000), status="ok")  # another domain
+    assert world.repo().latest_non_error(world.domains["a1"], "dnsbl") == baseline
+
+
+@pytest.mark.parametrize(
+    ("statuses", "expected"),
+    [
+        ([], None),
+        (["error"], None),
+        (["error", "error"], None),
+        (["ok"], 0),
+        (["info", "error"], 0),
+        (["warn", "fail", "error"], 1),
+        (["error", "ok", "error"], 1),
+        (["ok", "error", "warn"], 2),
+    ],
+)
+def test_latest_non_error_table(world: World, statuses: list[str], expected: int | None) -> None:
+    runs = [world.record(check_id="spf", at=_hours(h), status=s) for h, s in enumerate(statuses)]
+    got = world.repo().latest_non_error(world.domains["a1"], "spf")
+    assert got == (None if expected is None else runs[expected])
+
+
+def test_latest_non_error_breaks_ties_by_id(world: World) -> None:
+    world.record(at=T0, status="fail")
+    second = world.record(at=T0, status="ok")
+    world.record(at=T0, status="error")
+    assert world.repo().latest_non_error(world.domains["a1"], "spf") == second
+
+
+@pytest.mark.parametrize("value", MALFORMED_IDS, ids=repr)
+def test_latest_non_error_malformed_domain_is_a_miss(world: World, value: object) -> None:
+    world.record()
+    assert world.repo().latest_non_error(value, "spf") is None
+
+
+def test_latest_non_error_unknown_domain_is_a_miss(world: World) -> None:
+    assert world.repo().latest_non_error(999_999, "spf") is None
+
+
+@pytest.mark.parametrize("check_id", [None, "", "SPF", "a b", 3, "x" * (MAX_CHECK_ID_LENGTH + 1)])
+def test_latest_non_error_rejects_a_malformed_check_id(world: World, check_id: object) -> None:
+    with pytest.raises(CheckRunInvalid):
+        world.repo().latest_non_error(world.domains["a1"], check_id)
+
+
+def test_latest_non_error_never_crosses_tenants(world: World) -> None:
+    a_run = world.record("a1", "a", check_id="dnsbl", at=_hours(1), status="ok")
+    b_run = world.record("b1", "b", check_id="dnsbl", at=_hours(2), status="fail")
+    world.record("a1", "a", check_id="dnsbl", at=_hours(3), status="error")
+    assert world.repo("a").latest_non_error(world.domains["b1"], "dnsbl") is None
+    assert world.repo("b").latest_non_error(world.domains["a1"], "dnsbl") is None
+    assert world.repo("a").latest_non_error(world.domains["a1"], "dnsbl") == a_run
+    assert world.repo("b").latest_non_error(world.domains["b1"], "dnsbl") == b_run
+
+
 # --- cross-tenant isolation ----------------------------------------------------------------------
 
 
