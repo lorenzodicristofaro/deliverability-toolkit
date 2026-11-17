@@ -181,6 +181,9 @@ BAD = [
     ("entries", "entries", [{"x": float("nan")}]),
     ("entries", "entries", [{"x": object()}]),
     ("entries", "entries", [{"x": "a\x00b"}]),
+    ("entries", "entries", [{"a\x00": "b"}]),  # NUL in a key
+    ("entries", "entries", [{"values": [{"v": "\x00"}]}]),  # nested
+    ("entries", "entries", [{"x": ["ok", ("\\u0000", "\x00")]}]),
     ("entries", "entries", [{"x": 1}] * (MAX_ENTRIES + 1)),
     ("entries", "entries", [{"x": "y" * (MAX_ENTRIES_BYTES + 1)}]),
     ("entries", "entries", [{"x": "中" * (MAX_ENTRIES_BYTES // 6 + 1)}]),
@@ -241,8 +244,19 @@ def test_max_entries_and_longest_name_round_trip(world: World) -> None:
     assert got.entries[-1]["name"] == sorted(e.name for e in entries)[-1]
 
 
-def test_hostile_text_round_trips_as_stored(world: World) -> None:
-    value = "‮é中\U0001f600 ' \" \\ ; DROP TABLE dns_snapshots;--"
+@pytest.mark.parametrize(
+    "value",
+    [
+        "‮é中\U0001f600 ' \" \\ ; DROP TABLE dns_snapshots;--",
+        "\\u0000",  # six literal characters, not a NUL: ordinary content
+        "v=spf1 \\u0000 -all",
+        "\\\\u0000",
+        "\\x00 \\0",
+    ],
+    ids=["mixed", "literal-u0000", "literal-u0000-in-spf", "escaped-backslash", "other-escapes"],
+)
+def test_hostile_text_round_trips_as_stored(world: World, value: str) -> None:
+    assert "\x00" not in value
     entries = [{**ENTRIES[0], "values": [{"h": "a" * 64, "v": value}]}]
     rec = world.repo().record(world.domains["a1"], **{**GOOD, "entries": entries})
     assert rec is not None

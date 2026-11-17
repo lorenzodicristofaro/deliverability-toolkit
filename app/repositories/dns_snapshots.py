@@ -107,9 +107,29 @@ def _entries(value: object) -> list[dict[str, Any]]:
     # The size as stored (ASCII-escaped JSON text), not the size of the Python objects.
     if len(text) > MAX_ENTRIES_BYTES:
         raise DnsSnapshotInvalid("entries", "too_large")
-    if "\\u0000" in text:
+    if _has_nul(value):
         raise DnsSnapshotInvalid("entries", "nul")
     return value
+
+
+def _has_nul(value: object) -> bool:
+    """A real NUL character in any string (key or value) of the JSON-serialisable `value`.
+
+    Checked on the Python values, not on the JSON text: the six characters `\\u0000` in a TXT
+    record are ordinary content (stored as `\\\\u0000`) and must be accepted. Iterative, so deep
+    nesting cannot exhaust the stack (json.dumps already accepted the structure)."""
+    stack: list[object] = [value]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, str):
+            if "\x00" in item:
+                return True
+        elif isinstance(item, dict):
+            stack.extend(item.keys())
+            stack.extend(item.values())
+        elif isinstance(item, list | tuple):
+            stack.extend(item)
+    return False
 
 
 def _limit(limit: object) -> int:
