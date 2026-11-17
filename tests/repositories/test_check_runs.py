@@ -1,4 +1,5 @@
-"""M7-07 check run history: the tenant repository (record, get, list, latest, isolation).
+"""M7-07 check run history: the tenant repository (record, get, list, latest, isolation), and
+the M7-12b trend aggregation.
 
 Runs on SQLite and, when TEST_DATABASE_URL is set, on PostgreSQL (shared DB fixture). The schema
 is built by Alembic. No network.
@@ -36,6 +37,8 @@ from app.repositories.check_runs import (
     CheckRunRecord,
     CheckRunRepository,
     RunCursor,
+    RunTrend,
+    bucket_floor,
     normalize_findings,
 )
 
@@ -655,3 +658,257 @@ def test_tenant_delete_cascades_to_runs(world: World) -> None:
     world.session.commit()
     assert world.count() == 1
     assert world.repo("b").get(other.id) == other
+
+
+# --- trend aggregation (M7-12b) ------------------------------------------------------------------
+
+HOUR, DAY = timedelta(hours=1), timedelta(days=1)
+
+
+def _trend(w: World, domain: str = "a1", tenant: str = "a", **kw: Any) -> RunTrend:
+    kw.setdefault("since", T0 - DAY)
+    kw.setdefault("until", T0 + DAY)
+    kw.setdefault("size", HOUR)
+    kw.setdefault("max_runs", 1000)
+    return w.repo(tenant).trend(w.domains[domain], **kw)
+
+
+def _shape(t: RunTrend) -> list[tuple[str, int, dict[str, int], dict[str, tuple[str, int]]]]:
+    return [
+        (
+            b.start.isoformat(),
+            b.runs,
+            {s: n for s, n in b.counts.items() if n},
+            {c: (v.status, v.runs) for c, v in b.checks.items()},
+        )
+        for b in t.buckets
+    ]
+
+
+@pytest.mark.parametrize(
+    ("value", "size", "expected"),
+    [
+        (datetime(2026, 11, 17, 10, 0, tzinfo=UTC), HOUR, datetime(2026, 11, 17, 10, tzinfo=UTC)),
+        (
+            datetime(2026, 11, 17, 10, 59, 59, 999999, tzinfo=UTC),
+            HOUR,
+            datetime(2026, 11, 17, 10, tzinfo=UTC),
+        ),
+        (datetime(2026, 11, 17, 23, 59, 59, tzinfo=UTC), DAY, datetime(2026, 11, 17, tzinfo=UTC)),
+        (
+            datetime(2026, 11, 17, 1, 30, tzinfo=timezone(timedelta(hours=2))),
+            DAY,
+            datetime(2026, 11, 16, tzinfo=UTC),
+        ),
+        (datetime(1970, 1, 1, tzinfo=UTC), DAY, datetime(1970, 1, 1, tzinfo=UTC)),
+        # Before the epoch: floor, not truncation towards zero.
+        (datetime(1969, 12, 31, 23, 30, tzinfo=UTC), HOUR, datetime(1969, 12, 31, 23, tzinfo=UTC)),
+        (datetime(1969, 12, 25, 0, 0, 1, tzinfo=UTC), DAY, datetime(1969, 12, 25, tzinfo=UTC)),
+        (datetime(8999, 12, 31, 23, 59, tzinfo=UTC), DAY, datetime(8999, 12, 31, tzinfo=UTC)),
+    ],
+)
+def test_bucket_floor_is_utc_and_floors(
+    value: datetime, size: timedelta, expected: datetime
+) -> None:
+    got = bucket_floor(value, size)
+    assert got == expected and got.utcoffset() == timedelta(0)
+
+
+@pytest.mark.parametrize(
+    ("runs", "size", "expected"),
+    [
+        pytest.param([], HOUR, [], id="empty"),
+        pytest.param(
+            [(T0 - timedelta(microseconds=1), "spf", "fail"), (T0, "spf", "ok")],
+            HOUR,
+            [
+                ("2026-11-17T12:00:00+00:00", 1, {"ok": 1}, {"spf": ("ok", 1)}),
+                ("2026-11-17T11:00:00+00:00", 1, {"fail": 1}, {"spf": ("fail", 1)}),
+            ],
+            id="hour-edge",
+        ),
+        pytest.param(
+            [
+                (datetime(2026, 11, 17, tzinfo=UTC), "spf", "ok"),
+                (datetime(2026, 11, 16, 23, 59, 59, tzinfo=UTC), "spf", "warn"),
+                (datetime(2026, 11, 17, 23, 59, 59, tzinfo=UTC), "dmarc", "fail"),
+            ],
+            DAY,
+            [
+                (
+                    "2026-11-17T00:00:00+00:00",
+                    2,
+                    {"ok": 1, "fail": 1},
+                    {"dmarc": ("fail", 1), "spf": ("ok", 1)},
+                ),
+                ("2026-11-16T00:00:00+00:00", 1, {"warn": 1}, {"spf": ("warn", 1)}),
+            ],
+            id="day-edge",
+        ),
+        pytest.param(
+            [
+                (T0, "spf", "ok"),
+                (T0 + timedelta(minutes=5), "spf", "error"),
+                (T0 + timedelta(minutes=1), "spf", "warn"),
+            ],
+            HOUR,
+            [
+                (
+                    "2026-11-17T12:00:00+00:00",
+                    3,
+                    {"ok": 1, "warn": 1, "error": 1},
+                    {"spf": ("error", 3)},
+                )
+            ],
+            id="latest-by-time",
+        ),
+        pytest.param(
+            # Same instant: the higher id (recorded later) is the latest, as in list_for_domain.
+            [(T0, "spf", "ok"), (T0, "spf", "fail"), (T0, "dkim", "warn"), (T0, "dkim", "info")],
+            HOUR,
+            [
+                (
+                    "2026-11-17T12:00:00+00:00",
+                    4,
+                    {"ok": 1, "fail": 1, "warn": 1, "info": 1},
+                    {"dkim": ("info", 2), "spf": ("fail", 2)},
+                )
+            ],
+            id="ties-by-id",
+        ),
+    ],
+)
+def test_trend_buckets(
+    world: World,
+    runs: list[tuple[datetime, str, str]],
+    size: timedelta,
+    expected: list[Any],
+) -> None:
+    for at, check, status in runs:
+        world.record(at=at, check_id=check, status=status)
+    out = _trend(world, size=size)
+    assert out.truncated is False
+    assert out.complete_from == bucket_floor(T0 - DAY, size)
+    assert _shape(out) == expected
+    for b in out.buckets:
+        assert list(b.counts) == list(STATUSES)
+
+
+def test_trend_window_is_half_open_and_filters_check(world: World) -> None:
+    world.record(at=T0 - HOUR - timedelta(microseconds=1))
+    world.record(at=T0 - HOUR, status="warn")
+    world.record(at=T0, status="fail")
+    world.record(at=T0 - HOUR, check_id="dmarc")
+    out = _trend(world, since=T0 - HOUR, until=T0)
+    assert _shape(out) == [
+        (
+            "2026-11-17T11:00:00+00:00",
+            2,
+            {"ok": 1, "warn": 1},
+            {"dmarc": ("ok", 1), "spf": ("warn", 1)},
+        )
+    ]
+    only = _trend(world, since=T0 - HOUR, until=T0, check_id="dmarc")
+    assert _shape(only) == [("2026-11-17T11:00:00+00:00", 1, {"ok": 1}, {"dmarc": ("ok", 1)})]
+
+
+def test_trend_before_the_epoch(world: World) -> None:
+    at = datetime(1969, 12, 31, 23, 30, tzinfo=UTC)
+    world.record(at=at)
+    world.record(at=datetime(1970, 1, 1, 0, 30, tzinfo=UTC), status="fail")
+    out = _trend(world, since=at - DAY, until=at + DAY, size=HOUR)
+    assert [b.start.isoformat() for b in out.buckets] == [
+        "1970-01-01T00:00:00+00:00",
+        "1969-12-31T23:00:00+00:00",
+    ]
+    assert out.complete_from == datetime(1969, 12, 30, 23, tzinfo=UTC)
+
+
+@pytest.mark.parametrize(
+    ("max_runs", "truncated", "complete_from", "starts"),
+    [
+        (6, False, datetime(2026, 11, 14, tzinfo=UTC), ["17", "16", "15"]),
+        (7, False, datetime(2026, 11, 14, tzinfo=UTC), ["17", "16", "15"]),
+        (5, True, datetime(2026, 11, 16, tzinfo=UTC), ["17", "16"]),  # one run of the 15th read
+        (4, True, datetime(2026, 11, 17, tzinfo=UTC), ["17"]),  # the 16th read whole, still dropped
+        (3, True, datetime(2026, 11, 17, tzinfo=UTC), ["17"]),
+        (2, True, datetime(2026, 11, 18, tzinfo=UTC), []),
+        (1, True, datetime(2026, 11, 18, tzinfo=UTC), []),
+    ],
+)
+def test_trend_run_cap_drops_the_oldest_bucket_read(
+    world: World, max_runs: int, truncated: bool, complete_from: datetime, starts: list[str]
+) -> None:
+    for day in (15, 16, 17):
+        for minute in (0, 1):
+            world.record(at=datetime(2026, 11, day, 10, minute, tzinfo=UTC))
+    out = _trend(
+        world,
+        since=datetime(2026, 11, 14, tzinfo=UTC),
+        until=datetime(2026, 11, 18, tzinfo=UTC),
+        size=DAY,
+        max_runs=max_runs,
+    )
+    assert out.truncated is truncated
+    assert out.complete_from == complete_from
+    assert [b.start.strftime("%d") for b in out.buckets] == starts
+    assert all(b.runs == 2 for b in out.buckets)
+
+
+def test_trend_never_reads_other_tenants_or_domains(world: World) -> None:
+    world.record("a1", status="ok")
+    world.record("a2", status="fail")
+    world.record("b1", "b", status="warn")
+    assert _shape(_trend(world, "a1")) == [
+        ("2026-11-17T12:00:00+00:00", 1, {"ok": 1}, {"spf": ("ok", 1)})
+    ]
+    assert _shape(_trend(world, "a2")) == [
+        ("2026-11-17T12:00:00+00:00", 1, {"fail": 1}, {"spf": ("fail", 1)})
+    ]
+    # Tenant B on tenant A's domain and tenant A on tenant B's domain: nothing.
+    assert _trend(world, "a1", "b").buckets == ()
+    assert _trend(world, "b1", "a").buckets == ()
+
+
+@pytest.mark.parametrize("raw", MALFORMED_IDS)
+def test_trend_malformed_domain_is_empty(world: World, raw: object) -> None:
+    world.record()
+    out = world.repo().trend(raw, since=T0 - DAY, until=T0 + DAY, size=HOUR, max_runs=10)
+    assert out.buckets == () and out.truncated is False
+
+
+@pytest.mark.parametrize(
+    ("kw", "field"),
+    [
+        ({"since": T0.replace(tzinfo=None)}, "since"),
+        ({"until": "2026-11-17"}, "until"),
+        ({"since": None}, "since"),
+        ({"size": 3600}, "size"),
+        ({"size": timedelta(0)}, "size"),
+        ({"size": -HOUR}, "size"),
+        ({"max_runs": 0}, "max_runs"),
+        ({"max_runs": True}, "max_runs"),
+        ({"max_runs": 10**9}, "max_runs"),
+        ({"max_runs": 1.0}, "max_runs"),
+        ({"check_id": "Bad Id"}, "check_id"),
+        ({"check_id": "x" * (MAX_CHECK_ID_LENGTH + 1)}, "check_id"),
+    ],
+)
+def test_trend_rejects_bad_values(world: World, kw: dict[str, Any], field: str) -> None:
+    with pytest.raises(CheckRunInvalid) as exc:
+        _trend(world, **kw)
+    assert exc.value.field == field
+
+
+def test_trend_ignores_the_postgres_session_time_zone(world: World) -> None:
+    world.record(at=datetime(2026, 11, 16, 23, 30, tzinfo=UTC))
+    world.record(at=datetime(2026, 11, 17, 0, 30, tzinfo=UTC), status="fail")
+    before = _shape(_trend(world, size=DAY))
+    if world.session.get_bind().dialect.name == "postgresql":
+        world.session.execute(text("SET TIME ZONE 'Asia/Kathmandu'"))
+    expected = [
+        ("2026-11-17T00:00:00+00:00", 1, {"fail": 1}, {"spf": ("fail", 1)}),
+        ("2026-11-16T00:00:00+00:00", 1, {"ok": 1}, {"spf": ("ok", 1)}),
+    ]
+    assert before == expected
+    assert _shape(_trend(world, size=DAY)) == expected

@@ -24,6 +24,13 @@ measured on the JSON text as stored (SQLAlchemy's default `json.dumps` serializa
 
 Validation raises `CheckRunInvalid` with the field and a stable reason, never the value.
 Keyset pagination orders by (started_at DESC, id DESC); the cursor is the last item's pair.
+
+`trend` (M7-12b) aggregates a window into fixed-size UTC buckets for the history trend. It reads
+only (started_at, status, check_id) in the list order (started_at DESC, id DESC), never the
+findings JSON, and buckets in Python: `floor` is epoch arithmetic on aware UTC datetimes (exact
+for any moment, before 1970 too), so it does not depend on the dialect, on how SQLite stores the
+timestamp text or on the PostgreSQL session time zone. The read is bounded by `max_runs` (the
+newest runs win); see `RunTrend`.
 """
 
 from __future__ import annotations
@@ -34,7 +41,7 @@ import math
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, Final
 
 from sqlalchemy import ColumnElement, Select, and_, delete, func, or_, select
@@ -59,6 +66,9 @@ CHECK_ID_RE: Final = re.compile(r"[a-z0-9][a-z0-9_.:-]*")
 CODE_RE: Final = re.compile(r"[A-Z][A-Z0-9_]*")
 MAX_PARAMS_DEPTH: Final = 4
 PRUNE_BATCH: Final = 1000
+MAX_TREND_SCAN: Final = 100_000
+_EPOCH: Final = datetime(1970, 1, 1, tzinfo=UTC)
+_MICROSECOND: Final = timedelta(microseconds=1)
 
 
 class CheckRunInvalid(ValueError):
@@ -128,6 +138,46 @@ class RunCursor:
 class RunPage:
     items: tuple[CheckRunRecord, ...]
     next_cursor: RunCursor | None
+
+
+@dataclass(frozen=True, slots=True)
+class CheckBucket:
+    """One check in one bucket: the status of its LATEST run there (started_at, then id) and
+    how many runs it had."""
+
+    status: str
+    runs: int
+
+
+@dataclass(frozen=True, slots=True)
+class TrendBucket:
+    start: datetime
+    counts: Mapping[str, int]  # every status of STATUSES, zeros included
+    checks: Mapping[str, CheckBucket]  # insertion order: latest run first
+
+    @property
+    def runs(self) -> int:
+        return sum(self.counts.values())
+
+
+@dataclass(frozen=True, slots=True)
+class RunTrend:
+    """The non-empty buckets of a window, newest first.
+
+    `truncated` is True when the window held more than `max_runs` runs: only the newest
+    `max_runs` were read, the oldest bucket read is incomplete and is left out, and `complete_from`
+    is the start of the bucket after it (no bucket before it is reported). Otherwise
+    `complete_from` is the floor of `since`."""
+
+    buckets: tuple[TrendBucket, ...]
+    truncated: bool
+    complete_from: datetime
+
+
+def bucket_floor(value: datetime, size: timedelta) -> datetime:
+    """Start of the UTC bucket of `size` (aligned on the Unix epoch) holding `value` (aware)."""
+    step = size // _MICROSECOND
+    return _EPOCH + (value - _EPOCH) // _MICROSECOND // step * step * _MICROSECOND
 
 
 # --- validation / normalisation ---------------------------------------------------------------
@@ -295,6 +345,64 @@ class CheckRunRepository:
         more = len(rows) > size
         nxt = RunCursor(page[-1].started_at, page[-1].id) if more else None
         return RunPage(page, nxt)
+
+    def trend(
+        self,
+        domain_id: object,
+        *,
+        since: object,
+        until: object,
+        size: object,
+        max_runs: object,
+        check_id: object = None,
+    ) -> RunTrend:
+        """The domain's runs with `since <= started_at < until` (optionally of one check),
+        aggregated per bucket of `size` (see `RunTrend`). Empty for a missing, foreign or
+        malformed domain; CheckRunInvalid for a bad value."""
+        start = _aware(since, "since")
+        end = _aware(until, "until")
+        if not isinstance(size, timedelta) or size < _MICROSECOND or size % _MICROSECOND:
+            raise CheckRunInvalid("size", "out_of_range")
+        if type(max_runs) is not int or not 1 <= max_runs <= MAX_TREND_SCAN:
+            raise CheckRunInvalid("max_runs", "out_of_range")
+        criteria = [CheckRun.started_at >= start, CheckRun.started_at < end]
+        if check_id is not None:
+            criteria.append(CheckRun.check_id == _check_id(check_id))
+        complete_from = bucket_floor(start, size)
+        did = coerce_id(domain_id)
+        if did is None:
+            return RunTrend((), False, complete_from)
+        stmt = (
+            select(CheckRun.started_at, CheckRun.status, CheckRun.check_id)
+            .where(CheckRun.tenant_id == self._ctx.tenant_id, CheckRun.domain_id == did, *criteria)
+            .order_by(CheckRun.started_at.desc(), CheckRun.id.desc())
+            .limit(max_runs + 1)
+        )
+        rows = self._session.execute(stmt).all()
+        truncated = len(rows) > max_runs
+        if truncated:
+            rows = rows[:max_runs]
+            complete_from = bucket_floor(_utc(rows[-1][0]), size) + size
+        counts: dict[datetime, dict[str, int]] = {}
+        checks: dict[datetime, dict[str, list[Any]]] = {}
+        for at, status, cid in rows:  # newest first: a check's first row in a bucket is its latest
+            key = bucket_floor(_utc(at), size)
+            if key < complete_from:
+                break
+            if key not in counts:
+                counts[key] = dict.fromkeys(STATUSES, 0)
+                checks[key] = {}
+            counts[key][status] += 1
+            checks[key].setdefault(cid, [status, 0])[1] += 1
+        buckets = tuple(
+            TrendBucket(
+                key,
+                counts[key],
+                {cid: CheckBucket(state, n) for cid, (state, n) in checks[key].items()},
+            )
+            for key in counts
+        )
+        return RunTrend(buckets, truncated, complete_from)
 
     def latest_non_error(self, domain_id: object, check_id: object) -> CheckRunRecord | None:
         """The newest run of one check of the domain whose status is not `error` (the baseline
