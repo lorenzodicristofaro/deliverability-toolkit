@@ -1,36 +1,43 @@
-# HANDOFF — 2026-11-14 (M7 in progress, paused on maintainer request)
+# HANDOFF — 2026-11-17 (M7 in progress, paused: usage limit reached)
 
-Resume with `/gm`. Milestone **M7 — Monitoring**, 22 tickets in docs/tickets/M7-*.md, list in TODO.md (dependency order).
+Resume with `/gm`. Milestone **M7 — Monitoring**, tickets in docs/tickets/M7-*.md, list in TODO.md.
 
-## Done this session (all QA APPROVE, merged into dev)
-- M7-00 CI speed: pytest-xdist, one DB per worker. Dev CI test jobs 12.9 -> 6.1 min (PG), 11.4 -> 5.5 min (SQLite).
-  test_csrf.py / test_security.py run in a separate single-process step (random param ids).
-- M7-01 guarded outbound HTTP client `app/net/` (anti-SSRF, httpx2, IP pinning via `sni_hostname`); ARCHITECTURE §9.
-- M7-03 DNSBL engine, M7-03b bitmask codes + `default_enabled`, M7-04 `seeds/dnsbl.yaml` (spamcop, surbl, uribl;
-  all `unverified`, all disabled by default), M7-05 `dnsbl` check in API/CLI/web, M7-05c instance-admin enablement
-  (`/dnsbl-lists`, migration 0010; CLI with unreadable enablement -> error, exit 2).
+## Done this session (all QA APPROVE, merged into dev, pushed)
+- M7-14b secret encryption (383dfd1), M7-06 monitor targets (b492b9e), M7-07 check runs + retention (4628d94),
+  M7-08 DNS snapshots + diff (05cd067), M7-09 scheduler core (5f2442c), M7-10 run executor (fff4656),
+  M7-10b baseline past history limit + DNSBL per list (ead5671). Bookkeeping up to 517c498.
+- Migration head on dev: 0013. Dev CI green up to fff4656; later merges not yet checked (check before next merge).
 
-## State
-- `dev` at the commit carrying this file (merge bbdb6a5 + docs). `qa` at 55bc152, not promoted (milestone open). `main` unchanged.
-- Local test PostgreSQL `dt-test-pg` was running this session.
-
-## Maintainer decisions (2026-11-14)
-- Lists with restrictive usage policies are disabled by default; the admin enables them after acknowledging the policy.
-- Spamhaus only via the operator's own DQS key (M7-05b, after M7-14b).
-- SpamCop and Barracuda: keep disabled / out of the seed, investigate later (TODO.md follow-up has what was found).
-- Earlier GM decisions: notification SMTP relay is trusted operator infra (M7-16); no private webhook targets in M7.
+## Parked
+- **M7-02 http_fetch kind** (opus), branch `feature/m7-02-http-fetch-kind` in worktree
+  `.claude/worktrees/agent-adabea543d0921130`, WIP commit affc928 (model KINDS + migration 0014 + its test, unfinished,
+  untested). GM decisions given to the coder (re-give to a new Opus coder with this file):
+  - Scope widened (option a): app/models/custom_check.py, migration 0014 (rewrite kind_valid CHECK) + test,
+    app/repositories/custom_checks.py, app/api/v1/custom_checks.py (docstring), app/services/custom_checks_admin.py,
+    app/web/custom_checks.py + templates/custom_checks/form.html, docs/CONTENT.md, and tests:
+    tests/content/test_acceptance_m5.py, tests/services/test_custom_checks_admin.py, tests/repositories/test_custom_checks.py,
+    tests/web/test_custom_checks_ui.py, tests/api/test_custom_checks_api.py.
+  - Host rule: structured scheme (https default) / host template (`{domain}` or ASCII labels + `.{domain}`, no IDN) /
+    path (starts `/`, restricted charset, capped) / no port; URL built by construction, host re-checked before fetch.
+  - Fetch capped at remaining run budget (12 s vs client 20 s) -> error `run_budget_exceeded`; `fetcher` param on
+    CustomDnsCheck for tests; limits via limits_from_settings(get_settings()).
+  - Web form: http_fetch stays NOT selectable (API-only in M7), disabled option with i18n hint; editing an existing
+    http_fetch definition in the UI must not wipe it. Follow-up: form editor.
+  - Remove CUSTOM_KIND_UNAVAILABLE / kind_unavailable keys if unused afterwards. Downgrade of 0014 with existing
+    http_fetch rows: coder decides and documents.
+  - Ticket file is docs/tickets/M7-02-custom-check-http-fetch.md (add widened scope + decisions to it via pm).
 
 ## Open maintainer actions
-- None blocking. Later: official Barracuda BRBL page text; SpamCop IPv6/usage terms.
+- None blocking. Later: Barracuda BRBL page text; SpamCop IPv6/usage terms; DMARC tag case-sensitivity (TODO follow-up).
 
 ## Next 3 steps
-1. M7-14b secret encryption service (opus, no deps): unblocks M7-15 and M7-05b.
-2. M7-06 monitor_targets model (sonnet), then M7-07 / M7-08 / M7-09 in order (migrations: serialize).
-3. M7-02 http_fetch custom check (opus; depends only on M7-01) whenever a slot is free.
+1. Finish M7-02 (new Opus coder from affc928 with decisions above) -> QA opus -> merge.
+2. M7-11 monitor target API + permissions (opus; locales, so after M7-02).
+3. M7-12 history/snapshot read API, then M7-14 alert state/dedup (opus; depends M7-10b).
 
 ## Notes
-- Agent worktrees: tell coders the dev hash and to `git checkout -B <branch> <hash>` (worktrees start at origin/main).
-- Push alone, never in a compound command. Commits touching `.github/workflows/` are pushed by the maintainer.
-- Low follow-ups added to TODO.md: flaky-candidate test_fold_bomb_is_bounded_and_fast; stable ids for csrf/security
-  tests; worker DB name length; wall-clock tests under xdist; shared loader helpers for dnsbl_schema; nav link to
-  /dnsbl-lists; private webhook allowlist (possible).
+- Agent worktrees: tell coders the dev hash and to `git checkout -B <branch> <hash>`; if a branch is held by another
+  worktree, use a new local branch name and merge the commit directly.
+- Local full suite the CI way: `-n auto --ignore=tests/core/test_security.py --ignore=tests/core/test_csrf.py`, then
+  those two single-process. PG: prefix TEST_DATABASE_URL=postgresql://ci:ci-throwaway-password@localhost:5432/ci_test.
+- Sonnet code needed Opus rework on M7-07 and M7-08; GM picked Opus up front from M7-09 on.
