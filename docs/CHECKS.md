@@ -414,7 +414,7 @@ the web denies them); it does not protect the instance from its operator.
   report destinations) uses the PSL; its licence (MPL-2.0) is recorded as verified in
   `seeds/public_suffix_source.yaml`: the LICENSE text at github.com/publicsuffix/list was read on
   2026-11-12 and the maintainer accepts it.
-- **No persistence.** Results are not stored: there is no history, scheduling or diff, and each
+- **History is stored by the model only (M7-07).** `check_runs` keeps per run the check id, status, time, duration, source and findings as stable codes plus params (no rendered text, capped in size with a truncation flag, with a deterministic hash); raw runs are pruned after `CHECK_RUN_RETENTION_DAYS` (default 90, 1..3650). Nothing writes it yet: the API and UI do not store results, so there is no scheduling or diff, and each
   request or page view runs the checks again.
 - No per-user rate limiting yet: one request can fan out many DNS queries (the DKIM probe).
 - The Authentication tab renders SPF and DMARC server-side; DKIM arrives through the stream and

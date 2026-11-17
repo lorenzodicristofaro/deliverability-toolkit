@@ -438,6 +438,10 @@ _EXTRA_ID_COLUMNS = {"created_by"}
 _TEXT_ID_COLUMNS = {
     ("domain_esps", "esp_id"): "ESP profile slug; profiles live in YAML, not in a table",
     ("dnsbl_list_enablements", "list_id"): "DNSBL list slug; lists live in YAML, not in a table",
+    (
+        "check_runs",
+        "check_id",
+    ): "check registry id (e.g. spf, custom:global:key); checks live in code",
 }
 
 
