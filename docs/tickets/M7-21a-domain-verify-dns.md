@@ -21,4 +21,13 @@ Acceptance criteria:
 - ARCHITECTURE section 5 (domain columns) and section 7 (domain.verify) updated.
 Unverified external facts: none for this ticket (the `_dt-verify` label and `dt-verify=` value are a project choice). Do not describe the scheme as modelled on a vendor standard.
 New i18n keys: DOMAIN_VERIFY_STATUS_UNVERIFIED, DOMAIN_VERIFY_STATUS_VERIFIED, DOMAIN_VERIFY_STATUS_ERROR, DOMAIN_VERIFY_START, DOMAIN_VERIFY_NOW, DOMAIN_VERIFY_INSTRUCTIONS, DOMAIN_VERIFY_TOKEN_SHOWN_ONCE, DOMAIN_VERIFY_EXPIRED, DOMAIN_VERIFY_NOT_FOUND_YET, DOMAIN_VERIFY_DNS_ERROR, CUSTOM_HTTP_DOMAIN_UNVERIFIED.title/detail (en + it); exact names finalised by the coder
-Status: todo
+Status: done (ea6d500, QA APPROVE round 1)
+Record:
+- Migration 0015: ADD COLUMN with per-column CHECKs, no table rebuild; the method CHECK already allows `email`; downgrade needs SQLite >= 3.35.
+- Token: `secrets.token_urlsafe(32)`; only the SHA-256 hash and expiry are stored; shown once (API 201 with no-store, or the web start page). TXT at `_dt-verify.<domain>`, value `dt-verify=<token>`.
+- Outcomes: verified / not_found / expired / not_started / error. A conditional UPDATE guards rename and re-issue races.
+- Setting DOMAIN_VERIFY_TOKEN_TTL_HOURS, default 72, bounded 1..720.
+- Routes: GET/POST /api/v1/domains/{id}/verification and POST /api/v1/domains/{id}/verification/check (app/api/v1/domain_verification.py).
+- Gate: http_fetch requires `verified_domain` (fail closed) on the API domain run and dry run. The executor hook is tested; monitor targets are still built-ins only.
+- GM-accepted decisions: status GET needs only domain.read (it carries no secret); re-start on a verified domain keeps it verified until the new token matches; a same-name rename does not reset; test file is tests/api/test_domain_verification_api.py; i18n keys are dotted; tests/repositories/test_custom_checks.py updated.
+- Follow-ups recorded in TODO.md: periodic re-verification; badge shows "Verification error" on a verified domain after a failed re-check; mark_verified lacks the expiry check in the WHERE.

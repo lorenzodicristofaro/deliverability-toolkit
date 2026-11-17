@@ -277,7 +277,7 @@ Tickets (docs/tickets/M7-*.md, split 2026-11-13; model in brackets):
 - [x] M7-01 guarded outbound HTTP client + ARCHITECTURE decision record (opus)
 - [ ] Follow-up (low): tests/parsers/test_message.py::test_fold_bomb_is_bounded_and_fast failed once in two local PostgreSQL full runs under load (timing test, flaky candidate)
 - [x] M7-02 custom check kind http_fetch via guarded client (opus; depends M7-01)
-  - [ ] Follow-up (medium): domains were added without ownership verification, so http_fetch with host `{domain}` could read up to 256 chars from any public host registered as a domain. Maintainer decision 2026-11-17: domain ownership verification (DNS TXT preferred, email alternative), see M7-21a and M7-21b; http_fetch and its scheduling require a verified domain. Closed when M7-21a is done.
+  - [x] Follow-up (medium, done in M7-21a): domains were added without ownership verification, so http_fetch with host `{domain}` could read up to 256 chars from any public host registered as a domain. Maintainer decision 2026-11-17: domain ownership verification (DNS TXT preferred, email alternative), see M7-21a and M7-21b; http_fetch and its scheduling require a verified domain. Closed when M7-21a is done.
   - [ ] Follow-up (low): no rate limit on POST /custom-checks/test; public suffixes (github.io, co.uk) are still accepted as domain names (not covered by M7-21a/b; decide whether to refuse them)
   - [ ] Follow-up (low): web UI editor for http_fetch definitions (API-only in M7)
   - [ ] Follow-up (low): wire per-host HTTP rate limiting (M7-09 RateKind.HTTP_HOST) when custom checks become schedulable
@@ -315,7 +315,10 @@ Tickets (docs/tickets/M7-*.md, split 2026-11-13; model in brackets):
 - [x] M7-11 monitor target API + permissions (opus; depends M7-06)
 - [x] M7-12 history and snapshot read API (sonnet; depends M7-07, M7-08, M7-11)
 - [x] M7-12b trend aggregation in the check_runs repository (sonnet; depends M7-12; parallel-safe no) (191d875, QA APPROVE round 1)
-- [ ] M7-21a domain ownership verification via DNS TXT (opus; depends M7-02; parallel-safe no; maintainer decision 2026-11-17; run after M7-11/M7-12, before M7-13 or any schedulable custom check)
+- [x] M7-21a domain ownership verification via DNS TXT (opus; depends M7-02; parallel-safe no; maintainer decision 2026-11-17; run after M7-11/M7-12, before M7-13 or any schedulable custom check) (ea6d500, QA APPROVE round 1)
+  - [ ] Follow-up (low): periodic re-verification of verified domains (check the TXT record is still published); required by the ticket to be recorded
+  - [ ] Follow-up (low): app/web/templates/domains/_verification.html:4 shows "Verification error" on an already verified domain after a failed re-check; show the error badge only when not verified
+  - [ ] Follow-up (low): `mark_verified` does not re-check token expiry in the WHERE (window of seconds); add `verification_token_expires_at > at`
 - [ ] M7-13 monitoring page + SVG trend charts (sonnet; depends M7-11, M7-12, M7-12b)
 - [ ] M7-14 alert state, dedup, exactly-once design (opus; depends M7-10, M7-10b)
 - [x] M7-14b secret encryption service, Fernet/MultiFernet, ARCHITECTURE §9 (opus; no deps)

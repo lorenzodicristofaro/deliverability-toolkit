@@ -19,4 +19,5 @@ Acceptance criteria:
 - Audit entry if the mechanism exists, as in M7-21a.
 Unverified external facts: the role-address list is a project choice; CA/Browser Forum or other vendor requirements were not checked and must not be claimed.
 New i18n keys: DOMAIN_VERIFY_EMAIL_SUBJECT, DOMAIN_VERIFY_EMAIL_BODY (intro/link/footer), DOMAIN_VERIFY_EMAIL_SENT, DOMAIN_VERIFY_EMAIL_RATE_LIMITED, DOMAIN_VERIFY_EMAIL_NOT_CONFIGURED, DOMAIN_VERIFY_EMAIL_ADDRESS_INVALID, DOMAIN_VERIFY_CONFIRM_TITLE/BODY, DOMAIN_VERIFY_CONFIRM_DONE, DOMAIN_VERIFY_CONFIRM_INVALID (en + it); exact names finalised by the coder
+Note from M7-21a (done, ea6d500): the method CHECK already allows 'email', so no table rebuild is needed. Reuse the outcomes in app/services/domain_verification.py and the conditional `mark_verified`; same permission `domain.verify`.
 Status: todo
