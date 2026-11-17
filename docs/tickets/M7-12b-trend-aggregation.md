@@ -13,4 +13,11 @@ Acceptance criteria:
 - Works on SQLite and PostgreSQL (bucketing expression per dialect, or bucket in Python over column-only rows); document the choice.
 - Tests on SQLite and PG: bucket boundaries (exactly on the hour/day edge, UTC), empty window, cap/flag behaviour, cross-tenant and cross-domain isolation (other tenant's runs never counted), existing M7-12 trend tests still pass unchanged.
 New i18n keys: none
-Status: todo
+Status: done (191d875, QA APPROVE round 1; Opus coder chosen up front by the GM, Opus QA)
+
+Decision record:
+- Column-only select of (started_at, status, check_id) through the tenant-scoped `CheckRunRepository.trend(domain_id, since, until, size, max_runs, check_id=None)`; the findings JSON is no longer loaded.
+- Bucketing is done in Python with `bucket_floor` (UTC epoch arithmetic, correct before 1970, independent of the SQLite text format and the PG session timezone).
+- SQL GROUP BY rejected: backend-specific epoch expressions, floor division of negative epochs, and a window function would be needed.
+- The 20000-run cap is kept with unchanged `truncated` semantics; the 500-bucket cap and API output are unchanged.
+- The equivalence test keeps the old scan as the reference implementation.
