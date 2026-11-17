@@ -7,6 +7,7 @@ time, no sleeping, no network. Runs on SQLite and, when TEST_DATABASE_URL is set
 import asyncio
 import logging
 import random
+import threading
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -589,6 +590,106 @@ async def test_shutdown_cancels_in_flight_runs(world: World) -> None:
     assert sorted(rec.cancelled) == ids
     world.target("a", 5)
     assert (await sched.tick()).runs == []  # a closed scheduler claims nothing
+
+
+async def test_shutdown_restores_next_run_of_cancelled_runs(world: World) -> None:
+    early = NOW - timedelta(minutes=10)
+    ids = [world.target("a", n, at=early) for n in range(3)]
+    rec = Recorder(gate=asyncio.Event())
+    sched = world.scheduler(rec, _config(concurrency=2))
+    plan = await sched.tick()
+    assert [r.target.id for r in plan.runs] == ids[:2]
+    assert all(r.new_next_run_at == NOW + timedelta(hours=1) for r in plan.runs)
+    await asyncio.sleep(0)  # both runs start and block on the gate
+    assert all(world.next_run(t) == NOW + timedelta(hours=1) for t in ids[:2])
+    await sched.shutdown()
+    # Both claims undone to the claim time: due at the next start, no interval lost.
+    assert [world.next_run(t) for t in ids] == [NOW, NOW, early]
+    assert sorted(world.due()) == ids
+
+
+async def test_shutdown_before_any_run_started_restores_all(world: World) -> None:
+    ids = [world.target("a", n) for n in range(3)]
+    rec = Recorder()
+    sched = world.scheduler(rec)
+    await sched.tick()
+    await sched.shutdown()  # no yield: no task got to run
+    assert rec.runs == []
+    assert [world.next_run(t) for t in ids] == [NOW] * 3
+
+
+async def test_finished_and_failed_runs_keep_their_claim(world: World) -> None:
+    ok, bad = world.target("a", 0), world.target("a", 1)
+    rec = Recorder(fail_ids={bad})
+    sched = world.scheduler(rec)
+    await sched.tick()
+    await _drain(sched)
+    await sched.shutdown()
+    assert world.next_run(ok) == world.next_run(bad) == NOW + timedelta(hours=1)
+
+
+async def test_restore_is_conditional(world: World) -> None:
+    tid = world.target("a")
+    rec = Recorder(gate=asyncio.Event())
+    sched = world.scheduler(rec)
+    plan = await sched.tick()
+    moved = NOW + timedelta(hours=5)
+    with world.factory.begin() as s:  # the user rescheduled it meanwhile
+        repo_for(TenantContext(world.tenants["a"], None), s).monitor_targets.update(
+            tid, next_run_at=moved
+        )
+    assert scheduler_module.restore_claims(world.factory, plan.runs) == 0
+    await sched.shutdown()
+    assert world.next_run(tid) == moved
+
+
+async def test_restore_failure_is_logged(
+    world: World, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    world.target("a")
+    sched = world.scheduler(Recorder(gate=asyncio.Event()))
+    plan = await sched.tick()
+
+    def broken(*_: Any, **__: Any) -> Any:
+        raise RuntimeError("db down: secret detail")
+
+    monkeypatch.setattr(MonitorSchedulerRepository, "claim", broken)
+    with caplog.at_level(logging.ERROR, logger="app.scheduler"):
+        assert scheduler_module.restore_claims(world.factory, plan.runs) == 0
+        await sched.shutdown()
+    assert any(getattr(r, "event", "") == "scheduler.restore.failed" for r in caplog.records)
+    assert "secret detail" not in caplog.text
+
+
+async def test_shutdown_waits_for_a_tick_in_progress_and_undoes_its_claims(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tid = world.target("a")
+    rec = Recorder()
+    sched = world.scheduler(rec)
+    entered, release = threading.Event(), threading.Event()
+    original = sched.plan
+
+    def slow_plan(now: datetime, slots: int) -> Any:
+        plan = original(now, slots)  # the claim is committed here
+        entered.set()
+        release.wait(timeout=10)
+        return plan
+
+    monkeypatch.setattr(sched, "plan", slow_plan)
+    tick = asyncio.create_task(sched.tick())
+    await asyncio.to_thread(entered.wait, 10)
+    assert world.next_run(tid) == NOW + timedelta(hours=1)
+    stop = asyncio.create_task(sched.shutdown())
+    for _ in range(5):
+        await asyncio.sleep(0)
+    assert not stop.done()  # held by the tick lock while the planning thread runs
+    release.set()
+    await stop
+    assert tick.done()
+    plan = tick.result()
+    assert [r.target.id for r in plan.runs] == [tid] and rec.runs == []
+    assert world.next_run(tid) == NOW  # claimed while closing, then undone
 
 
 # --- maintenance ---------------------------------------------------------------------------------

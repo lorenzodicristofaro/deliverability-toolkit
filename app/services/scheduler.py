@@ -21,12 +21,20 @@ One tick:
    Targets beyond the free slots are left untouched and stay due for the next tick.
 3. Each claimed target becomes an asyncio task running `run(ScheduledRun)` under the global
    semaphore. An exception is logged by type and never reaches the loop; a slow run only holds
-   its own slot. `shutdown` cancels the runs in flight and waits for them.
+   its own slot.
 
-What a run does (checks, history, `last_run_at`/`last_status`) is M7-10, behind `RunFn`. Check ids
-of the target that are no longer in the registry are passed through in
-`ScheduledRun.unknown_check_ids` (and logged): the run must record them as `error`, never skip
-them. Until M7-10 the app wires `log_only_run`.
+Shutdown: `shutdown` stops the timer, waits for a tick in progress (it takes the tick lock, so no
+planning thread commits a claim after it returns), cancels the runs in flight and waits for them.
+A claimed run that never started or was cancelled gets its claim undone: a conditional
+`claim(id, new_next_run_at, claimed_at)` puts `next_run_at` back to the claim time, so the target
+is due at the next start instead of losing a whole interval (only if nobody moved it since). A run
+that finished, or failed with an exception, keeps its claim. A run cancelled while its worker
+thread commits may still commit; it is then simply due again at the next start (an early run,
+never a lost interval).
+
+What a run does (checks, history, snapshots, events) is `app.services.monitor_run` (M7-10),
+behind `RunFn`. Check ids of the target that are no longer in the registry are passed through in
+`ScheduledRun.unknown_check_ids` (and logged): the run records them as `error`, never skips them.
 
 Limiter state is per process (app.services.rate_limit): several workers each apply the limits.
 """
@@ -72,11 +80,13 @@ _MINUTE = timedelta(minutes=1)
 
 @dataclass(frozen=True, slots=True)
 class ScheduledRun:
-    """A claimed target handed to the run function. `unknown_check_ids` must end as `error`."""
+    """A claimed target handed to the run function. `unknown_check_ids` must end as `error`.
+    `new_next_run_at` is the `next_run_at` the claim wrote (used to undo it on shutdown)."""
 
     target: DueTarget
     unknown_check_ids: tuple[str, ...]
     claimed_at: datetime
+    new_next_run_at: datetime
 
 
 RunFn = Callable[[ScheduledRun], Awaitable[None]]
@@ -217,8 +227,37 @@ def claim_due(
                 len(unknown),
                 extra={"event": "scheduler.unknown_check"},
             )
-        plan.runs.append(ScheduledRun(target, unknown, now))
+        plan.runs.append(ScheduledRun(target, unknown, now, new_next))
     return plan
+
+
+def restore_claims(factory: sessionmaker[Session], runs: Sequence[ScheduledRun]) -> int:
+    """Undo the claims of runs that did not run: move each target's `next_run_at` from the
+    claimed `new_next_run_at` back to `claimed_at` (conditional, so a target moved since is left
+    alone). Each restore commits on its own; a failure is logged by type. Returns how many were
+    restored."""
+    restored = 0
+    for run in runs:
+        try:
+            with factory.begin() as session:
+                restored += MonitorSchedulerRepository(session).claim(
+                    run.target.id, run.new_next_run_at, run.claimed_at
+                )
+        except Exception as exc:
+            logger.error(
+                "restoring the claim of target %d failed (%s)",
+                run.target.id,
+                type(exc).__name__,
+                extra={"event": "scheduler.restore.failed"},
+            )
+    if runs:
+        logger.info(
+            "%d of %d unstarted or cancelled run(s) rescheduled to their claim time",
+            restored,
+            len(runs),
+            extra={"event": "scheduler.restored"},
+        )
+    return restored
 
 
 # --- maintenance ---------------------------------------------------------------------------------
@@ -273,15 +312,6 @@ def run_maintenance(
 # --- runtime -------------------------------------------------------------------------------------
 
 
-async def log_only_run(run: ScheduledRun) -> None:
-    """Placeholder run function until M7-10 records runs: logs the hand-over only."""
-    logger.info(
-        "scheduled run of target %d claimed (run recording is M7-10)",
-        run.target.id,
-        extra={"event": "scheduler.run.pending"},
-    )
-
-
 class MonitorScheduler:
     """Owns the limiter, the semaphore and the runs in flight of one process."""
 
@@ -305,7 +335,7 @@ class MonitorScheduler:
         self._keys_for = keys_for
         self._limiter = SlidingWindowLimiter(config.limits, clock)
         self._semaphore = asyncio.Semaphore(config.max_concurrency)
-        self._in_flight: set[asyncio.Task[None]] = set()
+        self._in_flight: dict[asyncio.Task[bool], ScheduledRun] = {}
         self._tick_lock = asyncio.Lock()
         self._timer: Any = None  # AsyncIOScheduler; apscheduler ships no type hints
         self._closed = False
@@ -349,13 +379,17 @@ class MonitorScheduler:
                 return TickPlan()
             now = self._clock.now()
             plan = await asyncio.to_thread(self.plan, now, self.free_slots())
-            if self._closed:  # shut down while planning: the claims wait for their next slot
+            if self._closed:  # shut down while planning: undo the claims, nothing runs
+                await asyncio.to_thread(restore_claims, self._factory, plan.runs)
                 return plan
             for scheduled in plan.runs:
                 task = asyncio.create_task(self._execute(scheduled))
-                self._in_flight.add(task)
-                task.add_done_callback(self._in_flight.discard)
+                self._in_flight[task] = scheduled
+                task.add_done_callback(self._forget)
             return plan
+
+    def _forget(self, task: asyncio.Task[bool]) -> None:
+        self._in_flight.pop(task, None)
 
     async def tick_safely(self) -> None:
         """The timer's job: a failing tick is logged and the next one runs as usual."""
@@ -368,7 +402,9 @@ class MonitorScheduler:
                 extra={"event": "scheduler.tick.failed"},
             )
 
-    async def _execute(self, scheduled: ScheduledRun) -> None:
+    async def _execute(self, scheduled: ScheduledRun) -> bool:
+        """True once the run function returned or raised (the claim stands); a cancellation
+        (shutdown) propagates, and `shutdown` then undoes the claim."""
         async with self._semaphore:
             try:
                 await self._run(scheduled)
@@ -379,6 +415,7 @@ class MonitorScheduler:
                     type(exc).__name__,
                     extra={"event": "scheduler.run.failed"},
                 )
+            return True
 
     def start(self, maintenance: Callable[[], Awaitable[None]] | None = None) -> None:
         """Start the APScheduler timer (needs a running event loop). Ticks never overlap
@@ -407,16 +444,25 @@ class MonitorScheduler:
         self._timer = timer
 
     async def shutdown(self) -> None:
-        """Stop the timer, cancel the runs in flight and wait for them to finish cancelling."""
+        """Stop the timer, wait for a tick in progress, cancel the runs in flight, wait for them
+        and undo the claims of those that did not finish (module docstring)."""
         self._closed = True
         if self._timer is not None:
             self._timer.shutdown(wait=False)
             self._timer = None
-        tasks = list(self._in_flight)
-        for task in tasks:
+        async with self._tick_lock:  # a planning thread finishes (and restores) before we go on
+            pass
+        pending = list(self._in_flight.items())
+        for task, _ in pending:
             task.cancel()
-        if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
+        if not pending:
+            return
+        outcomes = await asyncio.gather(*(t for t, _ in pending), return_exceptions=True)
+        unfinished = [
+            run for (_, run), out in zip(pending, outcomes, strict=True) if out is not True
+        ]
+        if unfinished:
+            await asyncio.to_thread(restore_claims, self._factory, unfinished)
 
 
 def maintenance_job(
