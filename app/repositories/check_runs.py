@@ -19,7 +19,8 @@ Findings are stored as stable codes and params only (see `app.models.check_run`)
 sequence of `app.checks.models.Finding` or mappings with `code` and `params`; titles, details and
 evidence are never stored. Findings are sorted by (code, params) so storage, truncation and
 `findings_hash` are deterministic; the hash covers the full list, the stored list is capped at
-`MAX_FINDINGS` / `MAX_FINDINGS_BYTES` (a prefix, with `findings_truncated` set).
+`MAX_FINDINGS` / `MAX_FINDINGS_BYTES` (a prefix, with `findings_truncated` set). The byte cap is
+measured on the JSON text as stored (SQLAlchemy's default `json.dumps` serialization).
 
 Validation raises `CheckRunInvalid` with the field and a stable reason, never the value.
 Keyset pagination orders by (started_at DESC, id DESC); the cursor is the last item's pair.
@@ -154,6 +155,13 @@ def _dump(value: object) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
 
 
+def _stored_size(item: object) -> int:
+    # Length of the item as the JSON column stores it: SQLAlchemy's default serializer is
+    # `json.dumps` with its default separators and ensure_ascii (ASCII: characters are bytes);
+    # keys are already sorted by `_json_value`.
+    return len(json.dumps(item))
+
+
 def _one_finding(item: object) -> dict[str, Any]:
     if isinstance(item, Finding):
         code: object = item.code
@@ -176,11 +184,11 @@ def normalize_findings(findings: object) -> tuple[list[dict[str, Any]], bool, st
     full = sorted((_one_finding(f) for f in findings), key=_dump)
     digest = hashlib.sha256(_dump(full).encode("ascii")).hexdigest()
     kept: list[dict[str, Any]] = []
-    size = 2  # "[]"
+    size = 2  # "[]"; the cap is on the stored text, so items are joined by ", "
     for item in full:
         if len(kept) >= MAX_FINDINGS:
             break
-        size += len(_dump(item)) + 1  # ASCII-only JSON: characters are bytes
+        size += _stored_size(item) + (2 if kept else 0)
         if size > MAX_FINDINGS_BYTES:
             break
         kept.append(item)

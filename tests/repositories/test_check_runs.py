@@ -15,11 +15,20 @@ import pytest
 from sqlalchemy import Engine, func, select, text
 from sqlalchemy.orm import Session
 
+from app.checks.custom import CustomDnsCheck
 from app.checks.models import Finding
 from app.core.db import create_db_engine, create_session_factory
 from app.core.tenancy import TenantContext
 from app.models import CheckRun, Tenant
-from app.models.check_run import MAX_FINDINGS, MAX_FINDINGS_BYTES, SOURCES, STATUSES
+from app.models.check_run import (
+    MAX_CHECK_ID_LENGTH,
+    MAX_FINDINGS,
+    MAX_FINDINGS_BYTES,
+    SOURCES,
+    STATUSES,
+)
+from app.models.custom_check import MAX_KEY_LENGTH
+from app.models.custom_check import SCOPES as CUSTOM_SCOPES
 from app.repositories import TenantRepositories, repo_for
 from app.repositories.base import MAX_LIMIT
 from app.repositories.check_runs import (
@@ -172,6 +181,37 @@ def test_record_accepts_finding_objects_and_stores_codes_and_params_only(world: 
         assert absent not in dumped
 
 
+# --- check ids: every id a check can produce is storable ---------------------------------------
+
+
+def _custom_id(key: str, scope: object) -> str:
+    return CustomDnsCheck(
+        check_key=key, kind="dns_exists", definition={}, severity="low", scope=scope
+    ).id
+
+
+def test_check_id_width_covers_every_custom_check_id() -> None:
+    longest_key = "k" * MAX_KEY_LENGTH
+    ids = [_custom_id(longest_key, scope) for scope in (*CUSTOM_SCOPES, "bogus")]
+    assert ids[0] == f"custom:global:{longest_key}"  # the key was accepted, not replaced
+    assert max(len(i) for i in ids) <= MAX_CHECK_ID_LENGTH
+
+
+@pytest.mark.parametrize("scope", CUSTOM_SCOPES)
+@pytest.mark.parametrize(
+    "key", ["k" * MAX_KEY_LENGTH, "a", "0a_b.c-d" + "z" * (MAX_KEY_LENGTH - 8)]
+)
+def test_custom_check_ids_with_the_longest_key_are_recorded(
+    world: World, scope: str, key: str
+) -> None:
+    check_id = _custom_id(key, scope)
+    assert check_id == f"custom:{scope}:{key}"
+    rec = world.record(check_id=check_id)
+    assert rec.check_id == check_id
+    got = world.repo().get(rec.id)
+    assert got is not None and got.check_id == check_id
+
+
 # --- invalid input -----------------------------------------------------------------------------
 
 GOOD: dict[str, Any] = {
@@ -187,7 +227,9 @@ BAD_VALUES = [
     ("check_id", "", "check_id"),
     ("check_id", "SPF", "check_id"),
     ("check_id", "a b", "check_id"),
-    ("check_id", "x" * 65, "check_id"),
+    ("check_id", "x" * (MAX_CHECK_ID_LENGTH + 1), "check_id"),
+    ("check_id", "custom:global:" + "k" * 90, "check_id"),
+    ("check_id", "custom:global:a b", "check_id"),
     ("check_id", 5, "check_id"),
     ("status", "bogus", "status"),
     ("status", "OK", "status"),
@@ -288,11 +330,35 @@ def test_findings_over_the_byte_cap_are_truncated_with_a_flag(world: World) -> N
     findings = [{"code": f"C{i:03d}", "params": {"text": "x" * 1000}} for i in range(40)]
     rec = world.record(findings=findings)
     assert rec.findings_truncated is True and 0 < len(rec.findings) < 40
-    stored = world.session.execute(text("SELECT findings FROM check_runs")).scalar_one()
-    stored = stored if isinstance(stored, str) else json.dumps(stored)
-    assert len(stored) <= MAX_FINDINGS_BYTES * 2  # separators differ by dialect, same order of size
+    # The cap holds on the text as stored, not on a more compact serialization.
+    stored = world.session.execute(
+        text("SELECT CAST(findings AS TEXT) FROM check_runs")
+    ).scalar_one()
+    assert len(stored.encode()) <= MAX_FINDINGS_BYTES
     kept, truncated, _ = normalize_findings(findings)
-    assert truncated and len(json.dumps(kept, separators=(",", ":"))) <= MAX_FINDINGS_BYTES
+    assert truncated and stored == json.dumps(kept)
+    # and the cap is tight: one more finding would not fit
+    assert (
+        len(json.dumps(normalize_findings(findings)[0] + [findings[len(kept)]]))
+        > MAX_FINDINGS_BYTES
+    )
+
+
+@pytest.mark.parametrize("n_items", [1, 2, 3, 16])
+def test_byte_cap_boundary_counts_the_stored_separators(n_items: int) -> None:
+    # Items sized so the stored text (with ", " between items) is exactly the cap.
+    overhead = len(json.dumps([{"code": "A", "params": {"t": ""}}] * n_items))
+    pad = (MAX_FINDINGS_BYTES - overhead) // n_items
+    extra = MAX_FINDINGS_BYTES - overhead - pad * n_items
+    findings = [
+        {"code": "A", "params": {"t": "x" * (pad + (extra if i == 0 else 0))}}
+        for i in range(n_items)
+    ]
+    kept, truncated, _ = normalize_findings(findings)
+    assert len(json.dumps(kept)) == MAX_FINDINGS_BYTES and not truncated
+    findings[0]["params"]["t"] += "x"  # type: ignore[index]
+    kept, truncated, _ = normalize_findings(findings)
+    assert truncated and len(json.dumps(kept)) <= MAX_FINDINGS_BYTES
 
 
 def test_a_single_oversized_finding_is_dropped_with_a_flag(world: World) -> None:
