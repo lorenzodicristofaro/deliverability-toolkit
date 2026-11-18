@@ -228,6 +228,8 @@
   "cli.operator.error.schema": "The database schema is not migrated. Run the migrations first.",
   "cli.operator.opt.tenant_id": "Id of the tenant to act in.",
   "cli.operator.opt.user_id": "Id of the user to act as. This selects who the command acts as; it is not authentication.",
+  "config.alert_backoff_cap_too_short": "ALERT_BACKOFF_CAP_SECONDS ({cap}) must not be shorter than ALERT_BACKOFF_BASE_SECONDS ({base}).",
+  "config.alert_send_timeout_too_long": "ALERT_SEND_TIMEOUT_SECONDS ({timeout}) must be shorter than ALERT_LEASE_SECONDS ({lease}).",
   "config.invalid_value": "Invalid value for {name}.",
   "config.missing": "Required setting {name} is missing or empty.",
   "config.resolver_addr.invalid": "Invalid RESOLVER_ADDRS entry \"{entry}\": expected an IPv4 address or a bracketed IPv6 address, optionally followed by :port (1-65535).",

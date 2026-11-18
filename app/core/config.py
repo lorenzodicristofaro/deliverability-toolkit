@@ -70,6 +70,25 @@ DEFAULT_DOMAIN_VERIFY_TOKEN_TTL_HOURS = 72
 DOMAIN_VERIFY_TOKEN_TTL_HOURS_MIN = 1
 DOMAIN_VERIFY_TOKEN_TTL_HOURS_MAX = 720
 
+# Alerts (M7-14 settings, wired by M7-14c). Project choices, not taken from an external source.
+# The defaults equal the AlertService defaults (app.services.alerts, checked by a test).
+DEFAULT_ALERT_MIN_REALERT_MINUTES = 60
+ALERT_MIN_REALERT_MINUTES_MIN = 0  # 0: no flapping suppression
+ALERT_MIN_REALERT_MINUTES_MAX = 10080  # one week
+DEFAULT_ALERT_MAX_ATTEMPTS = 5
+ALERT_MAX_ATTEMPTS_MIN = 1
+ALERT_MAX_ATTEMPTS_MAX = 100
+DEFAULT_ALERT_BACKOFF_BASE_SECONDS = 60
+DEFAULT_ALERT_BACKOFF_CAP_SECONDS = 3600
+ALERT_BACKOFF_SECONDS_MIN = 1
+ALERT_BACKOFF_SECONDS_MAX = 86400
+DEFAULT_ALERT_LEASE_SECONDS = 300
+ALERT_LEASE_SECONDS_MIN = 10
+ALERT_LEASE_SECONDS_MAX = 3600
+DEFAULT_ALERT_SEND_TIMEOUT_SECONDS = 60
+ALERT_SEND_TIMEOUT_SECONDS_MIN = 1
+ALERT_SEND_TIMEOUT_SECONDS_MAX = 3599
+
 RESOLVER_ADDR_INVALID_KEY = "config.resolver_addr.invalid"
 
 config_logger = logging.getLogger("app.config")
@@ -77,6 +96,8 @@ config_logger = logging.getLogger("app.config")
 CONFIG_MISSING_KEY = "config.missing"
 CONFIG_INVALID_VALUE_KEY = "config.invalid_value"
 CONFIG_RESOLVER_ADDRS_REQUIRED_KEY = "config.resolver_addrs_required"
+CONFIG_ALERT_SEND_TIMEOUT_TOO_LONG_KEY = "config.alert_send_timeout_too_long"
+CONFIG_ALERT_BACKOFF_CAP_TOO_SHORT_KEY = "config.alert_backoff_cap_too_short"
 
 
 class ConfigError(ValueError):
@@ -328,6 +349,38 @@ class Settings(BaseSettings):
         ge=DOMAIN_VERIFY_TOKEN_TTL_HOURS_MIN,
         le=DOMAIN_VERIFY_TOKEN_TTL_HOURS_MAX,
     )
+    # Alerts (M7-14, wired M7-14c; ARCHITECTURE section 6). A true change to a state alerted less
+    # than ALERT_MIN_REALERT_MINUTES ago is recorded but not sent (sent once the window ends).
+    alert_min_realert_minutes: int = Field(
+        default=DEFAULT_ALERT_MIN_REALERT_MINUTES,
+        ge=ALERT_MIN_REALERT_MINUTES_MIN,
+        le=ALERT_MIN_REALERT_MINUTES_MAX,
+    )
+    # Delivery attempts per channel before a delivery is abandoned.
+    alert_max_attempts: int = Field(
+        default=DEFAULT_ALERT_MAX_ATTEMPTS, ge=ALERT_MAX_ATTEMPTS_MIN, le=ALERT_MAX_ATTEMPTS_MAX
+    )
+    # Retry delay after a failed attempt: base * 2^(attempt-1), at most cap (cap >= base).
+    alert_backoff_base_seconds: int = Field(
+        default=DEFAULT_ALERT_BACKOFF_BASE_SECONDS,
+        ge=ALERT_BACKOFF_SECONDS_MIN,
+        le=ALERT_BACKOFF_SECONDS_MAX,
+    )
+    alert_backoff_cap_seconds: int = Field(
+        default=DEFAULT_ALERT_BACKOFF_CAP_SECONDS,
+        ge=ALERT_BACKOFF_SECONDS_MIN,
+        le=ALERT_BACKOFF_SECONDS_MAX,
+    )
+    # A claimed delivery is due again after the lease; one send is cancelled after the send
+    # timeout, which must be shorter than the lease.
+    alert_lease_seconds: int = Field(
+        default=DEFAULT_ALERT_LEASE_SECONDS, ge=ALERT_LEASE_SECONDS_MIN, le=ALERT_LEASE_SECONDS_MAX
+    )
+    alert_send_timeout_seconds: int = Field(
+        default=DEFAULT_ALERT_SEND_TIMEOUT_SECONDS,
+        ge=ALERT_SEND_TIMEOUT_SECONDS_MIN,
+        le=ALERT_SEND_TIMEOUT_SECONDS_MAX,
+    )
 
     @field_validator("secret_key", "encryption_key", mode="after")
     @classmethod
@@ -368,6 +421,18 @@ class Settings(BaseSettings):
             raise ConfigError(CONFIG_INVALID_VALUE_KEY, name="BASE_URL")
         if self.session_idle_timeout_minutes > self.session_absolute_timeout_minutes:
             raise ConfigError(CONFIG_INVALID_VALUE_KEY, name="SESSION_IDLE_TIMEOUT_MINUTES")
+        if self.alert_backoff_cap_seconds < self.alert_backoff_base_seconds:
+            raise ConfigError(
+                CONFIG_ALERT_BACKOFF_CAP_TOO_SHORT_KEY,
+                cap=str(self.alert_backoff_cap_seconds),
+                base=str(self.alert_backoff_base_seconds),
+            )
+        if self.alert_send_timeout_seconds >= self.alert_lease_seconds:
+            raise ConfigError(
+                CONFIG_ALERT_SEND_TIMEOUT_TOO_LONG_KEY,
+                timeout=str(self.alert_send_timeout_seconds),
+                lease=str(self.alert_lease_seconds),
+            )
         if not self.parsed_resolver_addrs() and self.resolver_mode in ("custom", "unbound"):
             raise ConfigError(CONFIG_RESOLVER_ADDRS_REQUIRED_KEY, mode=self.resolver_mode)
         # Parsed once here: an invalid entry fails at startup, requests reuse the result.
