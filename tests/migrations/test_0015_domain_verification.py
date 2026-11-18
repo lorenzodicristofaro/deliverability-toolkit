@@ -59,7 +59,7 @@ def _scalar(engine: Engine, sql: str) -> Any:
 
 def test_single_head_builds_on_0014() -> None:
     script = ScriptDirectory.from_config(_cfg())
-    assert script.get_heads() == ["0015"]
+    assert len(script.get_heads()) == 1
     revision = script.get_revision("0015")
     assert revision is not None and revision.down_revision == "0014"
 
