@@ -28,6 +28,7 @@ from app.repositories.alerts import (
     INVALID_ERROR,
     AlertDeliveryRepository,
     AlertInvalid,
+    AlertReleaseRepository,
     AlertRepository,
     AlertRuleRepository,
     error_code,
@@ -575,3 +576,73 @@ def test_suppressed_stream_heads_and_latest_unsuppressed(world: World) -> None:
     b = world.repos("b").alerts
     assert len(b.suppressed_stream_heads()) == 1
     assert b.latest_unsuppressed_in_stream(world.domains["a1"], h("stream")) is None
+
+
+# --- cross-tenant release candidates (M7-14c) ---------------------------------------------------
+
+M = timedelta(minutes=1)
+
+
+def _flapped(world: World, tenant: str, domain: str, start: datetime, tag: str) -> None:
+    """fp1 sent at start, fp2 sent at +5 min, fp1 again suppressed at +10 min (the head)."""
+    stream = h(f"s-{tag}")
+    for i, (fp, suppressed) in enumerate([("1", False), ("2", False), ("1", True)]):
+        world.alert(
+            tenant=tenant, domain=domain, stream=stream, fingerprint=h(f"{tag}{fp}"),
+            state_hash=h(f"{tag}{i}"), suppressed=suppressed, created_at=start + 5 * i * M,
+        )  # fmt: skip
+
+
+def test_tenants_with_suppressed_heads_are_listed_when_due_longest_first(world: World) -> None:
+    _flapped(world, "a", "a1", T0, "a")  # due at T0 + 60 min
+    _flapped(world, "b", "b1", T0 - 30 * M, "b")  # due at T0 + 30 min
+    world.session.commit()
+    system = AlertReleaseRepository(world.session)
+    hour = timedelta(hours=1)
+    a, b = world.tenant_a, world.tenant_b
+    assert system.tenants_with_suppressed_heads(T0 + 29 * M, 10, window=hour) == []
+    assert system.tenants_with_suppressed_heads(T0 + 30 * M, 10, window=hour) == [b]
+    assert system.tenants_with_suppressed_heads(T0 + 60 * M, 10, window=hour) == [b, a]
+    assert system.tenants_with_suppressed_heads(T0 + 60 * M, 1, window=hour) == [b]
+    # Without a window every head counts, but never one created after `now`.
+    assert system.tenants_with_suppressed_heads(T0 + 10 * M, 10) == [b, a]
+    assert system.tenants_with_suppressed_heads(T0 + 9 * M, 10) == [b]
+    # Released (a newer delivered alert heads the stream): B leaves the set.
+    world.alert(
+        tenant="b", domain="b1", stream=h("s-b"), fingerprint=h("b1"), state_hash=h("released"),
+        created_at=T0 + 31 * M,
+    )  # fmt: skip
+    world.session.commit()
+    assert system.tenants_with_suppressed_heads(T0 + 60 * M, 10, window=hour) == [a]
+
+
+def test_suppressed_head_equal_to_the_delivered_state_is_not_listed(world: World) -> None:
+    world.alert(stream=h("s"), fingerprint=h("x"), state_hash=h("1"), created_at=T0)
+    world.alert(stream=h("s"), fingerprint=h("y"), state_hash=h("2"), suppressed=True)
+    world.alert(stream=h("s"), fingerprint=h("x"), state_hash=h("3"), suppressed=True)
+    world.session.commit()
+    system = AlertReleaseRepository(world.session)
+    assert system.tenants_with_suppressed_heads(T0 + timedelta(days=1), 10) == []
+
+
+@pytest.mark.parametrize(
+    ("now", "limit", "window"),
+    [
+        (datetime(2026, 1, 1), 1, timedelta(0)),
+        ("2026-01-01T00:00:00Z", 1, timedelta(0)),
+        (T0, 0, timedelta(0)),
+        (T0, MAX_LIMIT + 1, timedelta(0)),
+        (T0, True, timedelta(0)),
+        (T0, "5", timedelta(0)),
+        (T0, 5, timedelta(seconds=-1)),
+        (T0, 5, 60),
+    ],
+    ids=repr,
+)
+def test_tenants_with_suppressed_heads_rejects_malformed(
+    world: World, now: Any, limit: Any, window: Any
+) -> None:
+    with pytest.raises(AlertInvalid):
+        AlertReleaseRepository(world.session).tenants_with_suppressed_heads(
+            now, limit, window=window
+        )

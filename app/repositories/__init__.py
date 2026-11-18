@@ -32,6 +32,10 @@ Entry points:
   ids only). `AlertChannelSecretRotation.rotate_all` re-encrypts every stored channel secret
   after a key rotation. Neither is part of `repo_for`; tenant access to channels is
   `repo_for(ctx).alert_channels`.
+- `AlertReleaseRepository` (app.repositories.alerts, M7-14c) is the suppressed-alert release
+  loop's system entry point: its `tenants_with_suppressed_heads` is the only cross-tenant read of
+  alerts (read-only, tenant ids only). Not part of `repo_for`; the release itself goes through
+  `repo_for(ctx).alerts`.
 
 Cross-tenant ids behave exactly like missing ids (None/False), so upstream maps them to 404.
 """

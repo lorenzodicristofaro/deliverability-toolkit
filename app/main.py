@@ -1,7 +1,9 @@
+import asyncio
 import logging
 import random
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from http import HTTPStatus
 
 from fastapi import FastAPI, Request
@@ -11,6 +13,7 @@ from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import ArgumentError
+from sqlalchemy.orm import Session, sessionmaker
 from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
@@ -19,14 +22,21 @@ from app.core.config import Settings
 from app.core.csrf import CSRFMiddleware
 from app.core.i18n import t, validate_catalogues
 from app.core.logging import RequestLoggingMiddleware, configure_logging
+from app.core.secrets_crypto import SecretCipher, SecretsError
 from app.core.security_headers import SecurityHeadersMiddleware
 from app.dns.cache import CachingResolver
 from app.dns.factory import build_resolver
 from app.repositories.monitor_targets import known_check_ids
+from app.services.alert_dispatch import (
+    DEFAULT_POLL_INTERVAL,
+    AlertDispatcher,
+    default_registry,
+)
+from app.services.alerts import AlertService
 from app.services.auth import SessionPolicy, purge_sessions
-from app.services.clock import SystemClock
+from app.services.clock import Clock, SystemClock
 from app.services.dns_snapshot import heartbeat_from_settings
-from app.services.monitor_run import MonitorRunExecutor
+from app.services.monitor_run import AlertReleaser, MonitorRunExecutor
 from app.services.scheduler import MonitorScheduler, SchedulerConfig, maintenance_job
 from app.services.seed_sync import SeedSyncError, run_seed_sync
 from app.web.auth import router as auth_router
@@ -52,6 +62,7 @@ from app.web.templating import router as language_router
 
 logger = logging.getLogger("app.seed_sync")
 purge_logger = logging.getLogger("app.session_purge")
+alerts_logger = logging.getLogger("app.alerts")
 
 _MIN_MASKED_LEN = 8  # same threshold as app.core.logging: shorter values are not masked
 
@@ -120,19 +131,33 @@ def purge_sessions_at_startup(app: FastAPI) -> None:
     )
 
 
+@dataclass(frozen=True, slots=True)
+class AlertWiring:
+    """What `start_scheduler` built for alerts (M7-14c); `start_alert_tasks` runs its loops."""
+
+    factory: sessionmaker[Session]
+    clock: Clock
+    alerts: AlertService
+
+
 def start_scheduler(app: FastAPI) -> MonitorScheduler | None:
     """Start the monitor scheduler and the maintenance timer for ROLE worker/all (M7-09);
-    None for ROLE=web. Needs the running event loop."""
+    None for ROLE=web. Change events go to the alert service (M7-14c); the wiring is kept in
+    `app.state.alert_wiring` for `start_alert_tasks`. Needs the running event loop."""
     cfg: Settings = app.state.settings
+    app.state.alert_wiring = None
     if cfg.role not in ("worker", "all"):
         return None
     factory = _session_factory(Request({"type": "http", "app": app}))
     clock = SystemClock()
-    executor = MonitorRunExecutor(  # M7-10; change events are logged until M7-14 delivers them
+    alerts = AlertService.from_settings(factory, clock, cfg)
+    app.state.alert_wiring = AlertWiring(factory, clock, alerts)
+    executor = MonitorRunExecutor(  # M7-10
         factory,
         CachingResolver(build_resolver(cfg)),
         clock,
         heartbeat=heartbeat_from_settings(cfg),
+        sink=alerts,
     )
     scheduler = MonitorScheduler(
         factory,
@@ -144,6 +169,48 @@ def start_scheduler(app: FastAPI) -> MonitorScheduler | None:
     )
     scheduler.start(maintenance_job(factory, cfg, clock))
     return scheduler
+
+
+def start_alert_tasks(app: FastAPI) -> list[asyncio.Task[None]]:
+    """After `start_scheduler` (ROLE worker/all only): the release loop of suppressed alerts and
+    the M7-15 delivery loop, one task each; none for ROLE=web. Without a usable ENCRYPTION_KEY
+    the delivery loop is not started (logged; deliveries stay pending until a restart with a
+    valid key). Needs the running event loop; stop them with `stop_alert_tasks`."""
+    wiring: AlertWiring | None = getattr(app.state, "alert_wiring", None)
+    cfg: Settings = app.state.settings
+    if wiring is None or cfg.role not in ("worker", "all"):
+        return []
+    releaser = AlertReleaser(wiring.factory, wiring.alerts, wiring.clock)
+    tasks = [asyncio.create_task(releaser.run(), name="alerts.release")]
+    try:
+        cipher = SecretCipher(cfg.encryption_key.get_secret_value())
+    except SecretsError as exc:
+        alerts_logger.error(
+            "alert delivery not started: %s",
+            exc,  # fixed text without key material (app.core.secrets_crypto)
+            extra={"event": "alerts.dispatcher_not_started"},
+        )
+        return tasks
+    dispatcher = AlertDispatcher(
+        wiring.factory, wiring.alerts, default_registry(), cipher, wiring.clock
+    )
+    tasks.append(asyncio.create_task(_delayed_dispatch(dispatcher), name="alerts.dispatch"))
+    return tasks
+
+
+async def _delayed_dispatch(dispatcher: AlertDispatcher) -> None:
+    """The delivery loop, first pass one poll interval after start (as the scheduler's first
+    tick and the release loop), so starting the app touches no alert table at once."""
+    await asyncio.sleep(DEFAULT_POLL_INTERVAL.total_seconds())
+    await dispatcher.run()
+
+
+async def stop_alert_tasks(tasks: list[asyncio.Task[None]]) -> None:
+    """Cancel the alert loops and wait for them (a delivery cancelled mid-send stays claimed and
+    is due again when its lease ends, M7-14)."""
+    for task in tasks:
+        task.cancel()
+    await asyncio.gather(*tasks, return_exceptions=True)
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -163,9 +230,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         await run_in_threadpool(sync_seeds_at_startup, app)
         await run_in_threadpool(purge_sessions_at_startup, app)
         app.state.scheduler = start_scheduler(app)
+        app.state.alert_tasks = start_alert_tasks(app)
         try:
             yield
         finally:
+            await stop_alert_tasks(app.state.alert_tasks)
             if app.state.scheduler is not None:
                 await app.state.scheduler.shutdown()
 

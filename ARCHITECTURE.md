@@ -215,7 +215,8 @@ newest snapshot of each domain is never pruned (it is the baseline of the next d
   ok = info < warn < fail), and the snapshot with the last non-error state of each entry
   (`carry_forward` over recent snapshots); an `error` result yields only error events, a first run
   none. Events carry a deterministic fingerprint (kind, domain_id, subject, hash of the new state)
-  and go to an injected `EventSink`; until M7-14 (delivery, dedup) the app logs them.
+  and go to an injected `EventSink`, called in a worker thread; the app wires the alert
+  service (M7-14c, below).
 - Alerts (M7-14, `app/services/alerts.py`, `app/repositories/alerts.py`, migration 0016).
   Semantics: "exactly once per change" means exactly one `alerts` row per (tenant, fingerprint,
   state transition), and at-least-once delivery attempts per channel with an idempotent per-channel
@@ -245,10 +246,10 @@ newest snapshot of each domain is never pruned (it is the baseline of the next d
   The `EventSink` form raises `EmitIncomplete` when an event could not be recorded, so the
   caller can retry the batch (recorded events are duplicates on retry).
   Flapping: a true change to a fingerprint whose last non-suppressed alert is younger than
-  `min_realert` (an `AlertService` setting, default 1 hour) is stored as a `suppressed` row:
+  `min_realert` (`ALERT_MIN_REALERT_MINUTES`, default 1 hour) is stored as a `suppressed` row:
   counted and visible, not delivered, and it is the stream's new state. The tenant still ends up
   notified of the current state: `release_suppressed(ctx, now)` (sync, called periodically,
-  wiring M7-14c) takes each stream whose latest alert is suppressed, whose fingerprint's window
+  see Wiring) takes each stream whose latest alert is suppressed, whose fingerprint's window
   has ended and whose state differs from the stream's last delivered alert, and inserts one
   deliverable alert of that state (with deliveries) with `state_hash` derived from the
   suppressed head's id, so concurrent or repeated calls release it exactly once. When the final
@@ -270,6 +271,29 @@ newest snapshot of each domain is never pruned (it is the baseline of the next d
   is permanent (`DeliveryError(code, permanent=True)`, M7-15; same attempt guard as `sent`, so a
   stale worker cannot abandon). Failures are stored and logged as a stable
   code only, never a message, response body or secret.
+  Wiring (M7-14c, scheduler process only, ROLE worker|all): the run executor's sink is
+  `AlertService.from_settings` (the `ALERT_*` settings, section 11 of SETUP.md). On
+  `EmitIncomplete` the executor offers the same events again, 3 attempts in all with 2 s / 4 s
+  backoff, and only while it is still the latest run of that target: the latest started in this
+  process, and before each retry the latest stored (the target's `last_run_at` is still this
+  run's start; a failed check is a failed attempt), which keeps a retry from replaying an older
+  run after a newer one another replica already stored. The guard is not complete across
+  replicas: check and insert are separate transactions, so a rare window remains where a
+  transient error plus a newer run of the same target on another worker within the retry window
+  (about 6 s) can replay an older state out of order and insert a wrong head change (e.g.
+  "listed" after "cleared"); tracked as follow-up M7-14d (check and insert in the same
+  transaction inside the alerts service). Other sink errors are logged and never fail the run.
+  The lifespan
+  (`app/main.py`) starts two tasks next to the scheduler: `AlertReleaser.run`
+  (`app/services/monitor_run.py`) every 30 s and the M7-15 `AlertDispatcher.run` loop (not
+  started, and logged, when ENCRYPTION_KEY is not a usable key), each with its first pass one
+  interval after start, like the scheduler's first tick; both are cancelled and awaited on shutdown. Each release pass reads, cross-tenant and
+  read-only, `AlertReleaseRepository.tenants_with_suppressed_heads(now, 100, window=min_realert)`
+  (tenant ids whose suppressed head's window has ended, longest due first) and calls
+  `release_suppressed` per tenant through its `TenantContext`. Nothing is kept in memory, so a
+  restart or a tenant without monitor targets still gets its release.
+  `AlertDispatchRepository.tenants_with_due` orders tenants by their oldest due delivery (then
+  id), so a tenant left out of one pass by the batch limit is not starved by lower ids.
 - Maintenance (M7-09): every `MAINTENANCE_INTERVAL_MINUTES` the scheduler process runs the session
   purge (`purge_sessions` with the session policy; every role also purges once at startup),
   `prune_check_runs` and `prune_dns_snapshots`, each in its own transaction; a failure is logged

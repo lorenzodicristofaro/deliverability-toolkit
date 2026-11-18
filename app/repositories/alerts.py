@@ -17,6 +17,10 @@ Idempotence (ARCHITECTURE section 6, "Alerts"):
   (`claim`, `mark_sent`, `mark_failed`): of two workers on the same delivery one wins, and a stale
   worker can never move a `sent` delivery back.
 
+`AlertReleaseRepository` holds `tenants_with_suppressed_heads`, the ONLY cross-tenant method
+of this module (M7-14c): the release loop's system entry point, not part of `repo_for`,
+read-only, tenant ids only. The release itself goes through `repo_for(TenantContext(id))`.
+
 Writes are flushed, not committed: the caller owns the transaction. Callers get immutable
 records, never ORM objects. Values are validated before the database (same outcome on SQLite and
 PostgreSQL) and rejected with `AlertInvalid(field, reason)`, never echoing the value.
@@ -27,12 +31,12 @@ from __future__ import annotations
 import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, Final, cast
 
 from sqlalchemy import ColumnElement, CursorResult, Insert, Select, Table, func, select, update
 from sqlalchemy.dialects import postgresql, sqlite
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 
 from app.core.tenancy import TenantContext
 from app.models import Alert, AlertDelivery, AlertRule, Domain
@@ -415,6 +419,93 @@ class AlertRepository(_TenantRepository):
         return self.get(new_id)
 
 
+class AlertReleaseRepository:
+    """System entry point of the suppressed-alert release loop (M7-14c). Not tenant-scoped."""
+
+    __slots__ = ("_session",)
+
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def tenants_with_suppressed_heads(
+        self, now: object, limit: object, *, window: object = timedelta(0)
+    ) -> list[int]:
+        """Ids of the tenants with at least one stream whose latest alert is suppressed, differs
+        from the stream's latest not suppressed alert (as `AlertRepository.suppressed_stream_heads`)
+        and is due for release at `now`: its fingerprint's newest not suppressed alert is at least
+        `window` (the `min_realert`) old, or there is none. At most `limit` (1..MAX_LIMIT), the
+        tenant whose head has been due longest first (then by id): a released head leaves the set,
+        so a tenant left out of one pass moves up in the next. Read-only; ids only."""
+        at = _aware(now, "now")
+        size = _limit(limit)
+        if not isinstance(window, timedelta) or window < timedelta(0):
+            raise AlertInvalid("window", "malformed")
+        cutoff = at - window
+        ranked = select(
+            Alert.id.label("aid"),
+            func.row_number()
+            .over(
+                partition_by=(Alert.tenant_id, Alert.domain_id, Alert.stream),
+                order_by=Alert.id.desc(),
+            )
+            .label("rn"),
+        ).subquery()
+        delivered = (
+            select(
+                Alert.tenant_id.label("tid"),
+                Alert.domain_id.label("did"),
+                Alert.stream.label("stream"),
+                Alert.fingerprint.label("fp"),
+                func.row_number()
+                .over(
+                    partition_by=(Alert.tenant_id, Alert.domain_id, Alert.stream),
+                    order_by=Alert.id.desc(),
+                )
+                .label("rn"),
+            )
+            .where(Alert.suppressed.is_(False))
+            .subquery()
+        )
+        same_as_delivered = (
+            select(delivered.c.did)
+            .where(
+                delivered.c.rn == 1,
+                delivered.c.tid == Alert.tenant_id,
+                delivered.c.did == Alert.domain_id,
+                delivered.c.stream == Alert.stream,
+                delivered.c.fp == Alert.fingerprint,
+            )
+            .exists()
+        )
+        sent = aliased(Alert)
+        last_sent = (
+            select(func.max(sent.created_at))
+            .where(
+                sent.tenant_id == Alert.tenant_id,
+                sent.fingerprint == Alert.fingerprint,
+                sent.suppressed.is_(False),
+            )
+            .scalar_subquery()
+        )
+        # No earlier delivered alert of the fingerprint: due at head time + window (delays a
+        # release, never loses one).
+        since = func.coalesce(last_sent, Alert.created_at)
+        stmt = (
+            select(Alert.tenant_id)
+            .where(
+                Alert.id.in_(select(ranked.c.aid).where(ranked.c.rn == 1)),
+                Alert.suppressed.is_(True),
+                ~same_as_delivered,
+                Alert.created_at <= at,
+                since <= cutoff,
+            )
+            .group_by(Alert.tenant_id)
+            .order_by(func.min(since), Alert.tenant_id)
+            .limit(size)
+        )
+        return list(self._session.scalars(stmt))
+
+
 # --- deliveries --------------------------------------------------------------------------------
 
 
@@ -627,6 +718,7 @@ class AlertRuleRepository(_TenantRepository):
 __all__ = [
     "AlertDeliveryRepository",
     "AlertInvalid",
+    "AlertReleaseRepository",
     "AlertRecord",
     "AlertRepository",
     "AlertRuleRecord",

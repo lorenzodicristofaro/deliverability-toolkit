@@ -58,6 +58,7 @@ from typing import Final
 
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.core.config import Settings
 from app.core.tenancy import TenantContext
 from app.models.alert import KINDS
 from app.repositories import TenantRepositories, repo_for
@@ -272,6 +273,26 @@ class AlertService:
         self._send_timeout = _positive(send_timeout, "send_timeout")
         if self._send_timeout >= self._lease:
             raise ValueError("send_timeout must be shorter than lease")
+
+    @classmethod
+    def from_settings(
+        cls, factory: sessionmaker[Session], clock: Clock, cfg: Settings
+    ) -> AlertService:
+        """The service with the ALERT_* settings (M7-14c; ranges validated by `Settings`)."""
+        return cls(
+            factory,
+            clock,
+            min_realert=timedelta(minutes=cfg.alert_min_realert_minutes),
+            max_attempts=cfg.alert_max_attempts,
+            backoff_base=timedelta(seconds=cfg.alert_backoff_base_seconds),
+            backoff_cap=timedelta(seconds=cfg.alert_backoff_cap_seconds),
+            lease=timedelta(seconds=cfg.alert_lease_seconds),
+            send_timeout=timedelta(seconds=cfg.alert_send_timeout_seconds),
+        )
+
+    @property
+    def min_realert(self) -> timedelta:
+        return self._min_realert
 
     # --- creation ------------------------------------------------------------------------------
 

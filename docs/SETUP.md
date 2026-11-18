@@ -233,6 +233,17 @@ at startup. `compose.yaml` forwards each one with the same default.
 | `DNS_SNAPSHOT_RETENTION_DAYS` | `365` | 1-3650 | DNS snapshots older than this are pruned (never earlier than `CHECK_RUN_RETENTION_DAYS`; each domain keeps its newest snapshot). |
 | `DNS_SNAPSHOT_HEARTBEAT_HOURS` | `24` | 1-720 | An unchanged DNS snapshot is stored again after this many hours. |
 | `DOMAIN_VERIFY_TOKEN_TTL_HOURS` | `72` | 1-720 | Hours a domain ownership verification token stays valid; after that the owner starts again. |
+| `ALERT_MIN_REALERT_MINUTES` | `60` | 0-10080 | A change back to a state that was alerted less than this ago is recorded but not sent; if it is still the current state when the window ends, it is sent once then. `0` sends every change. |
+| `ALERT_MAX_ATTEMPTS` | `5` | 1-100 | Delivery attempts per alert and channel before the delivery is abandoned. |
+| `ALERT_BACKOFF_BASE_SECONDS` | `60` | 1-86400 | Delay after a failed attempt: this, doubled after each further failure. |
+| `ALERT_BACKOFF_CAP_SECONDS` | `3600` | 1-86400 | Longest delay between attempts; not shorter than `ALERT_BACKOFF_BASE_SECONDS`. |
+| `ALERT_LEASE_SECONDS` | `300` | 10-3600 | A delivery being sent is retried after this if the container stopped mid-send. |
+| `ALERT_SEND_TIMEOUT_SECONDS` | `60` | 1-3599 | One send is cancelled after this (a retryable failure); must be shorter than `ALERT_LEASE_SECONDS`. |
+
+Alerts are created by scheduled runs and delivered by the same `worker`/`all` containers, which
+poll for due deliveries every 30 seconds. Delivery needs a valid `ENCRYPTION_KEY` (section 10):
+without one the container logs `alerts.dispatcher_not_started` and alerts wait until a restart
+with a valid key. The alert defaults are project choices, not taken from any provider's limits.
 
 A target that hits a rate limit is postponed to when the limit has room, not skipped. The limits
 are counted per container, in memory: a restart starts with a full allowance, and with several

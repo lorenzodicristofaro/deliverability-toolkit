@@ -30,8 +30,22 @@ One run of a `ScheduledRun`:
    stopping as soon as every such list is resolved). A list that errored for any number of runs
    is still judged against its last real outcome, and a list failing for good blocks nothing.
 5. Events: `change_detect.detect_events` (pure) after the commit, handed to the injected
-   `EventSink`. Until M7-14 (delivery and dedup) the app wires `log_events`, which only logs kind,
-   domain id and fingerprint. Nothing is stored for events here.
+   `EventSink` in a worker thread. The app wires the M7-14 `AlertService` (M7-14c), which
+   records them (dedup, flapping, deliveries). `log_events` (kind, domain id and fingerprint only)
+   is the default when nothing is injected. When the sink raises `EmitIncomplete` (some events not
+   recorded, e.g. a transient database error), the same events are offered again, at most
+   `emit_attempts` times in all with exponential backoff from `emit_backoff`, and only while this
+   is still the latest run of the target: started by this executor (in memory) and, before each
+   retry, stored (the target's `last_run_at` in the database is still this run's start), which
+   keeps a retry from replaying an older run after a newer one another worker already stored
+   (M7-14: replaying an older run alerts again). A failed check counts as a failed attempt (same
+   retry and backoff). The guard is not complete across workers: the check and the insert are
+   separate transactions, so a rare window remains where a transient error plus a newer run of
+   the same target on another worker within the retry window (about 6 s) can replay an older
+   state out of order and insert a wrong head change (e.g. "listed" after "cleared"). Tracked as
+   follow-up M7-14d (check and insert in the same transaction inside the alerts service). Any
+   other sink exception, or the last failed attempt, is logged by type and never fails the run.
+   Suppressed alerts are released by `AlertReleaser` (below), independently of runs.
 
 Not produced: certificate/key expiry events (no check reads them before M9; see change_detect).
 Blocking database work runs in worker threads, so the event loop is never blocked.
@@ -40,8 +54,9 @@ Blocking database work runs in worker threads, so the event loop is never blocke
 from __future__ import annotations
 
 import asyncio
+import itertools
 import logging
-from collections.abc import Callable, Iterable, Iterator, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Final
@@ -55,6 +70,7 @@ from app.core.tenancy import TenantContext
 from app.dns.types import Resolver
 from app.models.check_run import MAX_DURATION_MS
 from app.repositories import TenantRepositories, repo_for
+from app.repositories.alerts import AlertReleaseRepository
 from app.repositories.base import MAX_LIMIT
 from app.repositories.check_runs import CheckRunInvalid, CheckRunRecord
 from app.repositories.dns_snapshots import (
@@ -62,6 +78,7 @@ from app.repositories.dns_snapshots import (
     DnsSnapshotRecord,
     SnapshotCursor,
 )
+from app.services.alerts import AlertService, EmitIncomplete
 from app.services.change_detect import (
     ChangeEvent,
     CheckInput,
@@ -86,6 +103,15 @@ HISTORY_LIMIT: Final = 50
 SOURCE: Final = "scheduled"
 UNKNOWN_CHECK: Final = "unknown_check"
 RUNNER_FAILED: Final = "runner_failed"
+# Emit retries after `EmitIncomplete` (M7-14c), project choices: 3 attempts in all, waiting 2 s then
+# 4 s, so a run holds its scheduler slot at most a few seconds longer.
+DEFAULT_EMIT_ATTEMPTS: Final = 3
+DEFAULT_EMIT_BACKOFF: Final = timedelta(seconds=2)
+MAX_EMIT_ATTEMPTS: Final = 10
+# Suppressed alerts are released this often by `AlertReleaser.run` (as the M7-15 dispatcher), at
+# most this many tenants per pass (the next pass takes the rest, longest due first).
+DEFAULT_RELEASE_INTERVAL: Final = timedelta(seconds=30)
+DEFAULT_RELEASE_TENANTS: Final = 100
 # `last_status` summary: a failure is never hidden by an error, an error never by a lesser status.
 _SUMMARY_ORDER: Final[tuple[str, ...]] = ("fail", "error", "warn", "info", "ok")
 
@@ -254,11 +280,18 @@ class MonitorRunExecutor:
         prepare: RegistryFn = prepare_registry,
         deadline_s: float = DEFAULT_DEADLINE_S,
         history: int = HISTORY_LIMIT,
+        emit_attempts: int = DEFAULT_EMIT_ATTEMPTS,
+        emit_backoff: timedelta = DEFAULT_EMIT_BACKOFF,
+        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
         if not isinstance(heartbeat, timedelta) or heartbeat <= timedelta(0):
             raise ValueError("heartbeat must be a positive timedelta")
         if type(history) is not int or not 1 <= history <= MAX_LIMIT:
             raise ValueError(f"history must be an int between 1 and {MAX_LIMIT}")
+        if type(emit_attempts) is not int or not 1 <= emit_attempts <= MAX_EMIT_ATTEMPTS:
+            raise ValueError(f"emit_attempts must be an int between 1 and {MAX_EMIT_ATTEMPTS}")
+        if not isinstance(emit_backoff, timedelta) or emit_backoff < timedelta(0):
+            raise ValueError("emit_backoff must be a non-negative timedelta")
         self._factory = factory
         self._resolver = resolver
         self._clock = clock
@@ -267,12 +300,27 @@ class MonitorRunExecutor:
         self._prepare = prepare
         self._deadline_s = deadline_s
         self._history = history
+        self._emit_attempts = emit_attempts
+        self._emit_backoff = emit_backoff
+        self._sleep = sleep
+        # Latest run started per target id (this executor): an older run never replays its events.
+        self._runs = itertools.count(1)
+        self._latest: dict[int, int] = {}
 
     async def __call__(self, run: ScheduledRun) -> None:
         await self.execute(run)
 
     async def execute(self, run: ScheduledRun) -> RunOutcome | None:
         """Run, store and detect for one claimed target. None if the target or domain is gone."""
+        number = next(self._runs)
+        self._latest[run.target.id] = number
+        try:
+            return await self._execute(run, number)
+        finally:
+            if self._latest.get(run.target.id) == number:
+                del self._latest[run.target.id]
+
+    async def _execute(self, run: ScheduledRun, number: int) -> RunOutcome | None:
         ctx = TenantContext(run.target.tenant_id, None)
         now = self._clock.now()
         ids = list(run.target.check_ids)
@@ -327,10 +375,7 @@ class MonitorRunExecutor:
         )
         events = detect_events(loaded.domain_id, inputs, loaded.snapshot_baseline, snapshot)
         if events:
-            try:
-                self._sink(ctx, events)
-            except Exception as exc:  # noqa: BLE001 - a sink failure never fails the run
-                self._log_failed("sink", exc)
+            await self._emit(ctx, run.target.id, number, events, None if status is None else now)
         logger.info(
             "scheduled run of target %d done (%s, %d checks, %d events)",
             run.target.id,
@@ -340,6 +385,78 @@ class MonitorRunExecutor:
             extra={"event": "monitor_run.done"},
         )
         return RunOutcome(run.target.id, status, results, recorded, stored, tuple(events))
+
+    async def _emit(
+        self,
+        ctx: TenantContext,
+        target_id: int,
+        number: int,
+        events: Sequence[ChangeEvent],
+        stored_at: datetime | None,
+    ) -> None:
+        """Hand the events to the sink (worker thread); retry `EmitIncomplete` for the latest
+        run of the target only, bounded (module docstring). `stored_at` is the `last_run_at` this
+        run wrote (None: it wrote none, only the in-memory guard applies). Raises only on
+        cancellation."""
+        for attempt in range(1, self._emit_attempts + 1):
+            last = attempt >= self._emit_attempts
+            try:
+                superseded = self._latest.get(target_id) != number
+                if not superseded and attempt > 1 and stored_at is not None:
+                    superseded = not await asyncio.to_thread(
+                        self._still_latest, ctx, target_id, stored_at
+                    )
+            except Exception as exc:  # noqa: BLE001 - a failed check is a failed attempt
+                self._attempt_failed(ctx, target_id, attempt, type(exc).__name__)
+                if last:
+                    return
+                await self._sleep((self._emit_backoff * 2 ** (attempt - 1)).total_seconds())
+                continue
+            if superseded:
+                logger.warning(
+                    "change events of target %d not emitted (a newer run exists)",
+                    target_id,
+                    extra={"event": "monitor_run.emit_superseded", "tenant_id": ctx.tenant_id},
+                )
+                return
+            try:
+                await asyncio.to_thread(self._sink, ctx, events)
+                return
+            except EmitIncomplete as exc:
+                self._attempt_failed(ctx, target_id, attempt, f"{exc.result.failed} failed")
+                if last:
+                    return
+            except Exception as exc:  # noqa: BLE001 - a sink failure never fails the run
+                self._log_failed("sink", exc)
+                return
+            await self._sleep((self._emit_backoff * 2 ** (attempt - 1)).total_seconds())
+
+    def _attempt_failed(
+        self, ctx: TenantContext, target_id: int, attempt: int, reason: str
+    ) -> None:
+        last = attempt >= self._emit_attempts
+        logger.log(
+            logging.ERROR if last else logging.WARNING,
+            "change events of target %d not all recorded (%s, attempt %d of %d)",
+            target_id,
+            reason,
+            attempt,
+            self._emit_attempts,
+            extra={
+                "event": "monitor_run.emit_gave_up" if last else "monitor_run.emit_retry",
+                "tenant_id": ctx.tenant_id,
+            },
+        )
+
+    def _still_latest(self, ctx: TenantContext, target_id: int, stored_at: datetime) -> bool:
+        """The target's stored `last_run_at` is still `stored_at` (no newer run stored since,
+        by any worker). A missing target counts as superseded."""
+        with self._factory() as db:
+            try:
+                target = repo_for(ctx, db).monitor_targets.get(target_id)
+            finally:
+                db.rollback()
+        return target is not None and target.last_run_at == stored_at
 
     async def _run_checks(
         self, ids: list[str], loaded: _Loaded, ctx: TenantContext
@@ -491,8 +608,77 @@ class MonitorRunExecutor:
         return recorded, stored
 
 
+class AlertReleaser:
+    """Releases suppressed alerts once their `min_realert` window has ended (M7-14c).
+
+    Each pass reads, cross-tenant and read-only, the ids of the tenants with a suppressed stream
+    head due for release (`AlertReleaseRepository.tenants_with_suppressed_heads`, longest due
+    first, at most `tenants` per pass) and calls `AlertService.release_suppressed` for each with
+    `TenantContext(tenant_id, principal=None)`. Nothing is kept in memory: after a restart, or for
+    a tenant without any enabled monitor target, the next pass still finds the head.
+    `release_pending` is sync (worker thread); `run` calls it every `interval` until cancelled."""
+
+    def __init__(
+        self,
+        factory: sessionmaker[Session],
+        alerts: AlertService,
+        clock: Clock,
+        *,
+        interval: timedelta = DEFAULT_RELEASE_INTERVAL,
+        tenants: int = DEFAULT_RELEASE_TENANTS,
+        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    ) -> None:
+        if not isinstance(interval, timedelta) or interval <= timedelta(0):
+            raise ValueError("interval must be a positive timedelta")
+        if type(tenants) is not int or not 1 <= tenants <= MAX_LIMIT:
+            raise ValueError(f"tenants must be an int between 1 and {MAX_LIMIT}")
+        self._factory = factory
+        self._alerts = alerts
+        self._clock = clock
+        self._interval = interval
+        self._tenants = tenants
+        self._sleep = sleep
+
+    def due_tenants(self, now: datetime) -> list[int]:
+        with self._factory.begin() as db:
+            return AlertReleaseRepository(db).tenants_with_suppressed_heads(
+                now, self._tenants, window=self._alerts.min_realert
+            )
+
+    def release_pending(self) -> int:
+        """One pass; returns the number of alerts released. A failure for one tenant is logged
+        by type and the others still run (the failed one is due again at the next pass)."""
+        now = self._clock.now()
+        released = 0
+        for tenant_id in self.due_tenants(now):
+            try:
+                released += self._alerts.release_suppressed(TenantContext(tenant_id, None), now)
+            except Exception as exc:  # noqa: BLE001 - one tenant never blocks the others
+                logger.error(
+                    "suppressed alerts not released (%s)",
+                    type(exc).__name__,
+                    extra={"event": "monitor_run.release_failed", "tenant_id": tenant_id},
+                )
+        return released
+
+    async def run(self) -> None:
+        """Call `release_pending` in a worker thread every `interval` until cancelled; the first
+        pass runs one interval after start (as the scheduler's first tick)."""
+        while True:
+            await self._sleep(self._interval.total_seconds())
+            try:
+                await asyncio.to_thread(self.release_pending)
+            except Exception as exc:  # noqa: BLE001 - the loop survives a failed pass
+                logger.error(
+                    "suppressed alert release pass failed (%s)",
+                    type(exc).__name__,
+                    extra={"event": "monitor_run.release_pass_failed"},
+                )
+
+
 __all__ = [
     "HISTORY_LIMIT",
+    "AlertReleaser",
     "EventSink",
     "MonitorRunExecutor",
     "RegistryFn",
