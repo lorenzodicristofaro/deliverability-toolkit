@@ -400,6 +400,37 @@ async def test_a_newer_run_stored_by_another_replica_stops_the_retry(
     assert any(getattr(r, "event", "") == "monitor_run.emit_superseded" for r in caplog.records)
 
 
+async def test_a_failing_latest_run_check_is_a_failed_attempt_not_a_lost_alert(
+    world: mr.World, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The stored-run check before a retry fails once (database error): that attempt counts as
+    failed, the next one retries, the alert is recorded and nothing escapes the run."""
+    sleeps = Sleeps()
+    _, executor = wiring(world, sleep=sleeps)
+    due = world.target()
+    await run(world, executor, due)
+    _, flaky = wiring(world, failures=1, sleep=sleeps)
+    real = flaky._still_latest
+    checks: list[str] = []
+
+    def still_latest(*args: Any) -> bool:
+        checks.append("check")
+        if len(checks) == 1:
+            raise OperationalError("SELECT 1", {}, RuntimeError("db down: secret detail"))
+        return real(*args)
+
+    flaky._still_latest = still_latest  # type: ignore[method-assign]
+    world.zone(spf=mr.SPF_Y)
+    with caplog.at_level(logging.WARNING):
+        out = await run(world, flaky, due)
+    assert out is not None and out.status == "ok"
+    assert alerts(world) == [("record_changed", False)]
+    assert checks == ["check", "check"] and sleeps.calls == [2.0, 4.0]
+    retries = [r for r in caplog.records if getattr(r, "event", "") == "monitor_run.emit_retry"]
+    assert len(retries) == 2 and "OperationalError" in retries[1].getMessage()
+    assert "secret detail" not in caplog.text
+
+
 async def test_a_retry_goes_ahead_while_no_newer_run_is_stored(world: mr.World) -> None:
     calls: list[int] = []
 

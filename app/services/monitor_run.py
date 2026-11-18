@@ -36,12 +36,16 @@ One run of a `ScheduledRun`:
    recorded, e.g. a transient database error), the same events are offered again, at most
    `emit_attempts` times in all with exponential backoff from `emit_backoff`, and only while this
    is still the latest run of the target: started by this executor (in memory) and, before each
-   retry, stored (the target's `last_run_at` in the database is still this run's start), so an
-   older run is not replayed after a newer one stored by another worker replica either (M7-14:
-   replaying an older run alerts again). A newer run that has not stored yet emits after this
-   one, which keeps the order. Any other sink exception, or
-   the last failed attempt, is logged by type and never fails the run. Suppressed alerts are
-   released by `AlertReleaser` (below), independently of runs.
+   retry, stored (the target's `last_run_at` in the database is still this run's start), which
+   keeps a retry from replaying an older run after a newer one another worker already stored
+   (M7-14: replaying an older run alerts again). A failed check counts as a failed attempt (same
+   retry and backoff). The guard is not complete across workers: the check and the insert are
+   separate transactions, so a rare window remains where a transient error plus a newer run of
+   the same target on another worker within the retry window (about 6 s) can replay an older
+   state out of order and insert a wrong head change (e.g. "listed" after "cleared"). Tracked as
+   follow-up M7-14d (check and insert in the same transaction inside the alerts service). Any
+   other sink exception, or the last failed attempt, is logged by type and never fails the run.
+   Suppressed alerts are released by `AlertReleaser` (below), independently of runs.
 
 Not produced: certificate/key expiry events (no check reads them before M9; see change_detect).
 Blocking database work runs in worker threads, so the event loop is never blocked.
@@ -395,11 +399,19 @@ class MonitorRunExecutor:
         run wrote (None: it wrote none, only the in-memory guard applies). Raises only on
         cancellation."""
         for attempt in range(1, self._emit_attempts + 1):
-            superseded = self._latest.get(target_id) != number
-            if not superseded and attempt > 1 and stored_at is not None:
-                superseded = not await asyncio.to_thread(
-                    self._still_latest, ctx, target_id, stored_at
-                )
+            last = attempt >= self._emit_attempts
+            try:
+                superseded = self._latest.get(target_id) != number
+                if not superseded and attempt > 1 and stored_at is not None:
+                    superseded = not await asyncio.to_thread(
+                        self._still_latest, ctx, target_id, stored_at
+                    )
+            except Exception as exc:  # noqa: BLE001 - a failed check is a failed attempt
+                self._attempt_failed(ctx, target_id, attempt, type(exc).__name__)
+                if last:
+                    return
+                await self._sleep((self._emit_backoff * 2 ** (attempt - 1)).total_seconds())
+                continue
             if superseded:
                 logger.warning(
                     "change events of target %d not emitted (a newer run exists)",
@@ -411,25 +423,30 @@ class MonitorRunExecutor:
                 await asyncio.to_thread(self._sink, ctx, events)
                 return
             except EmitIncomplete as exc:
-                last = attempt >= self._emit_attempts
-                logger.log(
-                    logging.ERROR if last else logging.WARNING,
-                    "change events of target %d partly not recorded (%d failed, attempt %d of %d)",
-                    target_id,
-                    exc.result.failed,
-                    attempt,
-                    self._emit_attempts,
-                    extra={
-                        "event": "monitor_run.emit_gave_up" if last else "monitor_run.emit_retry",
-                        "tenant_id": ctx.tenant_id,
-                    },
-                )
+                self._attempt_failed(ctx, target_id, attempt, f"{exc.result.failed} failed")
                 if last:
                     return
             except Exception as exc:  # noqa: BLE001 - a sink failure never fails the run
                 self._log_failed("sink", exc)
                 return
             await self._sleep((self._emit_backoff * 2 ** (attempt - 1)).total_seconds())
+
+    def _attempt_failed(
+        self, ctx: TenantContext, target_id: int, attempt: int, reason: str
+    ) -> None:
+        last = attempt >= self._emit_attempts
+        logger.log(
+            logging.ERROR if last else logging.WARNING,
+            "change events of target %d not all recorded (%s, attempt %d of %d)",
+            target_id,
+            reason,
+            attempt,
+            self._emit_attempts,
+            extra={
+                "event": "monitor_run.emit_gave_up" if last else "monitor_run.emit_retry",
+                "tenant_id": ctx.tenant_id,
+            },
+        )
 
     def _still_latest(self, ctx: TenantContext, target_id: int, stored_at: datetime) -> bool:
         """The target's stored `last_run_at` is still `stored_at` (no newer run stored since,
