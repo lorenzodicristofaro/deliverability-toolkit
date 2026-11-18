@@ -349,6 +349,7 @@ Tickets (docs/tickets/M7-*.md, split 2026-11-13; model in brackets):
   - [ ] Follow-up (should-fix, UX): mixed-case recipients like John@Example.com get 422; normalise (strip + lowercase) in alert-channel POST/PATCH before validate_config, test that it is stored lowercase.
   - [ ] Follow-up (nits): email channel builds its own Settings(); encoded-word in a param shows a decoded line break in the Subject; test budget derived in the channel from DEFAULT_TEST_TIMEOUT; SMTP_FROM accepts %; no SSL-mode (tls) loopback test.
 - [ ] M7-21b domain ownership verification by email (opus; depends M7-21a, M7-16; parallel-safe no)
+  - Status: in review (implemented, head 36a39f3 on feature/m7-21b-domain-verify-email, QA not started; see docs/HANDOFF.md).
 - [ ] M7-17 alert channel generic webhook (sonnet; depends M7-15, M7-01)
 - [ ] M7-18 alert channel Slack, payload to verify in official docs (sonnet; depends M7-17)
 - [ ] M7-19 alert channel Teams, mechanism to verify in official docs (sonnet; depends M7-17)
