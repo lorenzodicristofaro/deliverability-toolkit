@@ -324,7 +324,9 @@ Tickets (docs/tickets/M7-*.md, split 2026-11-13; model in brackets):
 - [x] M7-13 monitoring page + SVG trend charts (sonnet; depends M7-11, M7-12, M7-12b)
   - Status: done (8cb7933, QA APPROVE round 1; opus). Scope extended by GM: Monitoring tab link on the domain pages (can() flags in domains.py, domain_esps.py, authentication.py). Refresh link instead of polling (accepted deviation).
   - [ ] Follow-up (low, QA nits): monitoring/tab.html:4/:124 `check_name` macro emits `<code>` inside SVG `<text>` for a check id no longer in the catalogue (breaks the chart layout, not an injection): add a plain-text variant; app/web/monitoring.py:342 call known_check_ids() once outside the comprehension; tab.html:126 `height="{{ 14 }}"` -> `height="14"`. Page not yet looked at in a browser (labels, dark mode).
-- [ ] M7-14 alert state, dedup, exactly-once design (opus; depends M7-10, M7-10b)
+- [x] M7-14 alert state, dedup, exactly-once design (opus; depends M7-10, M7-10b)
+  - Status: done (73f4589, QA APPROVE round 3, maintainer-authorized). Design in ARCHITECTURE section 6; migration 0016; emit API raises EmitIncomplete; release_suppressed per tenant; head row locked FOR UPDATE. Wiring, periodic release and settings: M7-14c.
+  - [ ] Follow-up (low, QA nit): the release head query runs window functions over all of a tenant's alerts per page; bound it with an alert retention policy (later ticket). The emit-vs-release PostgreSQL race test takes ~1.4 s (1 s forced wait).
 - [ ] M7-14c wire alert emission into monitoring runs, start the delivery worker (opus; depends M7-14, M7-15 dispatcher loop)
 - [x] M7-14b secret encryption service, Fernet/MultiFernet, ARCHITECTURE §9 (opus; no deps)
   - Status: done (383dfd1, QA APPROVE round 2; round 1: secrets reachable via exception __context__, fixed).

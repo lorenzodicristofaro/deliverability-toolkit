@@ -16,7 +16,7 @@ Acceptance criteria:
 - Alert rules: minimal model deciding which event kinds go to which channels per tenant (kinds from M7-10); default if none configured: no delivery (alerts still recorded for the UI).
 - Tenant isolation tests on repository; migration up/down SQLite and PostgreSQL; fake clock, no network.
 New i18n keys: ALERT_RECORD_CHANGED, ALERT_NEW_LISTING, ALERT_LISTING_CLEARED, ALERT_POLICY_REGRESSION, ALERT_CHECK_ERROR (.title/.detail) (en + it); locale files touched, so serialize
-Status: in-review
+Status: done (merged 73f4589, QA APPROVE round 3; round 3 authorized by the maintainer 2026-11-18)
 Note (coder, M7-14): migration 0016 (after 0015). Files touched beyond the list: locales/en.json
 and locales/it.json (the new keys, as `alert.<CODE>.title/.detail`), tests/migrations/
 test_0016_alerts.py (migration up/down and constraints, both backends), and
