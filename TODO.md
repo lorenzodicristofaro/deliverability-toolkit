@@ -329,7 +329,10 @@ Tickets (docs/tickets/M7-*.md, split 2026-11-13; model in brackets):
   - [ ] Follow-up (low, QA nit): the release head query runs window functions over all of a tenant's alerts per page; bound it with an alert retention policy (later ticket). The emit-vs-release PostgreSQL race test takes ~1.4 s (1 s forced wait).
 - [x] M7-14c wire alert emission into monitoring runs, start the delivery worker (opus; depends M7-14, M7-15 dispatcher loop)
   - Status: done (dd152a5, QA APPROVE round 3, maintainer-authorized). Run executor sink, AlertDispatcher and AlertReleaser start with ROLE worker/all; latest-run guard before emit retries; new ALERT_* settings. Remaining replica window documented, closed by M7-14d.
-- [ ] M7-14d close the stale-replay window: latest-run check and alert insert in one transaction under the head-row lock (opus, concurrency; depends M7-14c) — ticket: docs/tickets/M7-14d-alert-replica-window.md
+- [x] M7-14d close the stale-replay window: latest-run check and alert insert in one transaction under the head-row lock (opus, concurrency; depends M7-14c) — ticket: docs/tickets/M7-14d-alert-replica-window.md
+  - Status: done (QA APPROVE round 1). Target row lock (PG FOR UPDATE, SQLite no-op UPDATE for the writer lock) then head lock in the emit transaction; superseded runs counted, not failed.
+  - [ ] Follow-up (should-fix, docs + design): a superseded emit means a change seen only by the older run is never alerted, because the newer run diffs against the older run's snapshot (missed alert instead of a wrong one; needs overlapping runs of one target). Add a sentence in app/services/alerts.py and ARCHITECTURE section 6; consider diffing the newer run against the stream head instead.
+  - [ ] Follow-up (nit): unit test for MonitorTargetRepository.lock_latest_run in tests/repositories/test_monitor_targets.py, asserting updated_at and last_run_at unchanged on SQLite.
 - [x] M7-14b secret encryption service, Fernet/MultiFernet, ARCHITECTURE §9 (opus; no deps)
   - Status: done (383dfd1, QA APPROVE round 2; round 1: secrets reachable via exception __context__, fixed).
   - [ ] Follow-up (low): app/main.py `log_secrets` masks ENCRYPTION_KEY only as the whole string; with several comma-separated keys each key should be masked separately

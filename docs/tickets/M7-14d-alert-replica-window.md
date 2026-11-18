@@ -22,5 +22,5 @@ Acceptance criteria:
 - No blocking DB call on the event loop; no network in unit tests.
 - The ARCHITECTURE.md section 6 and monitor_run.py docstring caveats are gone.
 New i18n keys: none
-Status: todo
+Status: done
 Note: the interleaving test needs a controllable barrier/fake clock, not sleeps. If the PostgreSQL test needs two connections, follow the existing emit-vs-release race test pattern from M7-14.
