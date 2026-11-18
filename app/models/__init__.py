@@ -1,3 +1,4 @@
+from app.models.alert import Alert, AlertDelivery, AlertRule
 from app.models.base import Base
 from app.models.check_run import CheckRun
 from app.models.content_rule import ContentRule
@@ -15,6 +16,9 @@ from app.models.tenant import Tenant
 from app.models.user import User
 
 __all__ = [
+    "Alert",
+    "AlertDelivery",
+    "AlertRule",
     "Base",
     "CheckRun",
     "ContentRule",

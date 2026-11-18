@@ -38,6 +38,11 @@ from dataclasses import dataclass
 from sqlalchemy.orm import Session
 
 from app.core.tenancy import TenantContext
+from app.repositories.alerts import (
+    AlertDeliveryRepository,
+    AlertRepository,
+    AlertRuleRepository,
+)
 from app.repositories.base import TenantScopedRepository, TenantScopeError
 from app.repositories.check_runs import CheckRunRepository, CheckRunRetentionRepository
 from app.repositories.content_rules import ContentRuleRepository, GlobalContentRuleRepository
@@ -70,6 +75,9 @@ class TenantRepositories:
     monitor_targets: MonitorTargetRepository
     check_runs: CheckRunRepository
     dns_snapshots: DnsSnapshotRepository
+    alerts: AlertRepository
+    alert_deliveries: AlertDeliveryRepository
+    alert_rules: AlertRuleRepository
 
 
 def repo_for(ctx: TenantContext, session: Session) -> TenantRepositories:
@@ -89,10 +97,16 @@ def repo_for(ctx: TenantContext, session: Session) -> TenantRepositories:
         monitor_targets=MonitorTargetRepository(ctx, session),
         check_runs=CheckRunRepository(ctx, session),
         dns_snapshots=DnsSnapshotRepository(ctx, session),
+        alerts=AlertRepository(ctx, session),
+        alert_deliveries=AlertDeliveryRepository(ctx, session),
+        alert_rules=AlertRuleRepository(ctx, session),
     )
 
 
 __all__ = [
+    "AlertDeliveryRepository",
+    "AlertRepository",
+    "AlertRuleRepository",
     "CheckRunRepository",
     "CheckRunRetentionRepository",
     "ContentRuleRepository",
