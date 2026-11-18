@@ -30,8 +30,16 @@ One run of a `ScheduledRun`:
    stopping as soon as every such list is resolved). A list that errored for any number of runs
    is still judged against its last real outcome, and a list failing for good blocks nothing.
 5. Events: `change_detect.detect_events` (pure) after the commit, handed to the injected
-   `EventSink`. Until M7-14 (delivery and dedup) the app wires `log_events`, which only logs kind,
-   domain id and fingerprint. Nothing is stored for events here.
+   `EventSink` in a worker thread. The app wires `AlertSink` (M7-14c): the M7-14 alert service
+   records them (dedup, flapping, deliveries). `log_events` (kind, domain id and fingerprint only)
+   is the default when nothing is injected. When the sink raises `EmitIncomplete` (some events not
+   recorded, e.g. a transient database error), the same events are offered again, at most
+   `emit_attempts` times in all with exponential backoff from `emit_backoff`, and only while this
+   is still the latest run of the target started by this executor: an older run is never replayed
+   after a newer one (M7-14: replaying an older run alerts again). Any other sink exception, or
+   the last failed attempt, is logged by type and never fails the run. After every completed run
+   the optional `on_run` hook gets the tenant id (in memory, no I/O): `AlertSink.note_run`, so
+   suppressed alerts of that tenant are released by `AlertSink.run_release` once due.
 
 Not produced: certificate/key expiry events (no check reads them before M9; see change_detect).
 Blocking database work runs in worker threads, so the event loop is never blocked.
@@ -40,8 +48,10 @@ Blocking database work runs in worker threads, so the event loop is never blocke
 from __future__ import annotations
 
 import asyncio
+import itertools
 import logging
-from collections.abc import Callable, Iterable, Iterator, Sequence
+import threading
+from collections.abc import Awaitable, Callable, Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Final
@@ -62,6 +72,7 @@ from app.repositories.dns_snapshots import (
     DnsSnapshotRecord,
     SnapshotCursor,
 )
+from app.services.alerts import AlertService, EmitIncomplete
 from app.services.change_detect import (
     ChangeEvent,
     CheckInput,
@@ -86,11 +97,19 @@ HISTORY_LIMIT: Final = 50
 SOURCE: Final = "scheduled"
 UNKNOWN_CHECK: Final = "unknown_check"
 RUNNER_FAILED: Final = "runner_failed"
+# Emit retries after `EmitIncomplete` (M7-14c), project choices: 3 attempts in all, waiting 2 s then
+# 4 s, so a run holds its scheduler slot at most a few seconds longer.
+DEFAULT_EMIT_ATTEMPTS: Final = 3
+DEFAULT_EMIT_BACKOFF: Final = timedelta(seconds=2)
+MAX_EMIT_ATTEMPTS: Final = 10
+# Suppressed alerts are released this often by `AlertSink.run_release` (as the M7-15 dispatcher).
+DEFAULT_RELEASE_INTERVAL: Final = timedelta(seconds=30)
 # `last_status` summary: a failure is never hidden by an error, an error never by a lesser status.
 _SUMMARY_ORDER: Final[tuple[str, ...]] = ("fail", "error", "warn", "info", "ok")
 
 RegistryFn = Callable[[TenantContext, Session, Sequence[str]], CheckRegistry]
 EventSink = Callable[[TenantContext, Sequence[ChangeEvent]], None]
+RunHook = Callable[[int], None]
 
 
 def prepare_registry(ctx: TenantContext, db: Session, ids: Sequence[str]) -> CheckRegistry:
@@ -254,11 +273,19 @@ class MonitorRunExecutor:
         prepare: RegistryFn = prepare_registry,
         deadline_s: float = DEFAULT_DEADLINE_S,
         history: int = HISTORY_LIMIT,
+        on_run: RunHook | None = None,
+        emit_attempts: int = DEFAULT_EMIT_ATTEMPTS,
+        emit_backoff: timedelta = DEFAULT_EMIT_BACKOFF,
+        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
         if not isinstance(heartbeat, timedelta) or heartbeat <= timedelta(0):
             raise ValueError("heartbeat must be a positive timedelta")
         if type(history) is not int or not 1 <= history <= MAX_LIMIT:
             raise ValueError(f"history must be an int between 1 and {MAX_LIMIT}")
+        if type(emit_attempts) is not int or not 1 <= emit_attempts <= MAX_EMIT_ATTEMPTS:
+            raise ValueError(f"emit_attempts must be an int between 1 and {MAX_EMIT_ATTEMPTS}")
+        if not isinstance(emit_backoff, timedelta) or emit_backoff < timedelta(0):
+            raise ValueError("emit_backoff must be a non-negative timedelta")
         self._factory = factory
         self._resolver = resolver
         self._clock = clock
@@ -267,12 +294,28 @@ class MonitorRunExecutor:
         self._prepare = prepare
         self._deadline_s = deadline_s
         self._history = history
+        self._on_run = on_run
+        self._emit_attempts = emit_attempts
+        self._emit_backoff = emit_backoff
+        self._sleep = sleep
+        # Latest run started per target id (this executor): an older run never replays its events.
+        self._runs = itertools.count(1)
+        self._latest: dict[int, int] = {}
 
     async def __call__(self, run: ScheduledRun) -> None:
         await self.execute(run)
 
     async def execute(self, run: ScheduledRun) -> RunOutcome | None:
         """Run, store and detect for one claimed target. None if the target or domain is gone."""
+        number = next(self._runs)
+        self._latest[run.target.id] = number
+        try:
+            return await self._execute(run, number)
+        finally:
+            if self._latest.get(run.target.id) == number:
+                del self._latest[run.target.id]
+
+    async def _execute(self, run: ScheduledRun, number: int) -> RunOutcome | None:
         ctx = TenantContext(run.target.tenant_id, None)
         now = self._clock.now()
         ids = list(run.target.check_ids)
@@ -327,10 +370,12 @@ class MonitorRunExecutor:
         )
         events = detect_events(loaded.domain_id, inputs, loaded.snapshot_baseline, snapshot)
         if events:
+            await self._emit(ctx, run.target.id, number, events)
+        if self._on_run is not None:
             try:
-                self._sink(ctx, events)
-            except Exception as exc:  # noqa: BLE001 - a sink failure never fails the run
-                self._log_failed("sink", exc)
+                self._on_run(ctx.tenant_id)
+            except Exception as exc:  # noqa: BLE001 - a hook failure never fails the run
+                self._log_failed("on_run", exc)
         logger.info(
             "scheduled run of target %d done (%s, %d checks, %d events)",
             run.target.id,
@@ -340,6 +385,43 @@ class MonitorRunExecutor:
             extra={"event": "monitor_run.done"},
         )
         return RunOutcome(run.target.id, status, results, recorded, stored, tuple(events))
+
+    async def _emit(
+        self, ctx: TenantContext, target_id: int, number: int, events: Sequence[ChangeEvent]
+    ) -> None:
+        """Hand the events to the sink (worker thread); retry `EmitIncomplete` for the latest
+        run of the target only, bounded (module docstring). Raises only on cancellation."""
+        for attempt in range(1, self._emit_attempts + 1):
+            if self._latest.get(target_id) != number:
+                logger.warning(
+                    "change events of target %d not emitted (a newer run started)",
+                    target_id,
+                    extra={"event": "monitor_run.emit_superseded", "tenant_id": ctx.tenant_id},
+                )
+                return
+            try:
+                await asyncio.to_thread(self._sink, ctx, events)
+                return
+            except EmitIncomplete as exc:
+                last = attempt >= self._emit_attempts
+                logger.log(
+                    logging.ERROR if last else logging.WARNING,
+                    "change events of target %d partly not recorded (%d failed, attempt %d of %d)",
+                    target_id,
+                    exc.result.failed,
+                    attempt,
+                    self._emit_attempts,
+                    extra={
+                        "event": "monitor_run.emit_gave_up" if last else "monitor_run.emit_retry",
+                        "tenant_id": ctx.tenant_id,
+                    },
+                )
+                if last:
+                    return
+            except Exception as exc:  # noqa: BLE001 - a sink failure never fails the run
+                self._log_failed("sink", exc)
+                return
+            await self._sleep((self._emit_backoff * 2 ** (attempt - 1)).total_seconds())
 
     async def _run_checks(
         self, ids: list[str], loaded: _Loaded, ctx: TenantContext
@@ -491,11 +573,101 @@ class MonitorRunExecutor:
         return recorded, stored
 
 
+class AlertSink:
+    """The scheduler process's `EventSink` (M7-14c): `AlertService` records the events (raising
+    `EmitIncomplete` when some were not recorded, so the executor retries), and the tenant is
+    remembered for `release_suppressed`.
+
+    Releasing: `AlertService.release_suppressed` is per tenant and there is no cross-tenant query
+    for streams with a suppressed head, so this keeps, per process and in memory, the tenants to
+    release with a deadline: a tenant whose events were offered stays until `min_realert` after
+    that (by then every alert suppressed so far has left its window), a tenant that only ran
+    (`note_run`, the executor's `on_run` hook) for one pass. `release_pending` (sync, worker
+    thread) releases each pending tenant and drops it once its deadline has passed;
+    `run_release` calls it every `interval`. After a restart, the next run of a tenant's target
+    puts the tenant back, so a suppressed state is released at the latest one run interval after
+    its window ended. Thread-safe."""
+
+    def __init__(
+        self,
+        alerts: AlertService,
+        clock: Clock,
+        *,
+        interval: timedelta = DEFAULT_RELEASE_INTERVAL,
+        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    ) -> None:
+        if not isinstance(interval, timedelta) or interval <= timedelta(0):
+            raise ValueError("interval must be a positive timedelta")
+        self._alerts = alerts
+        self._clock = clock
+        self._interval = interval
+        self._sleep = sleep
+        self._pending: dict[int, datetime] = {}
+        self._lock = threading.Lock()
+
+    def __call__(self, ctx: TenantContext, events: Sequence[ChangeEvent]) -> None:
+        try:
+            self._alerts(ctx, events)
+        finally:
+            self._note(ctx.tenant_id, self._alerts.min_realert)
+
+    def note_run(self, tenant_id: int) -> None:
+        """`on_run` hook of the executor: release this tenant at the next pass."""
+        self._note(tenant_id, timedelta(0))
+
+    def _note(self, tenant_id: int, window: timedelta) -> None:
+        until = self._clock.now() + window
+        with self._lock:
+            known = self._pending.get(tenant_id)
+            self._pending[tenant_id] = until if known is None else max(known, until)
+
+    def pending(self) -> dict[int, datetime]:
+        """Tenant id -> release deadline (a copy)."""
+        with self._lock:
+            return dict(self._pending)
+
+    def release_pending(self) -> int:
+        """Release the pending tenants' suppressed alerts that are due; returns the number
+        released. A failure for one tenant is logged by type and the tenant stays pending."""
+        now = self._clock.now()
+        released = 0
+        for tenant_id, until in sorted(self.pending().items()):
+            try:
+                released += self._alerts.release_suppressed(TenantContext(tenant_id, None), now)
+            except Exception as exc:  # noqa: BLE001 - one tenant never blocks the others
+                logger.error(
+                    "suppressed alerts not released (%s)",
+                    type(exc).__name__,
+                    extra={"event": "monitor_run.release_failed", "tenant_id": tenant_id},
+                )
+                continue
+            if now >= until:
+                with self._lock:
+                    if self._pending.get(tenant_id) == until:
+                        del self._pending[tenant_id]
+        return released
+
+    async def run_release(self) -> None:
+        """Call `release_pending` in a worker thread every `interval` until cancelled."""
+        while True:
+            try:
+                await asyncio.to_thread(self.release_pending)
+            except Exception as exc:  # noqa: BLE001 - the loop survives a failed pass
+                logger.error(
+                    "suppressed alert release pass failed (%s)",
+                    type(exc).__name__,
+                    extra={"event": "monitor_run.release_pass_failed"},
+                )
+            await self._sleep(self._interval.total_seconds())
+
+
 __all__ = [
     "HISTORY_LIMIT",
+    "AlertSink",
     "EventSink",
     "MonitorRunExecutor",
     "RegistryFn",
+    "RunHook",
     "RunOutcome",
     "error_result",
     "list_view_of_record",
