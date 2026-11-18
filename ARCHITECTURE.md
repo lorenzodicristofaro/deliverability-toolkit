@@ -274,11 +274,14 @@ newest snapshot of each domain is never pruned (it is the baseline of the next d
   Wiring (M7-14c, scheduler process only, ROLE worker|all): the run executor's sink is
   `AlertService.from_settings` (the `ALERT_*` settings, section 11 of SETUP.md). On
   `EmitIncomplete` the executor offers the same events again, 3 attempts in all with 2 s / 4 s
-  backoff, and only while it is still the latest run of that target in this process; other sink
-  errors are logged and never fail the run. The lifespan (`app/main.py`) starts two tasks next
-  to the scheduler: `AlertReleaser.run` (`app/services/monitor_run.py`) every 30 s and the
-  M7-15 `AlertDispatcher.run` loop (not started, and logged, when ENCRYPTION_KEY is not a usable
-  key); both are cancelled and awaited on shutdown. Each release pass reads, cross-tenant and
+  backoff, and only while it is still the latest run of that target: the latest started in this
+  process, and before each retry the latest stored (the target's `last_run_at` is still this
+  run's start), so with several worker replicas an older run is not replayed after a newer one
+  another replica stored; other sink errors are logged and never fail the run. The lifespan
+  (`app/main.py`) starts two tasks next to the scheduler: `AlertReleaser.run`
+  (`app/services/monitor_run.py`) every 30 s and the M7-15 `AlertDispatcher.run` loop (not
+  started, and logged, when ENCRYPTION_KEY is not a usable key), each with its first pass one
+  interval after start, like the scheduler's first tick; both are cancelled and awaited on shutdown. Each release pass reads, cross-tenant and
   read-only, `AlertReleaseRepository.tenants_with_suppressed_heads(now, 100, window=min_realert)`
   (tenant ids whose suppressed head's window has ended, longest due first) and calls
   `release_suppressed` per tenant through its `TenantContext`. Nothing is kept in memory, so a

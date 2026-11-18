@@ -35,8 +35,11 @@ One run of a `ScheduledRun`:
    is the default when nothing is injected. When the sink raises `EmitIncomplete` (some events not
    recorded, e.g. a transient database error), the same events are offered again, at most
    `emit_attempts` times in all with exponential backoff from `emit_backoff`, and only while this
-   is still the latest run of the target started by this executor: an older run is never replayed
-   after a newer one (M7-14: replaying an older run alerts again). Any other sink exception, or
+   is still the latest run of the target: started by this executor (in memory) and, before each
+   retry, stored (the target's `last_run_at` in the database is still this run's start), so an
+   older run is not replayed after a newer one stored by another worker replica either (M7-14:
+   replaying an older run alerts again). A newer run that has not stored yet emits after this
+   one, which keeps the order. Any other sink exception, or
    the last failed attempt, is logged by type and never fails the run. Suppressed alerts are
    released by `AlertReleaser` (below), independently of runs.
 
@@ -368,7 +371,7 @@ class MonitorRunExecutor:
         )
         events = detect_events(loaded.domain_id, inputs, loaded.snapshot_baseline, snapshot)
         if events:
-            await self._emit(ctx, run.target.id, number, events)
+            await self._emit(ctx, run.target.id, number, events, None if status is None else now)
         logger.info(
             "scheduled run of target %d done (%s, %d checks, %d events)",
             run.target.id,
@@ -380,14 +383,26 @@ class MonitorRunExecutor:
         return RunOutcome(run.target.id, status, results, recorded, stored, tuple(events))
 
     async def _emit(
-        self, ctx: TenantContext, target_id: int, number: int, events: Sequence[ChangeEvent]
+        self,
+        ctx: TenantContext,
+        target_id: int,
+        number: int,
+        events: Sequence[ChangeEvent],
+        stored_at: datetime | None,
     ) -> None:
         """Hand the events to the sink (worker thread); retry `EmitIncomplete` for the latest
-        run of the target only, bounded (module docstring). Raises only on cancellation."""
+        run of the target only, bounded (module docstring). `stored_at` is the `last_run_at` this
+        run wrote (None: it wrote none, only the in-memory guard applies). Raises only on
+        cancellation."""
         for attempt in range(1, self._emit_attempts + 1):
-            if self._latest.get(target_id) != number:
+            superseded = self._latest.get(target_id) != number
+            if not superseded and attempt > 1 and stored_at is not None:
+                superseded = not await asyncio.to_thread(
+                    self._still_latest, ctx, target_id, stored_at
+                )
+            if superseded:
                 logger.warning(
-                    "change events of target %d not emitted (a newer run started)",
+                    "change events of target %d not emitted (a newer run exists)",
                     target_id,
                     extra={"event": "monitor_run.emit_superseded", "tenant_id": ctx.tenant_id},
                 )
@@ -415,6 +430,16 @@ class MonitorRunExecutor:
                 self._log_failed("sink", exc)
                 return
             await self._sleep((self._emit_backoff * 2 ** (attempt - 1)).total_seconds())
+
+    def _still_latest(self, ctx: TenantContext, target_id: int, stored_at: datetime) -> bool:
+        """The target's stored `last_run_at` is still `stored_at` (no newer run stored since,
+        by any worker). A missing target counts as superseded."""
+        with self._factory() as db:
+            try:
+                target = repo_for(ctx, db).monitor_targets.get(target_id)
+            finally:
+                db.rollback()
+        return target is not None and target.last_run_at == stored_at
 
     async def _run_checks(
         self, ids: list[str], loaded: _Loaded, ctx: TenantContext
@@ -620,8 +645,10 @@ class AlertReleaser:
         return released
 
     async def run(self) -> None:
-        """Call `release_pending` in a worker thread every `interval` until cancelled."""
+        """Call `release_pending` in a worker thread every `interval` until cancelled; the first
+        pass runs one interval after start (as the scheduler's first tick)."""
         while True:
+            await self._sleep(self._interval.total_seconds())
             try:
                 await asyncio.to_thread(self.release_pending)
             except Exception as exc:  # noqa: BLE001 - the loop survives a failed pass
@@ -630,7 +657,6 @@ class AlertReleaser:
                     type(exc).__name__,
                     extra={"event": "monitor_run.release_pass_failed"},
                 )
-            await self._sleep(self._interval.total_seconds())
 
 
 __all__ = [

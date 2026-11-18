@@ -487,6 +487,8 @@ class AlertReleaseRepository:
             )
             .scalar_subquery()
         )
+        # No earlier delivered alert of the fingerprint: due at head time + window (delays a
+        # release, never loses one).
         since = func.coalesce(last_sent, Alert.created_at)
         stmt = (
             select(Alert.tenant_id)

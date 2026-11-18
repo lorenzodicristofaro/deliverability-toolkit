@@ -27,7 +27,11 @@ from app.core.security_headers import SecurityHeadersMiddleware
 from app.dns.cache import CachingResolver
 from app.dns.factory import build_resolver
 from app.repositories.monitor_targets import known_check_ids
-from app.services.alert_dispatch import AlertDispatcher, default_registry
+from app.services.alert_dispatch import (
+    DEFAULT_POLL_INTERVAL,
+    AlertDispatcher,
+    default_registry,
+)
 from app.services.alerts import AlertService
 from app.services.auth import SessionPolicy, purge_sessions
 from app.services.clock import Clock, SystemClock
@@ -190,8 +194,15 @@ def start_alert_tasks(app: FastAPI) -> list[asyncio.Task[None]]:
     dispatcher = AlertDispatcher(
         wiring.factory, wiring.alerts, default_registry(), cipher, wiring.clock
     )
-    tasks.append(asyncio.create_task(dispatcher.run(), name="alerts.dispatch"))
+    tasks.append(asyncio.create_task(_delayed_dispatch(dispatcher), name="alerts.dispatch"))
     return tasks
+
+
+async def _delayed_dispatch(dispatcher: AlertDispatcher) -> None:
+    """The delivery loop, first pass one poll interval after start (as the scheduler's first
+    tick and the release loop), so starting the app touches no alert table at once."""
+    await asyncio.sleep(DEFAULT_POLL_INTERVAL.total_seconds())
+    await dispatcher.run()
 
 
 async def stop_alert_tasks(tasks: list[asyncio.Task[None]]) -> None:

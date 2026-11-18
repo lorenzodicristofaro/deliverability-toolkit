@@ -39,6 +39,11 @@ from tests.support.sharding import (
 
 ROOT = Path(__file__).resolve().parent.parent
 _MIGRATION_KEY = "k" * 40
+# Apps built by tests run as ROLE=web: no scheduler, release or delivery loop in the background
+# (they would use the test database from worker threads at any time, M7-14c). Tests of those
+# loops set ROLE explicitly (tests/services/test_scheduler.py, tests/services/test_alert_wiring.py,
+# tests/test_settings.py clear it to check the `all` default).
+os.environ["ROLE"] = "web"
 # The skip reason of every PostgreSQL parameter. `--db-backend` selects on it, so a parameter that
 # would be skipped without PostgreSQL is by construction a parameter the PostgreSQL job runs.
 PG_SKIP_REASON = "TEST_DATABASE_URL not set"

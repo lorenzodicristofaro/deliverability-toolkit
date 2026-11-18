@@ -19,7 +19,7 @@ import pytest
 from cryptography.fernet import Fernet
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from sqlalchemy import select
+from sqlalchemy import event, select
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -369,6 +369,54 @@ async def test_an_older_run_is_never_replayed_after_a_newer_one(
     assert any(getattr(r, "event", "") == "monitor_run.emit_superseded" for r in caplog.records)
 
 
+async def test_a_newer_run_stored_by_another_replica_stops_the_retry(
+    world: mr.World, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Two executors (two worker replicas) on one database: the older run's retry checks the
+    stored `last_run_at` and is skipped once the other replica stored a newer run."""
+    calls: list[str] = []
+
+    def sink(ctx: TenantContext, events: Sequence[ChangeEvent]) -> None:
+        calls.append("older" if not calls else "newer")
+        if len(calls) == 1:
+            raise EmitIncomplete(EmitResult(failed=1))
+
+    due = world.target()
+    other_replica = world.executor(sink=sink)
+    newer: list[RunOutcome | None] = []
+
+    async def sleep(seconds: float) -> None:
+        world.clock.at += timedelta(minutes=1)
+        world.zone(spf=mr.SPF_X)
+        newer.append(await run(world, other_replica, due))
+
+    replica = world.executor(sink=sink, sleep=sleep)
+    await run(world, replica, due)
+    world.zone(spf=mr.SPF_Y)
+    with caplog.at_level(logging.WARNING):
+        older = await run(world, replica, due)
+    assert older is not None and newer and newer[0] is not None and newer[0].events
+    assert calls == ["older", "newer"]  # the older run was not offered again
+    assert any(getattr(r, "event", "") == "monitor_run.emit_superseded" for r in caplog.records)
+
+
+async def test_a_retry_goes_ahead_while_no_newer_run_is_stored(world: mr.World) -> None:
+    calls: list[int] = []
+
+    def sink(ctx: TenantContext, events: Sequence[ChangeEvent]) -> None:
+        calls.append(len(events))
+        if len(calls) == 1:
+            raise EmitIncomplete(EmitResult(failed=1))
+
+    sleeps = Sleeps()
+    due = world.target()
+    executor = world.executor(sink=sink, sleep=sleeps)
+    await run(world, executor, due)
+    world.zone(spf=mr.SPF_Y)
+    await run(world, executor, due)
+    assert calls == [1, 1] and sleeps.calls == [2.0]
+
+
 async def test_any_other_sink_error_is_not_retried(world: mr.World) -> None:
     calls: list[int] = []
 
@@ -414,8 +462,8 @@ def flap(w: mr.World, service: AlertService, tenant: str) -> None:
     domain, ctx = w.domains[tenant], w.ctx(tenant)
     listed = ChangeEvent("new_listing", domain, "zen", None, "listed", "dnsbl")
     cleared = ChangeEvent("listing_cleared", domain, "zen", "listed", "not_listed", "dnsbl")
-    for event in (listed, cleared, listed):
-        service.emit(ctx, [event])
+    for change in (listed, cleared, listed):
+        service.emit(ctx, [change])
         w.clock.at += timedelta(minutes=10)
     assert alerts(w, tenant)[-1] == ("new_listing", True)
 
@@ -550,11 +598,17 @@ async def test_role_decides_whether_the_alert_loops_start(
 ) -> None:
     app = _app(monkeypatch, migrated_db_url, ROLE=role)
     sched = start_scheduler(app)
+    checkouts: list[int] = []
+    engine = getattr(app.state, "db_engine", None)
+    if engine is not None:
+        event.listen(engine, "checkout", lambda *_a: checkouts.append(1))
     tasks = start_alert_tasks(app)
     try:
         names = sorted(t.get_name() for t in tasks)
         assert names == (["alerts.dispatch", "alerts.release"] if starts else [])
+        await asyncio.sleep(0.2)
         assert all(not t.done() for t in tasks)
+        assert checkouts == []  # first passes wait one interval: no DB use at startup
     finally:
         await stop_alert_tasks(tasks)
         if sched is not None:
