@@ -254,8 +254,12 @@ class AlertRepository(_TenantRepository):
         stmt = self._select(Alert.domain_id == did).order_by(Alert.id.desc()).limit(size)
         return [AlertRecord.from_model(r) for r in self._session.scalars(stmt)]
 
-    def latest_in_stream(self, domain_id: object, stream: object) -> AlertRecord | None:
-        """The newest alert (suppressed or not) of one stream of the domain."""
+    def latest_in_stream(
+        self, domain_id: object, stream: object, *, lock: bool = False
+    ) -> AlertRecord | None:
+        """The newest alert (suppressed or not) of one stream of the domain. `lock=True` takes
+        a row lock on it (SELECT .. FOR UPDATE, PostgreSQL; SQLite serializes writers anyway)
+        until the transaction ends, so writers building on the same stream head take turns."""
         did = coerce_id(domain_id)
         if did is None:
             return None
@@ -265,6 +269,8 @@ class AlertRepository(_TenantRepository):
             .order_by(Alert.id.desc())
             .limit(1)
         )
+        if lock:
+            stmt = stmt.with_for_update()
         row = self._session.scalars(stmt).first()
         return None if row is None else AlertRecord.from_model(row)
 
@@ -285,10 +291,17 @@ class AlertRepository(_TenantRepository):
         row = self._session.scalars(stmt).first()
         return None if row is None else AlertRecord.from_model(row)
 
-    def suppressed_stream_heads(self, *, limit: int = DEFAULT_LIMIT) -> list[AlertRecord]:
-        """The latest alert of each of the tenant's streams, where that alert is suppressed;
-        oldest first."""
+    def suppressed_stream_heads(
+        self, *, limit: int = DEFAULT_LIMIT, after_id: int = 0
+    ) -> list[AlertRecord]:
+        """The latest alert of each of the tenant's streams where that alert is suppressed AND
+        its fingerprint differs from the stream's latest not suppressed alert (a head equal to
+        the delivered state needs no release, so it is never listed). Ordered by id, starting
+        after `after_id` (keyset paging)."""
         size = _limit(limit)
+        if type(after_id) is not int or after_id < 0:
+            raise AlertInvalid("after_id", "malformed")
+        tenant = Alert.tenant_id == self._ctx.tenant_id
         ranked = (
             select(
                 Alert.id.label("aid"),
@@ -296,13 +309,37 @@ class AlertRepository(_TenantRepository):
                 .over(partition_by=(Alert.domain_id, Alert.stream), order_by=Alert.id.desc())
                 .label("rn"),
             )
-            .where(Alert.tenant_id == self._ctx.tenant_id)
+            .where(tenant)
             .subquery()
+        )
+        delivered = (
+            select(
+                Alert.domain_id.label("did"),
+                Alert.stream.label("stream"),
+                Alert.fingerprint.label("fp"),
+                func.row_number()
+                .over(partition_by=(Alert.domain_id, Alert.stream), order_by=Alert.id.desc())
+                .label("rn"),
+            )
+            .where(tenant, Alert.suppressed.is_(False))
+            .subquery()
+        )
+        same_as_delivered = (
+            select(delivered.c.did)
+            .where(
+                delivered.c.rn == 1,
+                delivered.c.did == Alert.domain_id,
+                delivered.c.stream == Alert.stream,
+                delivered.c.fp == Alert.fingerprint,
+            )
+            .exists()
         )
         stmt = (
             self._select(
                 Alert.id.in_(select(ranked.c.aid).where(ranked.c.rn == 1)),
                 Alert.suppressed.is_(True),
+                Alert.id > after_id,
+                ~same_as_delivered,
             )
             .order_by(Alert.id)
             .limit(size)

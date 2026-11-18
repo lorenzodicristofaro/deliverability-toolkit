@@ -102,6 +102,7 @@ DEFAULT_SEND_TIMEOUT: Final = timedelta(seconds=60)
 DEFAULT_BATCH: Final = 50
 INTERNAL_ERROR: Final = "internal_error"
 SEND_TIMEOUT: Final = "timeout"
+MAX_LOCK_RETRIES: Final = 5
 
 
 def _sha(text: str) -> str:
@@ -151,6 +152,23 @@ def is_valid_event(event: object) -> bool:
         and (event.before is None or isinstance(event.before, str))
         and (event.check_id is None or isinstance(event.check_id, str))
     )
+
+
+def locked_head(repos: TenantRepositories, domain_id: int, stream: str) -> AlertRecord | None:
+    """The stream's latest alert, row-locked for the rest of the transaction (PostgreSQL), so
+    an emit and a release (or two emits) building on the same head take turns. After the lock
+    the head is read again: if another writer committed a newer head while this one waited, the
+    newer head is locked instead. None when the stream has no alert yet (then the UNIQUE key
+    decides between concurrent first inserts)."""
+    head = repos.alerts.latest_in_stream(domain_id, stream, lock=True)
+    for _ in range(MAX_LOCK_RETRIES):
+        if head is None:
+            return None
+        again = repos.alerts.latest_in_stream(domain_id, stream)
+        if again is not None and again.id == head.id:
+            return head
+        head = repos.alerts.latest_in_stream(domain_id, stream, lock=True)
+    raise RuntimeError("stream head kept moving")
 
 
 # --- delivery contract -------------------------------------------------------------------------
@@ -295,7 +313,7 @@ class AlertService:
     def _emit_one(self, repos: TenantRepositories, event: ChangeEvent) -> tuple[str, int]:
         now = self._clock.now()
         stream = stream_key(event)
-        latest = repos.alerts.latest_in_stream(event.domain_id, stream)
+        latest = locked_head(repos, event.domain_id, stream)
         if (
             latest is not None
             and latest.fingerprint == event.fingerprint
@@ -377,24 +395,30 @@ class AlertService:
         if not isinstance(ctx, TenantContext):
             raise TypeError("release_suppressed requires a TenantContext")
         at = self._clock.now() if now is None else now
-        with self._factory.begin() as db:
-            heads = repo_for(ctx, db).alerts.suppressed_stream_heads(limit=limit)
         released = 0
-        for head in heads:
-            try:
-                with self._factory.begin() as db:
-                    released += self._release_one(repo_for(ctx, db), head, at)
-            except Exception as exc:  # noqa: BLE001 - one stream never blocks the others
-                logger.error(
-                    "suppressed alert %d not released (%s)",
-                    head.id,
-                    type(exc).__name__,
-                    extra={"event": "alerts.release_failed", "tenant_id": ctx.tenant_id},
+        after = 0
+        while True:  # pages through every head: one still inside its window blocks nothing
+            with self._factory.begin() as db:
+                heads = repo_for(ctx, db).alerts.suppressed_stream_heads(
+                    limit=limit, after_id=after
                 )
-        return released
+            for head in heads:
+                try:
+                    with self._factory.begin() as db:
+                        released += self._release_one(repo_for(ctx, db), head, at)
+                except Exception as exc:  # noqa: BLE001 - one stream never blocks the others
+                    logger.error(
+                        "suppressed alert %d not released (%s)",
+                        head.id,
+                        type(exc).__name__,
+                        extra={"event": "alerts.release_failed", "tenant_id": ctx.tenant_id},
+                    )
+            if len(heads) < limit:
+                return released
+            after = heads[-1].id
 
     def _release_one(self, repos: TenantRepositories, head: AlertRecord, now: datetime) -> int:
-        latest = repos.alerts.latest_in_stream(head.domain_id, head.stream)
+        latest = locked_head(repos, head.domain_id, head.stream)
         if latest is None or latest.id != head.id or not latest.suppressed:
             return 0  # the stream moved on since the read
         last = repos.alerts.last_unsuppressed_at(head.fingerprint)

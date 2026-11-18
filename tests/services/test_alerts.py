@@ -453,8 +453,8 @@ def test_emitters_racing_past_the_stream_read_make_one_alert(
     barrier = threading.Barrier(2)
     original = AlertRepository.latest_in_stream
 
-    def latest_then_wait(self: AlertRepository, *a: Any) -> AlertRecord | None:
-        found = original(self, *a)
+    def latest_then_wait(self: AlertRepository, *a: Any, **kw: Any) -> AlertRecord | None:
+        found = original(self, *a, **kw)
         barrier.wait(timeout=10)
         return found
 
@@ -464,6 +464,17 @@ def test_emitters_racing_past_the_stream_read_make_one_alert(
         results = list(pool.map(lambda i: services[i].emit(world.ctx, [listing(world)]), [0, 1]))
     assert sorted((r.created, r.duplicates, r.failed) for r in results) == [(0, 1, 0), (1, 0, 0)]
     assert world.count(Alert) == 1 and world.count(AlertDelivery) == 1
+
+
+_met = threading.local()
+
+
+def meet_once(barrier: threading.Barrier, kw: dict[str, Any]) -> None:
+    """Make the racing threads arrive together at their FIRST locking read of the stream head
+    (the forced interleaving; waiting after taking the lock would deadlock the barrier)."""
+    if kw.get("lock") and not getattr(_met, "done", False):
+        _met.done = True
+        barrier.wait(timeout=10)
 
 
 class FakeSender:
@@ -687,10 +698,9 @@ def test_releases_racing_past_the_stream_read_release_once(
     barrier = threading.Barrier(2)
     original = AlertRepository.latest_in_stream
 
-    def latest_then_wait(self: AlertRepository, *a: Any) -> AlertRecord | None:
-        found = original(self, *a)
-        barrier.wait(timeout=10)
-        return found
+    def latest_then_wait(self: AlertRepository, *a: Any, **kw: Any) -> AlertRecord | None:
+        meet_once(barrier, kw)
+        return original(self, *a, **kw)
 
     monkeypatch.setattr(AlertRepository, "latest_in_stream", latest_then_wait)
     services = [world.service(min_realert=timedelta(hours=1)) for _ in range(2)]
@@ -766,3 +776,115 @@ async def test_a_lost_mark_sent_is_not_counted_as_sent(world: World) -> None:
 
     report = await svc.deliver_due(world.ctx, send_then_lose_row)
     assert (report.sent, report.skipped) == (0, 1)
+
+
+def test_release_and_emit_on_the_same_head_keep_the_newest_state(
+    world: World, engine: Engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A release of a suppressed head and an emit of a newer state reach the head together.
+    The head row lock makes them take turns: whichever goes second sees the other's row as the
+    head. Either way the stream's latest alert is the newest state ("cleared") and replaying it
+    is a duplicate. PostgreSQL only (row locks; SQLite serializes writers)."""
+    if engine.dialect.name != "postgresql":
+        pytest.skip("needs concurrent writers (PostgreSQL)")
+    world.route("new_listing", 1)
+    world.route("listing_cleared", 1)
+    svc = world.service(min_realert=timedelta(hours=1))
+    _flap(world, svc, [True, False, True])  # head: suppressed "listed"; delivered: "cleared"
+    world.clock.advance(timedelta(hours=3))
+    barrier = threading.Barrier(2)
+    original = AlertRepository.latest_in_stream
+
+    def latest_then_wait(self: AlertRepository, *a: Any, **kw: Any) -> AlertRecord | None:
+        meet_once(barrier, kw)
+        return original(self, *a, **kw)
+
+    # The bad interleaving: the release decides on the old head, then inserts only after the
+    # emit committed its newer state. Without the head lock the release row would end up as
+    # the stream's latest (stale "listed"). With the lock, either the emit holds the head and the
+    # release re-reads a new head (nothing released), or the release holds it and the emit
+    # waits (the release's wait below then times out) and chains on the released row.
+    emit_done = threading.Event()
+    in_release = threading.local()
+    original_insert = AlertRepository.insert_if_absent
+
+    def insert_after_emit(self: AlertRepository, *a: Any, **kw: Any) -> AlertRecord | None:
+        if getattr(in_release, "on", False):
+            emit_done.wait(timeout=1)
+        return original_insert(self, *a, **kw)
+
+    monkeypatch.setattr(AlertRepository, "latest_in_stream", latest_then_wait)
+    monkeypatch.setattr(AlertRepository, "insert_if_absent", insert_after_emit)
+    releaser, emitter = (world.service(min_realert=timedelta(hours=1)) for _ in range(2))
+
+    def run(i: int) -> Any:
+        if i == 0:
+            in_release.on = True
+            return releaser.release_suppressed(world.ctx)
+        try:
+            return emitter.emit(world.ctx, [listing(world, False)])
+        finally:
+            emit_done.set()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        released, emitted = pool.map(run, [0, 1])
+    monkeypatch.undo()
+    assert emitted.failed == 0
+    latest = world.alerts()[-1]
+    assert latest.kind == "listing_cleared"
+    # Released first: listed, then cleared on top. Emitted first: the release saw a new head.
+    assert world.count(Alert) == (5 if released else 4)
+    assert svc.emit(world.ctx, [listing(world, False)]).duplicates == 1
+    world.clock.advance(timedelta(hours=3))
+    assert svc.release_suppressed(world.ctx) == 0
+
+
+def test_heads_equal_to_the_delivered_state_never_starve_later_streams(world: World) -> None:
+    """Streams that ended on their delivered state (nothing to release) outnumber the page
+    size; a later stream that ended on a new state is still released."""
+    world.route("new_listing", 1)
+    world.route("listing_cleared", 1)
+    svc = world.service(min_realert=timedelta(hours=1))
+    for i in range(3):  # each: listed, cleared, listed (supp), cleared (supp) -> on "cleared"
+        world.clock.at = T0
+        for listed in (True, False, True, False):
+            world.clock.advance(timedelta(minutes=10))
+            svc.emit(
+                world.ctx,
+                [
+                    ev(world, subject=f"quiet{i}.example")
+                    if listed
+                    else ev(world, "listing_cleared", f"quiet{i}.example", "listed", "not_listed")
+                ],
+            )
+    world.clock.at = T0
+    _flap(world, svc, [True, False, True])  # zen ends on a suppressed new state "listed"
+    world.clock.advance(timedelta(hours=3))
+    with world.factory() as db:
+        assert len(repo_for(world.ctx, db).alerts.suppressed_stream_heads()) == 1
+    assert svc.release_suppressed(world.ctx, limit=1) == 1
+    assert svc.release_suppressed(world.ctx, limit=1) == 0
+
+
+def test_heads_inside_their_window_do_not_block_later_streams(world: World) -> None:
+    world.route("new_listing", 1)
+    svc = world.service(min_realert=timedelta(hours=1))
+    _flap(world, svc, [True, False, True])  # zen: suppressed "listed" (window ends T0+70m)
+    world.clock.at = T0 + timedelta(minutes=65)
+    other = "sbl.example"
+    for listed in (True, False, True):
+        world.clock.advance(timedelta(minutes=1))
+        svc.emit(
+            world.ctx,
+            [
+                ev(world, subject=other)
+                if listed
+                else ev(world, "listing_cleared", other, "listed", "not_listed")
+            ],
+        )
+    # T0+68m: zen's window is still open, sbl's head is newer: both stay; nothing released yet.
+    assert svc.release_suppressed(world.ctx, limit=1) == 0
+    world.clock.at = T0 + timedelta(minutes=71)
+    assert svc.release_suppressed(world.ctx, limit=1) == 1  # zen; sbl's window still open
+    world.clock.at = T0 + timedelta(minutes=67 + 61)
+    assert svc.release_suppressed(world.ctx, limit=1) == 1  # sbl, past the first page

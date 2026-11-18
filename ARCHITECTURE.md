@@ -252,7 +252,11 @@ newest snapshot of each domain is never pruned (it is the baseline of the next d
   has ended and whose state differs from the stream's last delivered alert, and inserts one
   deliverable alert of that state (with deliveries) with `state_hash` derived from the
   suppressed head's id, so concurrent or repeated calls release it exactly once. When the final
-  state equals the last delivered one, nothing is sent.
+  state equals the last delivered one, nothing is sent, and the head query skips such streams.
+  It pages through all heads, so heads still inside their window never starve later streams.
+  Emit and release lock the stream's head row (SELECT .. FOR UPDATE on PostgreSQL; SQLite
+  serializes writers) and re-read it before deciding, so two writers building on the same head
+  take turns and the newest state always ends up as the stream's latest alert.
   Rules: a created, not suppressed alert gets one `pending` delivery per channel that the
   tenant's `alert_rules` route its kind to; no rule means no delivery (the alert is still
   recorded for the UI).
