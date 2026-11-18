@@ -31,6 +31,7 @@ import logging
 import math
 import threading
 from collections.abc import Callable
+from datetime import timedelta
 from typing import Annotated, Any, Final, NoReturn
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -54,6 +55,7 @@ from app.repositories.alert_channels import (
 )
 from app.repositories.base import parse_id
 from app.services.alert_dispatch import (
+    DEFAULT_TEST_TIMEOUT,
     AlertDispatcher,
     ChannelRegistry,
     FieldError,
@@ -445,6 +447,7 @@ async def test_channel(
     db: DbDep,
     limiter: Annotated[TestSendLimiter, Depends(alert_test_limiter)],
     clock: Annotated[Clock, Depends(alert_channel_clock)],
+    settings: SettingsDep,
     channel_id: str,
 ) -> dict[str, Any]:
     target = parse_id(channel_id)
@@ -464,7 +467,11 @@ async def test_channel(
     except SecretsError:
         raise _error(request, 503, ENCRYPTION_KEY) from None
     factory = _session_factory(request)
-    dispatcher = AlertDispatcher(factory, AlertService(factory, clock), api.registry, cipher, clock)
+    # min(test timeout, send timeout): the email channel bounds a test send to 0.8 of the same.
+    test_wait = min(DEFAULT_TEST_TIMEOUT, timedelta(seconds=settings.alert_send_timeout_seconds))
+    dispatcher = AlertDispatcher(
+        factory, AlertService(factory, clock), api.registry, cipher, clock, test_timeout=test_wait
+    )
     result = await dispatcher.send_test(ctx, record.id)
     if result is None:  # deleted meanwhile
         raise _error(request, 404, NOT_FOUND_KEY)

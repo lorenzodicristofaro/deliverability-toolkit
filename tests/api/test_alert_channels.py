@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Iterator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
@@ -323,6 +323,10 @@ INVALID = [
     ({**WEBHOOK, "config": {"x": 1}}, "config", "unknown_field"),
     ({**EMAIL, "config": {"recipients": ["bad"]}}, "recipients", "malformed"),
     ({**EMAIL, "config": {}}, "recipients", "required"),
+    *[({**EMAIL, "config": {"recipients": [bad]}}, "recipients", "malformed")
+      for bad in ("x@[10.0.0.5]", "x@10.0.0.5", "x@localhost", "x@ipv6:::1",
+                  "@relay.example:v@x.example", "v%evil.example@relay.example", "a@b@c.example",
+                  "a(c)@b.example", '"q"@b.example')],
 ]  # fmt: skip
 
 
@@ -366,6 +370,25 @@ def test_patch_rules(world: World) -> None:
     assert bad_url.json()["detail"]["field"] == "url"
     # A missing channel is 404 whatever the body.
     assert call(world, "owner", "PATCH", one(999_999), json={"kind": 5}).status_code == 404
+
+
+@pytest.mark.parametrize(
+    "bad", ["x@[10.0.0.5]", "x@localhost", "v%evil.example@relay.example", '"q"@b.example']
+)
+def test_patch_email_recipients_are_validated(world: World, bad: str) -> None:
+    created = call(world, "owner", "POST", LIST, json=EMAIL)
+    assert created.status_code == 201, created.text
+    cid = created.json()["id"]
+    good = {"config": {"recipients": ["oncall@mail.example.org"]}}
+    assert call(world, "owner", "PATCH", one(cid), json=good).status_code == 200
+    response = call(world, "owner", "PATCH", one(cid), json={"config": {"recipients": [bad]}})
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert (detail["field"], detail["reason"]) == ("recipients", "malformed")
+    assert detail["message"] == t("alert.channel.error.invalid_recipients", "en")
+    assert bad not in response.text
+    current = call(world, "owner", "GET", one(cid)).json()
+    assert current["config"] == good["config"]
 
 
 def test_duplicate_name_is_409(world: World) -> None:
@@ -465,6 +488,33 @@ def test_test_send_reports_outcome_and_is_rate_limited(
     fake.exc = None
     assert call(world, "owner", "POST", one(other) + "/test").status_code == 200  # per channel
     assert world.db.scalar(select(func.count()).select_from(AlertDelivery)) == 0
+
+
+@pytest.mark.parametrize(("send_timeout", "expected"), [(5, 5.0), (600, 60.0)])
+def test_test_send_wait_is_min_of_test_and_send_timeout(
+    world: World, monkeypatch: pytest.MonkeyPatch, send_timeout: int, expected: float
+) -> None:
+    from app.api.v1 import alert_channels as api_module
+    from app.web.deps import get_settings
+
+    seen: list[timedelta] = []
+    real = api_module.AlertDispatcher
+
+    def spy(*args: Any, **kwargs: Any) -> Any:
+        seen.append(kwargs["test_timeout"])
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(api_module, "AlertDispatcher", spy)
+    patched = world.settings.model_copy(
+        update={"alert_send_timeout_seconds": send_timeout, "alert_lease_seconds": 3600}
+    )
+    app = world.client.app
+    app.dependency_overrides[get_settings] = lambda: patched  # type: ignore[attr-defined]
+    try:
+        assert call(world, "owner", "POST", one(seed_channel(world)) + "/test").status_code == 200
+    finally:
+        del app.dependency_overrides[get_settings]  # type: ignore[attr-defined]
+    assert [s.total_seconds() for s in seen] == [expected]
 
 
 def test_test_send_on_unregistered_kind(world: World) -> None:

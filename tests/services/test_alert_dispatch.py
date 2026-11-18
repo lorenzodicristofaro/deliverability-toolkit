@@ -41,10 +41,12 @@ from app.services.alert_dispatch import (
     check_url,
     default_registry,
     field_key,
+    is_recipient_address,
     open_secrets,
     render,
     seal_secrets,
     validate_config,
+    validate_recipients,
     validate_secrets,
 )
 from app.services.alerts import AlertMessage, AlertService, DeliveryReport
@@ -126,6 +128,9 @@ CONFIG_CASES: list[tuple[str, Any, list[FieldError]]] = [
     ("email", {"recipients": ["a@example.com\r\nbcc:x@evil.example"]}, REC_BAD),
     ("email", {"recipients": ["a@example.com,b@example.com"]}, REC_BAD),
     ("email", {"recipients": [5]}, REC_BAD),
+    ("email", {"recipients": ["x@[10.0.0.5]"]}, REC_BAD),
+    ("email", {"recipients": ["x@localhost"]}, REC_BAD),
+    ("email", {"recipients": ["ops@example.com", "v%evil.example@relay.example"]}, REC_BAD),
     ("email", {"recipients": ["a@example.com"], "cc": []}, [FieldError("config", "unknown_field")]),
     ("email", ["recipients"], [FieldError("config", "malformed")]),
     ("email", None, [FieldError("config", "malformed")]),
@@ -134,6 +139,58 @@ CONFIG_CASES: list[tuple[str, Any, list[FieldError]]] = [
     ("slack", {}, []),
     ("teams", {"x": 1}, [FieldError("config", "unknown_field")]),
 ]  # fmt: skip
+
+
+RECIPIENT_CASES: list[tuple[str, bool]] = [
+    ("ops@example.com", True),
+    ("first.last+tag@mail.example.co.uk", True),
+    ("o_p-s@xn--bcher-kva.example", True),
+    ("x=y&z#1@example.org", True),
+    ("a@b.c", True),
+    ("x@[10.0.0.5]", False),  # address literal
+    ("x@10.0.0.5", False),  # IP as domain
+    ("x@localhost", False),  # single label
+    ("x@ipv6:::1", False),
+    ("x@[ipv6:::1]", False),
+    ("@relay.example:v@x.example", False),  # source route
+    ("v%evil.example@relay.example", False),  # percent hack
+    ("a@b@c.example", False),  # second @
+    ("a(c)@b.example", False),  # comment
+    ("a@b.example(c)", False),
+    ('"q"@b.example', False),  # quoted local part
+    ("a!b@example.com", False),  # bang path
+    ("a|b@example.com", False),
+    ("a/b@example.com", False),
+    ("a'b@example.com", False),
+    ("a..b@example.com", False),
+    (".a@example.com", False),
+    ("a.@example.com", False),
+    ("a@example.com.", False),  # trailing dot: not the normalised domain
+    ("a@example..com", False),
+    ("a@-x.example", False),
+    ("a@x_y.example", False),
+    ("a@bücher.example", False),  # U-label: ASCII only (no SMTPUTF8)
+    ("é@example.com", False),
+    ("a@b.123", False),  # numeric TLD
+    ("Ops@example.com", False),  # not normalised
+    (" ops@example.com", False),
+    ("x" * 65 + "@example.com", False),
+    ("a@" + "b" * 64 + ".example", False),  # label too long
+    ("a@", False),
+    ("@b.example", False),
+    ("", False),
+    ("a b@example.com", False),
+    ("a@example.com\r\nbcc:x@evil.example", False),
+    ("a\x00@example.com", False),
+]
+
+
+@pytest.mark.parametrize(
+    ("value", "ok"), RECIPIENT_CASES, ids=[repr(c[0]) for c in RECIPIENT_CASES]
+)
+def test_is_recipient_address(value: str, ok: bool) -> None:
+    assert is_recipient_address(value) is ok
+    assert (validate_recipients([value]) == []) is ok
 
 
 @pytest.mark.parametrize(

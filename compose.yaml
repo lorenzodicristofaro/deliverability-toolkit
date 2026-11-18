@@ -64,6 +64,13 @@ services:
       ALERT_BACKOFF_CAP_SECONDS: ${ALERT_BACKOFF_CAP_SECONDS:-3600}
       ALERT_LEASE_SECONDS: ${ALERT_LEASE_SECONDS:-300}
       ALERT_SEND_TIMEOUT_SECONDS: ${ALERT_SEND_TIMEOUT_SECONDS:-60}
+      # Email alert relay (M7-16, docs/SETUP.md 11); empty SMTP_HOST: email channels cannot send.
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_SECURITY: ${SMTP_SECURITY:-starttls}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-}
     networks:
       - default  # internet access
       - dns      # reach the unbound profile at 172.28.53.2; internal, no outside access
