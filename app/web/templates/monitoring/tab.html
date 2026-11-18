@@ -1,0 +1,224 @@
+{% extends "base.html" %}
+{% block title %}{{ t("monitor.tab.title") }} · {{ app_name }}{% endblock %}
+{% block content %}
+{% macro check_name(c) %}{% if c in check_keys %}{{ t(check_keys[c]) }}{% else %}<code>{{ c|visible }}</code>{% endif %}{% endmacro %}
+{% set status_text = {"ok": t("checks.status.ok"), "warn": t("checks.status.warn"), "fail": t("checks.status.fail"), "info": t("checks.status.info"), "error": t("checks.status.error")} %}
+<p><a href="/domains/{{ domain_id }}">{{ t("domain.detail.title") }}</a></p>
+<h1 data-testid="monitor-title">{{ t("monitor.tab.heading", domain=display_name|visible) }}</h1>
+<nav class="tabs" aria-label="{{ t('checks.tab.label') }}">
+  {% if can_check %}<a href="/domains/{{ domain_id }}/authentication" data-testid="tab-authentication">{{ t("checks.tab.authentication") }}</a>{% endif %}
+  <a href="/domains/{{ domain_id }}/esps" data-testid="tab-esps">{{ t("web.domain.esps.title") }}</a>
+  <a href="/domains/{{ domain_id }}/monitoring" aria-current="page" data-testid="tab-monitoring">{{ t("monitor.tab.title") }}</a>
+  <a href="/domains/{{ domain_id }}/monitoring?bucket={{ tab.bucket }}" data-testid="monitor-refresh">{{ t("monitor.tab.refresh") }}</a>
+</nav>
+{% if flash %}<p class="dns-state dns-state-ok" role="status" data-testid="monitor-flash">{{ t(flash) }}</p>{% endif %}
+{% if error %}<p class="form-error" role="alert" data-testid="monitor-form-error">{{ t(error) }}</p>{% endif %}
+
+<section data-testid="monitor-target">
+  <h2>{{ t("monitor.tab.target") }}</h2>
+  {% if tab.target is none %}
+  <p class="empty-state" data-testid="monitor-target-empty">{{ t("monitor.tab.target_none") }}</p>
+  {% else %}
+  {% set target = tab.target %}
+  <dl class="monitor-target">
+    <dt>{{ t("monitor.tab.state") }}</dt>
+    <dd data-testid="monitor-enabled">{% if target.enabled %}{{ t("monitor.tab.enabled") }}{% else %}{{ t("monitor.tab.disabled") }}{% endif %}</dd>
+    <dt>{{ t("monitor.tab.interval_label") }}</dt>
+    <dd data-testid="monitor-interval">{% for seconds, key in intervals if seconds == target.interval_seconds %}{{ t(key) }}{% endfor %}</dd>
+    <dt>{{ t("monitor.tab.next_run") }}</dt>
+    <dd><time datetime="{{ target.next_run_at.isoformat() }}">{{ t("monitor.tab.utc", time=target.next_run_at.strftime("%Y-%m-%d %H:%M")) }}</time></dd>
+    <dt>{{ t("monitor.tab.last_run") }}</dt>
+    <dd>{% if target.last_run_at %}<time datetime="{{ target.last_run_at.isoformat() }}">{{ t("monitor.tab.utc", time=target.last_run_at.strftime("%Y-%m-%d %H:%M")) }}</time>{% else %}{{ t("monitor.tab.never") }}{% endif %}</dd>
+  </dl>
+  {% endif %}
+
+  {% if can_manage %}
+  <form method="post" action="/domains/{{ domain_id }}/monitoring" data-testid="monitor-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <fieldset>
+      <legend>{{ t("monitor.tab.checks") }}</legend>
+      {% for check_id in all_checks %}
+      <label><input type="checkbox" name="check_ids" value="{{ check_id }}"{% if check_id in form.check_ids %} checked{% endif %}> {{ check_name(check_id) }}</label>
+      {% endfor %}
+    </fieldset>
+    <p><label>{{ t("monitor.tab.interval_label") }}
+      <select name="interval_seconds">
+        {% for seconds, key in intervals %}<option value="{{ seconds }}"{% if form.interval_seconds == seconds %} selected{% endif %}>{{ t(key) }}</option>{% endfor %}
+      </select></label></p>
+    <p><label><input type="checkbox" name="enabled" value="1"{% if form.enabled %} checked{% endif %}> {{ t("monitor.tab.enabled") }}</label></p>
+    <p><button type="submit" data-testid="monitor-save">{% if tab.target is none %}{{ t("monitor.tab.create") }}{% else %}{{ t("monitor.tab.save") }}{% endif %}</button></p>
+  </form>
+  {% if tab.target is not none %}
+  <form class="inline" method="post" action="/domains/{{ domain_id }}/monitoring/delete" data-testid="monitor-delete-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <button type="submit" data-testid="monitor-delete">{{ t("monitor.tab.delete") }}</button>
+  </form>
+  <p class="hint">{{ t("monitor.tab.delete_hint") }}</p>
+  {% endif %}
+  {% endif %}
+</section>
+
+<section data-testid="monitor-last">
+  <h2>{{ t("monitor.tab.last_status") }}</h2>
+  <table>
+    <thead><tr>
+      <th scope="col">{{ t("monitor.tab.col.check") }}</th>
+      <th scope="col">{{ t("monitor.tab.col.status") }}</th>
+      <th scope="col">{{ t("monitor.tab.col.started") }}</th>
+    </tr></thead>
+    <tbody>
+    {% for check_id in tab.checks %}{% set run = tab.last[check_id] %}
+      <tr data-check="{{ check_id }}">
+        <td>{{ check_name(check_id) }}</td>
+        {% if run %}
+        <td><span class="status-dot status-{{ run.status }}" aria-hidden="true"></span> <span data-testid="last-{{ check_id }}">{{ status_text.get(run.status, run.status|visible) }}</span></td>
+        <td><time datetime="{{ run.started_at }}">{{ t("monitor.tab.utc", time=run.started_at[:16]|replace("T", " ")) }}</time></td>
+        {% else %}
+        <td colspan="2" class="empty-state" data-testid="last-{{ check_id }}">{{ t("monitor.tab.never") }}</td>
+        {% endif %}
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<section data-testid="monitor-trend">
+  <h2>{{ t("monitor.chart.title") }}</h2>
+  <nav class="tabs" aria-label="{{ t('monitor.chart.bucket_label') }}">
+    {% for b, bucket_key in buckets %}<a href="/domains/{{ domain_id }}/monitoring?bucket={{ b }}"{% if b == tab.bucket %} aria-current="page"{% endif %} data-testid="bucket-{{ b }}">{{ t(bucket_key) }}</a>{% endfor %}
+  </nav>
+  {% set chart = tab.chart %}
+  {% if chart.capped or chart.truncated %}<p class="hint" data-testid="chart-capped">{{ t("monitor.chart.capped") }}</p>{% endif %}
+  {% if chart.total_runs == 0 %}
+  <p class="empty-state" data-testid="chart-empty">{{ t("monitor.chart.empty") }}</p>
+  {% else %}
+  <ul class="chart-legend" data-testid="chart-legend">
+    {% for s in statuses %}<li><span class="status-dot status-{{ s }}" aria-hidden="true"></span> {{ status_text[s] }}</li>{% endfor %}
+  </ul>
+  <figure class="chart">
+    <svg class="chart-svg" viewBox="0 0 {{ chart.width }} {{ chart.height }}" role="img" aria-labelledby="chart-caption" data-testid="chart-svg">
+      {% for tick in chart.ticks %}
+      <line class="chart-grid" x1="{{ chart.plot_left }}" x2="{{ chart.plot_right }}" y1="{{ tick.y }}" y2="{{ tick.y }}"></line>
+      <text class="chart-axis" x="{{ chart.plot_left - 6 }}" y="{{ tick.y + 4 }}" text-anchor="end">{{ tick.value }}</text>
+      {% endfor %}
+      {% for bar in chart.bars %}
+      <g>
+        <title>{{ t("monitor.tab.utc", time=bar.label) }}: {{ t("monitor.chart.runs", count=bar.runs) }}</title>
+        {% for seg in bar.segments %}
+        <rect class="chart-bar status-{{ seg.status }}" x="{{ seg.x }}" y="{{ seg.y }}" width="{{ seg.width }}" height="{{ seg.height }}"><title>{{ t("monitor.tab.utc", time=bar.label) }}: {{ status_text[seg.status] }} {{ seg.count }}</title></rect>
+        {% endfor %}
+      </g>
+      {% endfor %}
+      <line class="chart-baseline" x1="{{ chart.plot_left }}" x2="{{ chart.plot_right }}" y1="{{ chart.baseline }}" y2="{{ chart.baseline }}"></line>
+      {% for label in chart.x_labels %}
+      <text class="chart-axis" x="{{ label.x }}" y="{{ chart.height - 8 }}" text-anchor="middle">{{ label.text }}</text>
+      {% endfor %}
+    </svg>
+    <figcaption id="chart-caption">{{ t("monitor.chart.caption") }}</figcaption>
+  </figure>
+  {% if chart.strip %}
+  <h3>{{ t("monitor.chart.per_check") }}</h3>
+  <figure class="chart">
+    <svg class="chart-svg" viewBox="0 0 {{ chart.width }} {{ chart.strip_height }}" role="img" aria-labelledby="strip-caption" data-testid="chart-strip">
+      {% for row in chart.strip %}
+      <text class="chart-axis" x="0" y="{{ row.y + 13 }}">{{ check_name(row.check_id) }}</text>
+      {% for cell in row.cells %}
+      <rect class="chart-cell status-{{ cell.status or 'none' }}" x="{{ cell.x }}" y="{{ row.y + 2 }}" width="{{ cell.width }}" height="{{ 14 }}"><title>{{ t("monitor.tab.utc", time=cell.label) }}: {% if cell.status %}{{ status_text[cell.status] }} ({{ t("monitor.chart.runs", count=cell.runs) }}){% else %}{{ t("monitor.chart.no_runs") }}{% endif %}</title></rect>
+      {% endfor %}
+      {% endfor %}
+    </svg>
+    <figcaption id="strip-caption">{{ t("monitor.chart.strip_caption") }}</figcaption>
+  </figure>
+  {% endif %}
+  <details data-testid="chart-table">
+    <summary>{{ t("monitor.chart.table") }}</summary>
+    <table>
+      <thead><tr>
+        <th scope="col">{{ t("monitor.chart.bucket_start") }}</th>
+        {% for s in statuses %}<th scope="col">{{ status_text[s] }}</th>{% endfor %}
+      </tr></thead>
+      <tbody>
+      {% for bar in chart.bars if bar.runs %}
+        <tr><td>{{ bar.label }}</td>{% for s in statuses %}<td>{% for seg in bar.segments if seg.status == s %}{{ seg.count }}{% else %}0{% endfor %}</td>{% endfor %}</tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </details>
+  {% endif %}
+</section>
+
+<section data-testid="monitor-history">
+  <h2>{{ t("monitor.tab.history") }}</h2>
+  {% if not tab.runs["items"] %}
+  <p class="empty-state" data-testid="history-empty">{{ t("monitor.tab.history_empty") }}</p>
+  {% else %}
+  <table>
+    <thead><tr>
+      <th scope="col">{{ t("monitor.tab.col.started") }}</th>
+      <th scope="col">{{ t("monitor.tab.col.check") }}</th>
+      <th scope="col">{{ t("monitor.tab.col.status") }}</th>
+      <th scope="col">{{ t("monitor.tab.col.findings") }}</th>
+    </tr></thead>
+    <tbody>
+    {% for run in tab.runs["items"] %}
+      <tr data-run="{{ run.id }}">
+        <td><time datetime="{{ run.started_at }}">{{ t("monitor.tab.utc", time=run.started_at[:16]|replace("T", " ")) }}</time></td>
+        <td><code>{{ run.check_id|visible }}</code></td>
+        <td><span class="status-dot status-{{ run.status }}" aria-hidden="true"></span> {{ status_text.get(run.status, run.status|visible) }}</td>
+        <td class="dns-wrap">
+          {% if run.findings %}<ul>{% for f in run.findings %}<li>{% if f.title %}{{ f.title|visible }}{% else %}<code>{{ f.code|visible }}</code>{% endif %}</li>{% endfor %}</ul>{% endif %}
+          {% if run.findings_truncated %}<p class="hint">{{ t("monitor.tab.findings_truncated") }}</p>{% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% if tab.runs.next_cursor %}<p><a href="/domains/{{ domain_id }}/monitoring?bucket={{ tab.bucket }}&amp;cursor={{ tab.runs.next_cursor|urlencode }}" data-testid="history-older">{{ t("monitor.tab.history_older") }}</a></p>{% endif %}
+  {% endif %}
+</section>
+
+<section data-testid="monitor-diff">
+  <h2>{{ t("monitor.diff.title") }}</h2>
+  {% set snaps = tab.snapshots["items"] %}
+  {% if snaps|length < 2 %}
+  <p class="empty-state" data-testid="diff-empty">{{ t("monitor.diff.not_enough") }}</p>
+  {% else %}
+  <form method="get" action="/domains/{{ domain_id }}/monitoring" data-testid="diff-form">
+    <input type="hidden" name="bucket" value="{{ tab.bucket }}">
+    <p><label>{{ t("monitor.diff.from") }}
+      <select name="from">{% for s in snaps %}<option value="{{ s.id }}"{% if tab.diff_from == s.id|string %} selected{% endif %}>{{ t("monitor.tab.utc", time=s.taken_at[:16]|replace("T", " ")) }}</option>{% endfor %}</select></label>
+    <label>{{ t("monitor.diff.to") }}
+      <select name="to">{% for s in snaps %}<option value="{{ s.id }}"{% if tab.diff_to == s.id|string %} selected{% endif %}>{{ t("monitor.tab.utc", time=s.taken_at[:16]|replace("T", " ")) }}</option>{% endfor %}</select></label>
+    <button type="submit">{{ t("monitor.diff.compare") }}</button></p>
+  </form>
+  {% endif %}
+  {% if tab.diff_note %}<p class="form-error" role="alert" data-testid="diff-note">{{ t(tab.diff_note) }}</p>{% endif %}
+  {% if tab.diff is not none %}
+  {% set kind_text = {"added": t("monitor.diff.kind.added"), "removed": t("monitor.diff.kind.removed"), "changed": t("monitor.diff.kind.changed"), "inconclusive": t("monitor.diff.kind.inconclusive")} %}
+  {% if not tab.diff.changes %}
+  <p class="empty-state" data-testid="diff-none">{{ t("monitor.diff.none") }}</p>
+  {% else %}
+  <table data-testid="diff-table">
+    <thead><tr>
+      <th scope="col">{{ t("monitor.diff.col.name") }}</th>
+      <th scope="col">{{ t("monitor.diff.col.type") }}</th>
+      <th scope="col">{{ t("monitor.diff.col.kind") }}</th>
+      <th scope="col">{{ t("monitor.diff.col.before") }}</th>
+      <th scope="col">{{ t("monitor.diff.col.after") }}</th>
+    </tr></thead>
+    <tbody>
+    {% for c in tab.diff.changes %}
+      <tr>
+        <td class="dns-wrap"><code>{{ c.name|visible }}</code></td>
+        <td><code>{{ c.type|visible }}</code></td>
+        <td>{{ kind_text.get(c.kind, c.kind|visible) }}</td>
+        <td class="dns-wrap">{% for v in c.before_values %}<code>{{ v|visible }}</code>{% if not loop.last %}<br>{% endif %}{% endfor %}</td>
+        <td class="dns-wrap">{% for v in c.after_values %}<code>{{ v|visible }}</code>{% if not loop.last %}<br>{% endif %}{% endfor %}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+  {% endif %}
+</section>
+{% endblock %}

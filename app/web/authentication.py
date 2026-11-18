@@ -79,4 +79,5 @@ async def authentication_tab(
         domain_id=view.id,
         display_name=view.display_name,
         results=results,
+        can_monitor=can(principal, Action.MONITOR_READ, DomainResource(web.ctx.tenant_id, view.id)),
     )

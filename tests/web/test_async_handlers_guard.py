@@ -26,6 +26,7 @@ MODULES = (
     "rules",
     "dkim_selectors",
     "dnsbl_lists",
+    "monitoring",
 )
 
 # Methods of the admin/domain services and of the Session that touch the database.

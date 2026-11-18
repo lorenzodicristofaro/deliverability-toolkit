@@ -267,6 +267,10 @@ def _monitor_patch(_w: World, _role: str) -> dict[str, Any]:
     return {"enabled": False}
 
 
+def _monitor_form(_w: World, _role: str) -> dict[str, Any]:
+    return {"interval_seconds": "86400", "check_ids": "spf"}
+
+
 def _rule_sample(_w: World, _role: str) -> dict[str, Any]:
     return {"kind": "keyword", "pattern": "probe", "sample": "probe text"}
 
@@ -493,6 +497,12 @@ MATRIX: dict[tuple[str, str], Entry] = {
     ("GET", "/domains/{domain_id}/esps"): Entry(Kind.DOMAIN),
     ("POST", "/domains/{domain_id}/esps"): Entry(Kind.DOMAIN, body=_esp_form),
     ("POST", "/domains/{domain_id}/esps/{esp_id}/remove"): Entry(Kind.DOMAIN),
+    # Monitoring tab (app.web.monitoring, M7-13): read = `monitor.read` after `domain.read`,
+    # writes `monitor.manage`; every role gets 404 on a foreign or unassigned domain and tenant
+    # B's target stays unchanged. Per role, toggles and CSRF: tests/web/test_monitoring_ui.py.
+    ("GET", "/domains/{domain_id}/monitoring"): Entry(Kind.DOMAIN),
+    ("POST", "/domains/{domain_id}/monitoring"): Entry(Kind.DOMAIN, body=_monitor_form),
+    ("POST", "/domains/{domain_id}/monitoring/delete"): Entry(Kind.DOMAIN),
     ("GET", "/tools/dkim/stream"): Entry(Kind.DNS, own={**_by_role(422, 422), "viewer": 403}),
     # ESP API (app.api.v1.domain_esps). The catalogue is tenant-level, public profile data with
     # no tenant content: every member reads it, client viewers included (M6-06c). The domain

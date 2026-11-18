@@ -126,6 +126,7 @@ class DomainRow:
     can_delete: bool
     can_check: bool = False
     can_verify: bool = False
+    can_monitor: bool = False  # the Monitoring tab (M7-13)
 
 
 def domain_row(view: DomainView, principal: Principal, tenant_id: int) -> DomainRow:
@@ -139,6 +140,7 @@ def domain_row(view: DomainView, principal: Principal, tenant_id: int) -> Domain
         can_delete=can(principal, Action.DOMAIN_DELETE, resource),
         can_check=can(principal, Action.CHECK_RUN, resource),
         can_verify=can(principal, Action.DOMAIN_VERIFY, resource),
+        can_monitor=can(principal, Action.MONITOR_READ, resource),
     )
 
 

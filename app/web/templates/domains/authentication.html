@@ -6,6 +6,7 @@
 <nav class="tabs" aria-label="{{ t('checks.tab.label') }}">
   <a href="/domains/{{ domain_id }}/authentication" aria-current="page" data-testid="tab-authentication">{{ t("checks.tab.authentication") }}</a>
   <a href="/domains/{{ domain_id }}/esps" data-testid="tab-esps">{{ t("web.domain.esps.title") }}</a>
+  {% if can_monitor %}<a href="/domains/{{ domain_id }}/monitoring" data-testid="tab-monitoring">{{ t("monitor.tab.title") }}</a>{% endif %}
   <a href="/domains/{{ domain_id }}/authentication" data-testid="run-again">{{ t("checks.run_again") }}</a>
 </nav>
 {% for result in results %}

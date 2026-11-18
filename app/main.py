@@ -43,6 +43,7 @@ from app.web.domains import router as domains_router
 from app.web.health import router as health_router
 from app.web.landing import router as landing_router
 from app.web.message import router as message_router
+from app.web.monitoring import router as monitoring_router
 from app.web.rules import router as rules_router
 from app.web.setup import SetupGateMiddleware, prepare_setup
 from app.web.setup import router as setup_router
@@ -186,6 +187,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     web_app.include_router(domains_router)
     web_app.include_router(authentication_router)
     web_app.include_router(domain_esps_router)
+    web_app.include_router(monitoring_router)
     web_app.include_router(dns_tools_router)
     web_app.include_router(message_router)
     web_app.include_router(content_router)

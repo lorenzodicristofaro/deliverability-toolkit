@@ -121,3 +121,22 @@ main:focus { outline: none; }
 .dns-wrap { overflow-wrap: anywhere; white-space: pre-wrap; }
 /* Custom check remediation (M5-24): plain text, line breaks kept, runs of spaces collapsed. */
 .remediation-text { overflow-wrap: anywhere; white-space: pre-line; }
+/* Monitoring tab charts (M7-13): inline SVG, classes only (the CSP allows no inline styles).
+   Status colors always come with a label (legend, tooltip, table): never color alone. */
+.status-ok { --status: #0ca30c; }
+.status-info { --status: #6b7a90; }
+.status-warn { --status: #fab219; }
+.status-fail { --status: #d03b3b; }
+.status-error { --status: #ec835a; }
+.status-none { --status: var(--surface); }
+.status-dot { display: inline-block; width: 0.7rem; height: 0.7rem; border-radius: 50%; background: var(--status, var(--border)); }
+.chart { margin: 0.5rem 0 1rem; }
+.chart-svg { display: block; width: 100%; height: auto; max-width: 60rem; }
+.chart-bar, .chart-cell { fill: var(--status); stroke: var(--bg); stroke-width: 1; }
+.chart-cell.status-none { stroke: var(--border); stroke-opacity: 0.4; }
+.chart-grid { stroke: var(--border); stroke-opacity: 0.35; stroke-width: 1; }
+.chart-baseline { stroke: var(--border); stroke-width: 1; }
+.chart-axis { fill: var(--muted); font-size: 11px; }
+.chart-legend { display: flex; flex-wrap: wrap; gap: 0.25rem 1rem; list-style: none; padding: 0; margin: 0.5rem 0; }
+.monitor-target { display: grid; grid-template-columns: max-content 1fr; gap: 0.25rem 1rem; }
+.monitor-target dd { margin: 0; }
