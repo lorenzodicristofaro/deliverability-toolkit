@@ -205,6 +205,34 @@ class MonitorTargetRepository:
         row = self._row(target_id)
         return None if row is None else MonitorTargetRecord.from_model(row)
 
+    def lock_latest_run(self, target_id: object, last_run_at: object) -> bool:
+        """True when the target's `last_run_at` is still `last_run_at` (no newer run stored
+        since, by any worker); the target row then stays locked until the transaction ends, so a
+        newer run cannot store (or emit with this guard) before this transaction commits.
+        PostgreSQL: SELECT .. FOR UPDATE (after waiting for a concurrent store, the row is
+        re-checked and no longer matches). SQLite: a no-op conditional UPDATE, which begins the
+        write transaction and takes SQLite's single writer lock. False if the target is missing,
+        foreign or malformed, or a newer run was stored. `last_run_at` must be timezone-aware."""
+        at = _aware(last_run_at, "last_run_at")
+        tid = coerce_id(target_id)
+        if tid is None:
+            return False
+        match = (
+            MonitorTarget.tenant_id == self._ctx.tenant_id,
+            MonitorTarget.id == tid,
+            MonitorTarget.last_run_at == at,
+        )
+        if self._session.get_bind().dialect.name == "postgresql":
+            stmt = select(MonitorTarget.id).where(*match).with_for_update()
+            return self._session.scalar(stmt) is not None
+        touch = (
+            update(MonitorTarget)
+            .where(*match)
+            .values(last_run_at=MonitorTarget.last_run_at, updated_at=MonitorTarget.updated_at)
+            .execution_options(synchronize_session=False)
+        )
+        return int(cast(CursorResult[Any], self._session.execute(touch)).rowcount) == 1
+
     def get_for_domain(self, domain_id: object) -> MonitorTargetRecord | None:
         """The target of the domain; None if there is none or the domain is foreign/malformed."""
         did = coerce_id(domain_id)

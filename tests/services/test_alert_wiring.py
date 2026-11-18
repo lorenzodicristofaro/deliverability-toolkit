@@ -40,7 +40,7 @@ from app.repositories import repo_for
 from app.repositories.monitor_targets import DueTarget
 from app.services import alerts as alerts_module
 from app.services.alert_dispatch import AlertDispatcher, ChannelRegistry, seal_secrets
-from app.services.alerts import AlertService, EmitIncomplete, EmitResult
+from app.services.alerts import AlertService, EmitIncomplete, EmitResult, LatestRun
 from app.services.change_detect import ChangeEvent
 from app.services.monitor_run import AlertReleaser, MonitorRunExecutor, RunOutcome
 from app.services.scheduler import ScheduledRun
@@ -398,6 +398,59 @@ async def test_a_newer_run_stored_by_another_replica_stops_the_retry(
     assert older is not None and newer and newer[0] is not None and newer[0].events
     assert calls == ["older", "newer"]  # the older run was not offered again
     assert any(getattr(r, "event", "") == "monitor_run.emit_superseded" for r in caplog.records)
+
+
+async def test_a_retry_racing_a_newer_replica_run_inserts_no_stale_head(
+    world: mr.World, caplog: pytest.LogCaptureFixture
+) -> None:
+    """M7-14d, the whole interleaving through two replicas and the real alert service: the older
+    run ("listed") fails to emit once; the executor's pre-filter passes (forced: the newer run
+    stores right after it, the window the pre-filter cannot close); the other replica's newer run
+    stores and emits "cleared"; then the older run's retry fires. The service's in-transaction
+    check records nothing for it, the head stays "cleared", and the retry does not loop."""
+    due = world.target()
+    _, baseline = wiring(world)
+    await run(world, baseline, due)  # zen not listed: the baseline
+    _, other_replica = wiring(world)
+    newer: list[RunOutcome | None] = []
+    sleeps: list[float] = []
+
+    async def sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+        if not newer:
+            world.clock.at += timedelta(minutes=1)
+            zen(world, "not_listed")
+            newer.append(await run(world, other_replica, due))
+
+    _, replica = wiring(world, failures=1, sleep=sleep)
+    replica._still_latest = lambda *a: True  # type: ignore[method-assign]
+    zen(world, "listed")
+    with caplog.at_level(logging.WARNING):
+        older = await run(world, replica, due)
+    assert older is not None and mr.kinds(older) == [("new_listing", "zen")]
+    assert newer and newer[0] is not None and mr.kinds(newer[0]) == [("listing_cleared", "zen")]
+    assert alerts(world) == [("listing_cleared", False)]  # no "listed" after "cleared"
+    assert sleeps == [2.0]  # one retry, superseded: not a failure, no loop
+    events = [getattr(r, "event", "") for r in caplog.records]
+    assert "alerts.emit_superseded" in events and "monitor_run.emit_gave_up" not in events
+
+
+async def test_the_executor_hands_the_alert_service_its_run(world: mr.World) -> None:
+    seen: list[Any] = []
+    service, executor = wiring(world)
+    real = service.emit
+
+    def emit(ctx: TenantContext, events: Sequence[ChangeEvent], **kw: Any) -> EmitResult:
+        seen.append(kw.get("latest"))
+        return real(ctx, events, **kw)
+
+    service.emit = emit  # type: ignore[method-assign]
+    due = world.target()
+    await run(world, executor, due)
+    world.zone(spf=mr.SPF_Y)
+    await run(world, executor, due)
+    assert seen == [LatestRun(due.id, world.clock.now())]
+    assert alerts(world) == [("record_changed", False)]
 
 
 async def test_a_failing_latest_run_check_is_a_failed_attempt_not_a_lost_alert(

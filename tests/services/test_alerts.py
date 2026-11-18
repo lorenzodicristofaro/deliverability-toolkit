@@ -29,7 +29,12 @@ from app.core.tenancy import TenantContext
 from app.models import Alert, AlertDelivery, Tenant
 from app.models.alert import KINDS
 from app.repositories import repo_for
-from app.repositories.alerts import INVALID_ERROR, AlertRecord, AlertRepository
+from app.repositories.alerts import (
+    INVALID_ERROR,
+    AlertDeliveryRepository,
+    AlertRecord,
+    AlertRepository,
+)
 from app.services import alerts as alerts_module
 from app.services.alerts import (
     CODES,
@@ -39,6 +44,7 @@ from app.services.alerts import (
     AlertService,
     DeliveryError,
     EmitIncomplete,
+    LatestRun,
     is_valid_event,
     payload,
     state_hash,
@@ -955,3 +961,184 @@ def test_heads_inside_their_window_do_not_block_later_streams(world: World) -> N
     assert svc.release_suppressed(world.ctx, limit=1) == 1  # zen; sbl's window still open
     world.clock.at = T0 + timedelta(minutes=67 + 61)
     assert svc.release_suppressed(world.ctx, limit=1) == 1  # sbl, past the first page
+
+
+# --- latest-run guard (M7-14d) -----------------------------------------------------------------
+
+
+def _target(world: World, ctx: TenantContext | None = None, domain: int | None = None) -> int:
+    with world.factory.begin() as db:
+        rec = repo_for(ctx or world.ctx, db).monitor_targets.create(
+            domain or world.domain,
+            check_ids=["dnsbl"],
+            interval_seconds=3600,
+            next_run_at=T0 + timedelta(hours=1),
+        )
+        assert rec is not None
+        return rec.id
+
+
+def _store_run(world: World, target: int, at: datetime, ctx: TenantContext | None = None) -> None:
+    """What a run's store transaction does to the target (`MonitorRunExecutor._store`)."""
+    with world.factory.begin() as db:
+        repo = repo_for(ctx or world.ctx, db).monitor_targets
+        assert repo.update(target, last_run_at=at) is not None
+
+
+def _kinds(world: World) -> list[str]:
+    return [a.kind for a in world.alerts()]
+
+
+def test_an_older_run_is_superseded_once_a_newer_one_stored_and_emitted(world: World) -> None:
+    """The interleaving of the ticket, in order: the older run stored (t1) and its emit failed;
+    a newer run stored (t2) and emitted "cleared"; then the older run's retry fires. It records
+    nothing (no "listed" on top of "cleared") and is not a failure, so the caller does not retry."""
+    target = _target(world)
+    older, newer = T0, T0 + timedelta(minutes=1)
+    _store_run(world, target, older)
+    _store_run(world, target, newer)
+    svc = world.service()
+    assert svc.emit(world.ctx, [listing(world, False)], latest=LatestRun(target, newer)).created
+    retry = svc.emit(
+        world.ctx, [listing(world), regression(world)], latest=LatestRun(target, older)
+    )
+    assert (retry.created, retry.failed, retry.superseded) == (0, 0, 2)
+    assert _kinds(world) == ["listing_cleared"]
+    svc(world.ctx, [listing(world)], latest=LatestRun(target, older))  # no EmitIncomplete
+    assert _kinds(world) == ["listing_cleared"]
+
+
+def test_the_latest_run_emits_exactly_once(world: World) -> None:
+    target = _target(world)
+    _store_run(world, target, T0)
+    svc = world.service()
+    mark = LatestRun(target, T0)
+    first = svc.emit(world.ctx, [listing(world)], latest=mark)
+    again = svc.emit(world.ctx, [listing(world)], latest=mark)
+    assert (first.created, first.superseded) == (1, 0)
+    assert (again.created, again.duplicates, again.superseded) == (0, 1, 0)
+    assert _kinds(world) == ["new_listing"]
+
+
+def test_a_store_racing_the_emit_waits_for_its_commit(world: World) -> None:
+    """The window M7-14d closes: the older run's emit has passed the latest-run check and not
+    yet inserted when the newer run stores. The newer store cannot land in between (PostgreSQL:
+    the target row lock; SQLite: the writer lock taken by the guard), so it waits for the emit's
+    commit; the newer run's "cleared" then chains on top and is the head."""
+    target = _target(world)
+    older, newer = T0, T0 + timedelta(minutes=1)
+    _store_run(world, target, older)
+    order: list[str] = []
+    checked, stored = threading.Event(), threading.Event()
+    original = AlertRepository.insert_if_absent
+    in_older = threading.local()
+
+    def insert_after_the_store(self: AlertRepository, *a: Any, **kw: Any) -> AlertRecord | None:
+        if getattr(in_older, "on", False):
+            checked.set()
+            stored.wait(timeout=1)  # times out: the store is blocked until this commits
+            order.append("older inserted")
+        return original(self, *a, **kw)
+
+    def emit_older() -> Any:
+        in_older.on = True
+        return world.service().emit(world.ctx, [listing(world)], latest=LatestRun(target, older))
+
+    def store_newer() -> None:
+        assert checked.wait(timeout=10)
+        _store_run(world, target, newer)
+        order.append("newer stored")
+        stored.set()
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(AlertRepository, "insert_if_absent", insert_after_the_store)
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            emitted = pool.submit(emit_older)
+            pool.submit(store_newer).result(timeout=30)
+            result = emitted.result(timeout=30)
+    assert order == ["older inserted", "newer stored"]
+    assert (result.created, result.failed) == (1, 0)
+    cleared = world.service().emit(
+        world.ctx, [listing(world, False)], latest=LatestRun(target, newer)
+    )
+    assert cleared.created == 1
+    assert _kinds(world) == ["new_listing", "listing_cleared"]
+    # The older run's retry now records nothing.
+    retry = world.service().emit(world.ctx, [listing(world)], latest=LatestRun(target, older))
+    assert (retry.superseded, retry.failed) == (1, 0)
+    assert _kinds(world) == ["new_listing", "listing_cleared"]
+
+
+@pytest.mark.parametrize("where", ["insert", "deliveries"])
+def test_a_failing_insert_leaves_no_partial_state(
+    world: World, monkeypatch: pytest.MonkeyPatch, where: str
+) -> None:
+    """Guard, insert and deliveries are one transaction: a failure after the guard rolls all
+    of it back (no alert, no delivery, the target untouched, its lock released)."""
+    world.route("new_listing", 1)
+    target = _target(world)
+    _store_run(world, target, T0)
+    with world.factory() as db:
+        before = repo_for(world.ctx, db).monitor_targets.get(target)
+
+    def boom(*a: Any, **kw: Any) -> Any:
+        raise RuntimeError("db write failed: secret detail")
+
+    if where == "insert":
+        original = AlertRepository.insert_if_absent
+
+        def insert_then_fail(self: AlertRepository, *a: Any, **kw: Any) -> Any:
+            original(self, *a, **kw)
+            boom()
+
+        monkeypatch.setattr(AlertRepository, "insert_if_absent", insert_then_fail)
+    else:
+        monkeypatch.setattr(AlertDeliveryRepository, "add_pending", boom)
+    with pytest.raises(EmitIncomplete):
+        world.service()(world.ctx, [listing(world)], latest=LatestRun(target, T0))
+    monkeypatch.undo()
+    assert world.count(Alert) == 0 and world.count(AlertDelivery) == 0
+    with world.factory() as db:
+        assert repo_for(world.ctx, db).monitor_targets.get(target) == before
+    later = T0 + timedelta(minutes=1)
+    _store_run(world, target, later)  # no lock left behind
+    result = world.service().emit(world.ctx, [listing(world)], latest=LatestRun(target, later))
+    assert result.created == 1 and world.count(AlertDelivery) == 1
+
+
+@pytest.mark.parametrize("case", ["missing", "foreign", "older", "never_stored"])
+def test_a_run_that_is_not_the_latest_records_nothing(world: World, case: str) -> None:
+    target = _target(world)
+    foreign = _target(world, world.ctx_b, world.domain_b)
+    mark = {
+        "missing": LatestRun(target + foreign + 1000, T0),
+        "foreign": LatestRun(foreign, T0),
+        "older": LatestRun(target, T0 - timedelta(seconds=1)),
+        "never_stored": LatestRun(target, T0),
+    }[case]
+    if case != "never_stored":
+        _store_run(world, target, T0)
+        _store_run(world, foreign, T0, world.ctx_b)
+    result = world.service().emit(world.ctx, [listing(world)], latest=mark)
+    assert (result.created, result.failed, result.superseded) == (0, 0, 1)
+    assert world.count(Alert) == 0
+
+
+@pytest.mark.parametrize(
+    "mark",
+    [
+        "1",
+        (1, T0),
+        LatestRun(0, T0),
+        LatestRun(-3, T0),
+        LatestRun(True, T0),
+        LatestRun("1", T0),  # type: ignore[arg-type]
+        LatestRun(1, T0.replace(tzinfo=None)),
+        LatestRun(1, "2026-11-18T12:00:00Z"),  # type: ignore[arg-type]
+    ],
+    ids=repr,
+)
+def test_a_malformed_latest_run_is_rejected(world: World, mark: Any) -> None:
+    with pytest.raises(TypeError):
+        world.service().emit(world.ctx, [listing(world)], latest=mark)
+    assert world.count(Alert) == 0
