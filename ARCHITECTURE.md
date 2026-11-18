@@ -216,6 +216,43 @@ newest snapshot of each domain is never pruned (it is the baseline of the next d
   (`carry_forward` over recent snapshots); an `error` result yields only error events, a first run
   none. Events carry a deterministic fingerprint (kind, domain_id, subject, hash of the new state)
   and go to an injected `EventSink`; until M7-14 (delivery, dedup) the app logs them.
+- Alerts (M7-14, `app/services/alerts.py`, `app/repositories/alerts.py`, migration 0016).
+  Semantics: "exactly once per change" means exactly one `alerts` row per (tenant, fingerprint,
+  state transition), and at-least-once delivery attempts per channel with an idempotent per-channel
+  `alert_deliveries` row, so a restart or retry never creates a second alert nor re-sends one
+  already marked `sent`. Exactly-once AT THE REMOTE ENDPOINT cannot be guaranteed: after a crash
+  between the remote accepting a message and the `sent` commit, the message is sent again. The
+  guarantee is on alert creation; a delivery is marked `sent` in its own transaction right after
+  the send returns, before any retry decision.
+  Tables: `alerts` (tenant, domain, kind, `stream`, `fingerprint`, `state_hash`, payload as a code
+  plus bounded string params, `suppressed`, `created_at`) with UNIQUE (tenant_id, fingerprint,
+  state_hash); `alert_deliveries` (alert, channel, status pending|sent|failed|abandoned, attempts,
+  next_attempt_at, last_error as a code only) with UNIQUE (alert_id, channel_id); `alert_rules`
+  (tenant, kind, channel) with UNIQUE (tenant_id, kind, channel_id). Composite FKs keep alerts on
+  the tenant's domains and deliveries on the tenant's alerts; domain or tenant deletion cascades.
+  `channel_id` has no FK until the channels table (M7-15).
+  Dedup: each event belongs to a stream (SHA-256 of family, domain, subject: one DNS entry, one
+  DNSBL list, one check's policy, one check's errors). `emit(ctx, events)` (one transaction per
+  event) reads the stream's latest alert; an event with the same fingerprint is a duplicate (a
+  replay, or the M7-10b duplicate `new_listing` of a re-enabled list), except a
+  `policy_regression` when a non-error run of that check with a better status started since that
+  alert (improvements emit no event, so the run history is the evidence). Otherwise it INSERTs
+  with `state_hash` = SHA-256(new state, id of the stream's latest alert or 0) and ON CONFLICT DO
+  NOTHING (SQLite and PostgreSQL; no check-then-insert): every emitter that read the same stream
+  position computes the same key, so concurrent emitters and replays leave one row and only the
+  inserter creates deliveries. A -> B -> A -> B alerts every transition.
+  Flapping: a true change to a fingerprint whose last non-suppressed alert is younger than
+  `min_realert` (an `AlertService` setting, default 1 hour) is stored as a `suppressed` row:
+  counted and visible, never delivered, and it is the stream's new state.
+  Rules: a created, not suppressed alert gets one `pending` delivery per channel that the
+  tenant's `alert_rules` route its kind to; no rule means no delivery (the alert is still
+  recorded for the UI).
+  Delivery (`deliver_due(ctx, send)`, async, database work in threads): each due delivery is
+  claimed with a conditional UPDATE (attempts + 1, due again after a lease, so a crash during the
+  send resumes later and two workers never both send), sent through the injected `Sender`, then
+  marked `sent`, or `failed` with exponential backoff (base * 2^(attempt-1), capped) from the
+  injected clock, or `abandoned` after `max_attempts`. Failures are stored and logged as a stable
+  code only, never a message, response body or secret.
 - Maintenance (M7-09): every `MAINTENANCE_INTERVAL_MINUTES` the scheduler process runs the session
   purge (`purge_sessions` with the session policy; every role also purges once at startup),
   `prune_check_runs` and `prune_dns_snapshots`, each in its own transaction; a failure is logged
