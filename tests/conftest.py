@@ -5,6 +5,7 @@ TEST_DATABASE_URL is set (CI, or a local throwaway container), on PostgreSQL.
   session (lazily): SQLite tests get a copy of a migrated template, PostgreSQL tests a TRUNCATE.
 - `db_url`: a truly empty database, for tests that run migrations themselves or need no schema.
 - `--db-backend`: runs only one side of the split used by the CI jobs (docs/TESTING.md).
+- `--shard=K/N`: collects only the test files of shard K of N (tests/support/sharding.py).
 - `seed_table_access`: skips the startup seed sync in `SEEDLESS_MODULES` and guards that choice.
 - pytest-xdist: each worker gets its own PostgreSQL database (`<name>_gwN`, created on first use)
   and its own SQLite files (per-worker `tmp_path`), so no DB state is shared between workers."""
@@ -26,6 +27,13 @@ from sqlalchemy.exc import ArgumentError
 from app.core.db import create_db_engine
 from app.models import Base
 from tests.support.dns_zones import FakeServerSet, load_zones
+from tests.support.sharding import (
+    ShardError,
+    discover_test_files,
+    load_weights,
+    parse_shard,
+    shard_of_files,
+)
 
 ROOT = Path(__file__).resolve().parent.parent
 _MIGRATION_KEY = "k" * 40
@@ -228,6 +236,41 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         default=None,
         help="sqlite: everything except the PostgreSQL params; postgresql: only those params",
     )
+    parser.addoption(
+        "--shard",
+        default=None,
+        metavar="K/N",
+        help="collect only the test files of shard K of N (CI matrix, docs/TESTING.md)",
+    )
+
+
+_SHARD_FILES = pytest.StashKey[frozenset[str]]()
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    """With `--shard=K/N`, compute once which test files belong to shard K. The split depends
+    only on the file list and tests/support/shard_weights.json, so every xdist worker and every
+    CI shard computes the same one."""
+    value = config.getoption("--shard")
+    if value is None:
+        return
+    try:
+        index, total = parse_shard(value)
+    except ShardError as exc:
+        raise pytest.UsageError(str(exc)) from None
+    weights = load_weights(config.getoption("--db-backend"))
+    shards = shard_of_files(discover_test_files(ROOT), weights, total)
+    config.stash[_SHARD_FILES] = frozenset(f for f, s in shards.items() if s == index)
+
+
+def pytest_ignore_collect(collection_path: Path, config: pytest.Config) -> bool | None:
+    """Skip collecting the test files of other shards (None: no opinion, collect as usual)."""
+    mine = config.stash.get(_SHARD_FILES, None)
+    if mine is None or not collection_path.name.startswith("test_"):
+        return None
+    if collection_path.suffix != ".py" or not collection_path.is_relative_to(ROOT / "tests"):
+        return None
+    return True if collection_path.relative_to(ROOT).as_posix() not in mine else None
 
 
 def needs_postgres(item: pytest.Item) -> bool:
