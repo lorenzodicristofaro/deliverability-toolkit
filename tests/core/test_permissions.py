@@ -3,6 +3,7 @@ and ARCHITECTURE section 4 (not derived from app code) and expanded over every p
 action x resource situation. No DB, no network."""
 
 import itertools
+from collections.abc import Iterable
 from types import MappingProxyType
 from typing import Any
 
@@ -143,34 +144,41 @@ def _expected(role: str, admin: bool, active: bool, action: Action, situation: s
     return situation in allowed
 
 
+# Every test id asserts all 9 situations (M7-00b: same 3240 cells, one id per principal and
+# action instead of one per cell; a failure names the situation).
 MATRIX = [
-    pytest.param(
-        role, admin, active, action, situation, id=f"{role}-{admin=}-{active=}-{action}-{situation}"
-    )
-    for role, admin, active, action, situation in itertools.product(
-        ROLE_EXPECTED, (False, True), (True, False), list(Action), SITUATIONS
+    pytest.param(role, admin, active, action, id=f"{role}-{admin=}-{active=}-{action}")
+    for role, admin, active, action in itertools.product(
+        ROLE_EXPECTED, (False, True), (True, False), list(Action)
     )
 ]
 
 
 def test_matrix_size() -> None:
-    # 5 role kinds x admin flag x active flag x 18 actions x 9 situations.
-    assert len(MATRIX) == 5 * 2 * 2 * 18 * 9 == 3240
+    # 5 role kinds x admin flag x active flag x 18 actions, each over 9 situations.
+    assert len(MATRIX) * len(SITUATIONS) == 5 * 2 * 2 * 18 * 9 == 3240
+    # The toggle matrices (M7-00b): the full product with no toggle set, plus the toggle cases
+    # (see `_slim`). `test_slimmed_matrices_keep_every_outcome_path` proves the equivalence.
+    assert len(M5_MATRIX) == 3 * 4 * 8 * 9 + (3 * 4 * 9 - 12) + (4 * 9 - 4) + 3 * 4 * 6 == 1064
+    assert len(CHECK_MATRIX) == 4 * 6 * 5 + (4 * 7 - 4) + 4 * 4 == 160
+    assert len(MONITOR_MATRIX) == 2 * 4 * 6 * 5 + (2 * 4 * 10 - 8) + 4 * (3 + 2) == 332
+    assert len(VERIFY_MATRIX) == 4 * 6 * 5 + (4 * 8 - 4) + 4 * 4 == 164
 
 
-@pytest.mark.parametrize(("role", "admin", "active", "action", "situation"), MATRIX)
-def test_matrix(role: str, admin: bool, active: bool, action: Action, situation: str) -> None:
+@pytest.mark.parametrize(("role", "admin", "active", "action"), MATRIX)
+def test_matrix(role: str, admin: bool, active: bool, action: Action) -> None:
     principal = _principal(role, admin=admin, active=active)
-    resource = SITUATIONS[situation]
-    expected = _expected(role, admin, active, action, situation)
-    assert can(principal, action, resource) is expected
-    assert can(principal, action.value, resource) is expected  # string form behaves the same
-    if expected:
-        require(principal, action, resource)
-    else:
-        with pytest.raises(PermissionDenied) as exc:
+    for situation, resource in SITUATIONS.items():
+        expected = _expected(role, admin, active, action, situation)
+        assert can(principal, action, resource) is expected, situation
+        # The string form behaves the same.
+        assert can(principal, action.value, resource) is expected, situation
+        if expected:
             require(principal, action, resource)
-        assert exc.value.code == "permission_denied"
+        else:
+            with pytest.raises(PermissionDenied) as exc:
+                require(principal, action, resource)
+            assert exc.value.code == "permission_denied", situation
 
 
 def test_action_list_is_the_m1_set_plus_later_milestone_actions() -> None:
@@ -574,25 +582,67 @@ def _check_principal(role: str, toggles: dict[str, Any], state: str) -> Principa
     )
 
 
-def _check_expected(role: str, toggle: str, state: str, resource: str) -> bool:
+CHECK_ALLOWING_TOGGLES = {"none", "check_true", "unrelated_false"}
+
+
+def _check_path(role: str, toggle: str, state: str, resource: str) -> tuple[bool, str]:
+    """The expected result and the rule that decides it."""
     if state not in {"member", "instance_admin_member"}:
-        return False
-    if toggle not in {"none", "check_true", "unrelated_false"}:
-        return False
+        return False, "no_active_membership"
+    if toggle not in CHECK_ALLOWING_TOGGLES:
+        return False, "toggle_denied"
     if role == "client_viewer":
-        return resource == "assigned"
-    return resource in {"assigned", "unassigned"}
+        return resource == "assigned", "viewer_assignment"
+    return resource in {"assigned", "unassigned"}, "role_resource"
 
 
-@pytest.mark.parametrize(
-    ("role", "toggle", "state", "resource"),
+def _check_expected(role: str, toggle: str, state: str, resource: str) -> bool:
+    return _check_path(role, toggle, state, resource)[0]
+
+
+# --- M7-00b: slimmed toggle matrices ------------------------------------------------------------
+# Toggles only deny, and only for a principal whose membership in the active tenant would allow.
+# So the full product runs over the dimensions that change the outcome (action x role x state x
+# resource) with no toggle set, and the toggle kinds run separately: every kind for every action
+# and role on one allowing state and resource, and the denying kinds also on one state without
+# an active membership. `test_slimmed_matrices_keep_every_outcome_path` checks that every
+# (role, expected result, deciding rule) of the old full products is still represented.
+TOGGLE_ALLOWING_STATE = "member"
+TOGGLE_DENIED_STATE = "active_elsewhere"  # membership with the toggle exists, tenant not active
+
+
+def _slim(
+    product: Iterable[tuple[Any, ...]], toggle_cases: Iterable[tuple[Any, ...]]
+) -> list[tuple[Any, ...]]:
+    """`product` then `toggle_cases`, each cell once, in a stable order."""
+    return list(dict.fromkeys([*product, *toggle_cases]))
+
+
+def _params(cells: list[tuple[Any, ...]]) -> list[Any]:
+    """Same id format as the old full products: the cell values joined by "-"."""
+    return [pytest.param(*cell, id="-".join(f"{v}" for v in cell)) for cell in cells]
+
+
+CHECK_MATRIX = _slim(
+    (
+        (r, "none", st, res)
+        for r, st, res in itertools.product(CHECK_ROLES, CHECK_STATES, CHECK_RESOURCES)
+    ),
     [
-        pytest.param(r, t, st, res, id=f"{r}-{t}-{st}-{res}")
-        for r, t, st, res in itertools.product(
-            CHECK_ROLES, CHECK_TOGGLES, CHECK_STATES, CHECK_RESOURCES
-        )
+        *(
+            (r, t, TOGGLE_ALLOWING_STATE, "assigned")
+            for r, t in itertools.product(CHECK_ROLES, CHECK_TOGGLES)
+        ),
+        *(
+            (r, t, TOGGLE_DENIED_STATE, "assigned")
+            for r, t in itertools.product(CHECK_ROLES, CHECK_TOGGLES)
+            if t not in CHECK_ALLOWING_TOGGLES
+        ),
     ],
 )
+
+
+@pytest.mark.parametrize(("role", "toggle", "state", "resource"), _params(CHECK_MATRIX))
 def test_check_run_roles_x_toggles_x_states(
     role: str, toggle: str, state: str, resource: str
 ) -> None:
@@ -946,32 +996,60 @@ def _m5_principal(role: str, toggles: dict[str, Any], state: str) -> Principal:
     )
 
 
-def _m5_expected(action: Action, role: str, toggle: str, state: str, resource: str) -> bool:
+def _m5_path(action: Action, role: str, toggle: str, state: str, resource: str) -> tuple[bool, str]:
+    """The expected result and the rule that decides it."""
     if state in {"inactive_user", "inactive_instance_admin"}:
-        return False
+        return False, "inactive"
     if action is Action.RULES_MANAGE and resource.startswith("global_rules"):
         # Global scope: the instance flag alone decides; role and toggles are irrelevant.
-        return state in {"instance_admin_member", "instance_admin_no_membership"}
-    if state not in {"member", "instance_admin_member"} or toggle not in ALLOWING_TOGGLES:
-        return False
+        return state in {"instance_admin_member", "instance_admin_no_membership"}, "global_scope"
+    if state not in {"member", "instance_admin_member"}:
+        return False, "no_active_membership"
+    if toggle not in ALLOWING_TOGGLES:
+        return False, "toggle_denied"
     if action is Action.RULES_MANAGE:
-        return M5_ROLES_MANAGE_TENANT[role] and resource.startswith("own_tenant_rules")
-    return M5_ROLES_TENANT_LEVEL[role] and resource == "own_tenant"
+        allowed = M5_ROLES_MANAGE_TENANT[role] and resource.startswith("own_tenant_rules")
+        return allowed, "tenant_rules"
+    return M5_ROLES_TENANT_LEVEL[role] and resource == "own_tenant", "tenant_level"
 
 
-@pytest.mark.parametrize(
-    ("action", "role", "toggle", "state", "resource"),
-    [
-        pytest.param(a, r, t, st, res, id=f"{a}-{r}-{t}-{st}-{res}")
-        for a, r, t, st, res in itertools.product(
-            (*TENANT_LEVEL_M5, Action.RULES_MANAGE),
-            M5_ROLES_TENANT_LEVEL,
-            M5_TOGGLE_KINDS,
-            M5_STATES,
-            M5_RESOURCES,
+def _m5_expected(action: Action, role: str, toggle: str, state: str, resource: str) -> bool:
+    return _m5_path(action, role, toggle, state, resource)[0]
+
+
+M5_ACTIONS = (*TENANT_LEVEL_M5, Action.RULES_MANAGE)
+M5_ALLOWING_RESOURCE = {
+    Action.CONTENT_ANALYZE: "own_tenant",
+    Action.RULES_READ: "own_tenant",
+    Action.RULES_MANAGE: "own_tenant_rules",
+}
+M5_MATRIX = _slim(
+    (
+        (a, r, "none", st, res)
+        for a, r, st, res in itertools.product(
+            M5_ACTIONS, M5_ROLES_TENANT_LEVEL, M5_STATES, M5_RESOURCES
         )
+    ),
+    [
+        *(
+            (a, r, t, TOGGLE_ALLOWING_STATE, M5_ALLOWING_RESOURCE[a])
+            for a, r, t in itertools.product(M5_ACTIONS, M5_ROLES_TENANT_LEVEL, M5_TOGGLE_KINDS)
+        ),
+        # Global rules: the instance flag allows whatever the toggle says.
+        *(
+            (Action.RULES_MANAGE, r, t, "instance_admin_member", "global_rules")
+            for r, t in itertools.product(M5_ROLES_TENANT_LEVEL, M5_TOGGLE_KINDS)
+        ),
+        *(
+            (a, r, t, TOGGLE_DENIED_STATE, M5_ALLOWING_RESOURCE[a])
+            for a, r, t in itertools.product(M5_ACTIONS, M5_ROLES_TENANT_LEVEL, M5_TOGGLE_KINDS)
+            if t not in ALLOWING_TOGGLES
+        ),
     ],
 )
+
+
+@pytest.mark.parametrize(("action", "role", "toggle", "state", "resource"), _params(M5_MATRIX))
 def test_m5_actions_roles_x_toggles_x_states(
     action: Action, role: str, toggle: str, state: str, resource: str
 ) -> None:
@@ -1160,33 +1238,52 @@ MONITOR_TOGGLES: dict[str, dict[str, Any]] = {
 }
 
 
-def _monitor_expected(action: Action, role: str, toggle: str, state: str, resource: str) -> bool:
+MONITOR_DENIED_BY = {
+    Action.MONITOR_READ: {"read_false", "read_none", "read_str_true"},
+    Action.MONITOR_MANAGE: {"manage_false", "manage_one"},
+}
+
+
+def _monitor_path(
+    action: Action, role: str, toggle: str, state: str, resource: str
+) -> tuple[bool, str]:
+    """The expected result and the rule that decides it."""
     if state not in {"member", "instance_admin_member"}:
-        return False
-    denied_by = {
-        Action.MONITOR_READ: {"read_false", "read_none", "read_str_true"},
-        Action.MONITOR_MANAGE: {"manage_false", "manage_one"},
-    }[action]
-    if toggle in denied_by:
-        return False
+        return False, "no_active_membership"
+    if toggle in MONITOR_DENIED_BY[action]:
+        return False, "toggle_denied"
     if role == "client_viewer":
-        return action is Action.MONITOR_READ and resource == "assigned"
-    return resource in {"assigned", "unassigned"}
+        return action is Action.MONITOR_READ and resource == "assigned", "viewer_assignment"
+    return resource in {"assigned", "unassigned"}, "role_resource"
 
 
-@pytest.mark.parametrize(
-    ("action", "role", "toggle", "state", "resource"),
-    [
-        pytest.param(a, r, t, st, res, id=f"{a}-{r}-{t}-{st}-{res}")
-        for a, r, t, st, res in itertools.product(
-            (Action.MONITOR_READ, Action.MONITOR_MANAGE),
-            CHECK_ROLES,
-            MONITOR_TOGGLES,
-            CHECK_STATES,
-            CHECK_RESOURCES,
+def _monitor_expected(action: Action, role: str, toggle: str, state: str, resource: str) -> bool:
+    return _monitor_path(action, role, toggle, state, resource)[0]
+
+
+MONITOR_ACTIONS = (Action.MONITOR_READ, Action.MONITOR_MANAGE)
+MONITOR_MATRIX = _slim(
+    (
+        (a, r, "none", st, res)
+        for a, r, st, res in itertools.product(
+            MONITOR_ACTIONS, CHECK_ROLES, CHECK_STATES, CHECK_RESOURCES
         )
+    ),
+    [
+        *(
+            (a, r, t, TOGGLE_ALLOWING_STATE, "assigned")
+            for a, r, t in itertools.product(MONITOR_ACTIONS, CHECK_ROLES, MONITOR_TOGGLES)
+        ),
+        *(
+            (a, r, t, TOGGLE_DENIED_STATE, "assigned")
+            for a, r, t in itertools.product(MONITOR_ACTIONS, CHECK_ROLES, MONITOR_TOGGLES)
+            if t in MONITOR_DENIED_BY[a]
+        ),
     ],
 )
+
+
+@pytest.mark.parametrize(("action", "role", "toggle", "state", "resource"), _params(MONITOR_MATRIX))
 def test_monitor_roles_x_toggles_x_states(
     action: Action, role: str, toggle: str, state: str, resource: str
 ) -> None:
@@ -1245,23 +1342,43 @@ VERIFY_TOGGLES: dict[str, dict[str, Any]] = {
 }
 
 
-def _verify_expected(role: str, toggle: str, state: str, resource: str) -> bool:
+VERIFY_DENYING_TOGGLES = {"false", "none_value", "str_true", "one"}
+
+
+def _verify_path(role: str, toggle: str, state: str, resource: str) -> tuple[bool, str]:
+    """The expected result and the rule that decides it."""
     if state not in {"member", "instance_admin_member"}:
-        return False
-    if toggle in {"false", "none_value", "str_true", "one"}:
-        return False
-    return role in {"owner", "admin"} and resource in {"assigned", "unassigned"}
+        return False, "no_active_membership"
+    if toggle in VERIFY_DENYING_TOGGLES:
+        return False, "toggle_denied"
+    allowed = role in {"owner", "admin"} and resource in {"assigned", "unassigned"}
+    return allowed, "role_resource"
 
 
-@pytest.mark.parametrize(
-    ("role", "toggle", "state", "resource"),
+def _verify_expected(role: str, toggle: str, state: str, resource: str) -> bool:
+    return _verify_path(role, toggle, state, resource)[0]
+
+
+VERIFY_MATRIX = _slim(
+    (
+        (r, "none", st, res)
+        for r, st, res in itertools.product(CHECK_ROLES, CHECK_STATES, CHECK_RESOURCES)
+    ),
     [
-        pytest.param(r, t, st, res, id=f"{r}-{t}-{st}-{res}")
-        for r, t, st, res in itertools.product(
-            CHECK_ROLES, VERIFY_TOGGLES, CHECK_STATES, CHECK_RESOURCES
-        )
+        *(
+            (r, t, TOGGLE_ALLOWING_STATE, "assigned")
+            for r, t in itertools.product(CHECK_ROLES, VERIFY_TOGGLES)
+        ),
+        *(
+            (r, t, TOGGLE_DENIED_STATE, "assigned")
+            for r, t in itertools.product(CHECK_ROLES, VERIFY_TOGGLES)
+            if t in VERIFY_DENYING_TOGGLES
+        ),
     ],
 )
+
+
+@pytest.mark.parametrize(("role", "toggle", "state", "resource"), _params(VERIFY_MATRIX))
 def test_domain_verify_roles_x_toggles_x_states(
     role: str, toggle: str, state: str, resource: str
 ) -> None:
@@ -1293,3 +1410,68 @@ def test_domain_verify_needs_a_domain_resource_and_does_not_leak_across_tenants(
     q = _p(memberships=(_grant("client_viewer"), _grant("owner", B)))
     assert can(q, Action.DOMAIN_VERIFY, DomainResource(A, ASSIGNED)) is False
     assert can(q, Action.DOMAIN_VERIFY, DomainResource(B, ASSIGNED)) is False
+
+
+# --- M7-00b: equivalence of the slimmed matrices ------------------------------------------------
+
+Cell = tuple[Any, ...]
+
+
+def _old_products() -> list[tuple[str, list[Cell], list[Cell]]]:
+    """(name, the old full product, the slimmed matrix), every cell as (action, role, toggle,
+    state, resource); check.run and domain.verify had no action dimension."""
+    check, verify = Action.CHECK_RUN, Action.DOMAIN_VERIFY
+    m5 = itertools.product(
+        M5_ACTIONS, M5_ROLES_TENANT_LEVEL, M5_TOGGLE_KINDS, M5_STATES, M5_RESOURCES
+    )
+    monitor = itertools.product(
+        MONITOR_ACTIONS, CHECK_ROLES, MONITOR_TOGGLES, CHECK_STATES, CHECK_RESOURCES
+    )
+    old_check = itertools.product(CHECK_ROLES, CHECK_TOGGLES, CHECK_STATES, CHECK_RESOURCES)
+    old_verify = itertools.product(CHECK_ROLES, VERIFY_TOGGLES, CHECK_STATES, CHECK_RESOURCES)
+    return [
+        ("m5", list(m5), M5_MATRIX),
+        ("monitor", list(monitor), MONITOR_MATRIX),
+        ("check", [(check, *c) for c in old_check], [(check, *c) for c in CHECK_MATRIX]),
+        ("verify", [(verify, *c) for c in old_verify], [(verify, *c) for c in VERIFY_MATRIX]),
+    ]
+
+
+def _cell_outcome(name: str, cell: Cell) -> tuple[bool, str, Principal, object]:
+    """(expected, deciding rule, principal, resource) of one cell, built as its test builds it."""
+    action, role, toggle, state, resource = cell
+    if name == "m5":
+        expected, path = _m5_path(action, role, toggle, state, resource)
+        principal = _m5_principal(role, _toggles_for(action, toggle), state)
+        return expected, path, principal, M5_RESOURCES[resource]
+    if name == "monitor":
+        expected, path = _monitor_path(action, role, toggle, state, resource)
+        toggles = MONITOR_TOGGLES[toggle]
+    elif name == "check":
+        expected, path = _check_path(role, toggle, state, resource)
+        toggles = CHECK_TOGGLES[toggle]
+    else:
+        expected, path = _verify_path(role, toggle, state, resource)
+        toggles = VERIFY_TOGGLES[toggle]
+    return expected, path, _check_principal(role, toggles, state), CHECK_RESOURCES[resource]
+
+
+def test_slimmed_matrices_keep_every_outcome_path() -> None:
+    """Equivalence proof for the M7-00b slimming. The old full products still hold against
+    `can()`; every slimmed cell is one of their cells; every (action, role, expected result,
+    deciding rule) of an old product is still a parametrised case; every toggle kind still runs
+    for every action and role. Toggles only deny, and are read only once the state allows."""
+    for name, old, new in _old_products():
+        assert len(set(new)) == len(new), name
+        assert set(new) <= set(old), name
+        old_keys: set[Cell] = set()
+        new_keys: set[Cell] = set()
+        for cell in old:
+            expected, path, principal, resource = _cell_outcome(name, cell)
+            assert can(principal, cell[0], resource) is expected, (name, cell)
+            old_keys.add((cell[0], cell[1], expected, path))
+        for cell in new:
+            expected, path, _, _ = _cell_outcome(name, cell)
+            new_keys.add((cell[0], cell[1], expected, path))
+        assert old_keys == new_keys, (name, sorted(map(str, old_keys - new_keys)))
+        assert {c[:3] for c in old} == {c[:3] for c in new}, name
