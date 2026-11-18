@@ -275,7 +275,7 @@ Tickets (docs/tickets/M7-*.md, split 2026-11-13; model in brackets):
   - [ ] Follow-up (low): tests/conftest.py:96-106 worker DB name could be truncated near PostgreSQL's 63-char limit (gw1/gw10 collision), local only
   - [ ] Follow-up (low): watch wall-clock tests under -n auto on CI: test_content_rules_engine.py:242/277, test_spf.py:374, test_received.py:565, test_authres.py:738, test_content_rules_admin.py:657
 - [x] M7-00b CI test speed 4: shard both test jobs, cheaper app/TestClient fixtures, permission matrices slimmed (15,662 -> at most 3,000 ids, equivalence proof), redundant regex timing tests to `slow` (main + weekly), stable ids for test_csrf/test_security (absorbs the first M7-00 follow-up); target each test check at most 50% of run 44185669478 (sqlite 7.3 -> 3.6 min, postgres 6.0 -> 3.0 min) (opus; maintainer request 2026-11-18; run before M7-13; ci.yml push by maintainer)
-  - Status: merged f3a3979 (QA APPROVE round 2). Pending: maintainer pushes dev (ci.yml), then CI target measured on two dev runs. Not done: step 3 (per-module app fixtures), the lever if CI misses the target.
+  - Status: done (f3a3979, QA APPROVE round 2). Dev CI run 44282112620: test-sqlite 2.4 min (was 7.3), test-postgres 1.9 min (was 6.0), target met; second run to be recorded. Not done: step 3 (per-module app fixtures), the lever if CI misses the target.
 - [x] M7-01 guarded outbound HTTP client + ARCHITECTURE decision record (opus)
 - [ ] Follow-up (low): tests/parsers/test_message.py::test_fold_bomb_is_bounded_and_fast failed once in two local PostgreSQL full runs under load (timing test, flaky candidate)
 - [x] M7-02 custom check kind http_fetch via guarded client (opus; depends M7-01)
