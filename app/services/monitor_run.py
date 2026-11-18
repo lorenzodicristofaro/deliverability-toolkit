@@ -30,16 +30,15 @@ One run of a `ScheduledRun`:
    stopping as soon as every such list is resolved). A list that errored for any number of runs
    is still judged against its last real outcome, and a list failing for good blocks nothing.
 5. Events: `change_detect.detect_events` (pure) after the commit, handed to the injected
-   `EventSink` in a worker thread. The app wires `AlertSink` (M7-14c): the M7-14 alert service
+   `EventSink` in a worker thread. The app wires the M7-14 `AlertService` (M7-14c), which
    records them (dedup, flapping, deliveries). `log_events` (kind, domain id and fingerprint only)
    is the default when nothing is injected. When the sink raises `EmitIncomplete` (some events not
    recorded, e.g. a transient database error), the same events are offered again, at most
    `emit_attempts` times in all with exponential backoff from `emit_backoff`, and only while this
    is still the latest run of the target started by this executor: an older run is never replayed
    after a newer one (M7-14: replaying an older run alerts again). Any other sink exception, or
-   the last failed attempt, is logged by type and never fails the run. After every completed run
-   the optional `on_run` hook gets the tenant id (in memory, no I/O): `AlertSink.note_run`, so
-   suppressed alerts of that tenant are released by `AlertSink.run_release` once due.
+   the last failed attempt, is logged by type and never fails the run. Suppressed alerts are
+   released by `AlertReleaser` (below), independently of runs.
 
 Not produced: certificate/key expiry events (no check reads them before M9; see change_detect).
 Blocking database work runs in worker threads, so the event loop is never blocked.
@@ -50,7 +49,6 @@ from __future__ import annotations
 import asyncio
 import itertools
 import logging
-import threading
 from collections.abc import Awaitable, Callable, Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -65,6 +63,7 @@ from app.core.tenancy import TenantContext
 from app.dns.types import Resolver
 from app.models.check_run import MAX_DURATION_MS
 from app.repositories import TenantRepositories, repo_for
+from app.repositories.alerts import AlertReleaseRepository
 from app.repositories.base import MAX_LIMIT
 from app.repositories.check_runs import CheckRunInvalid, CheckRunRecord
 from app.repositories.dns_snapshots import (
@@ -102,14 +101,15 @@ RUNNER_FAILED: Final = "runner_failed"
 DEFAULT_EMIT_ATTEMPTS: Final = 3
 DEFAULT_EMIT_BACKOFF: Final = timedelta(seconds=2)
 MAX_EMIT_ATTEMPTS: Final = 10
-# Suppressed alerts are released this often by `AlertSink.run_release` (as the M7-15 dispatcher).
+# Suppressed alerts are released this often by `AlertReleaser.run` (as the M7-15 dispatcher), at
+# most this many tenants per pass (the next pass takes the rest, longest due first).
 DEFAULT_RELEASE_INTERVAL: Final = timedelta(seconds=30)
+DEFAULT_RELEASE_TENANTS: Final = 100
 # `last_status` summary: a failure is never hidden by an error, an error never by a lesser status.
 _SUMMARY_ORDER: Final[tuple[str, ...]] = ("fail", "error", "warn", "info", "ok")
 
 RegistryFn = Callable[[TenantContext, Session, Sequence[str]], CheckRegistry]
 EventSink = Callable[[TenantContext, Sequence[ChangeEvent]], None]
-RunHook = Callable[[int], None]
 
 
 def prepare_registry(ctx: TenantContext, db: Session, ids: Sequence[str]) -> CheckRegistry:
@@ -273,7 +273,6 @@ class MonitorRunExecutor:
         prepare: RegistryFn = prepare_registry,
         deadline_s: float = DEFAULT_DEADLINE_S,
         history: int = HISTORY_LIMIT,
-        on_run: RunHook | None = None,
         emit_attempts: int = DEFAULT_EMIT_ATTEMPTS,
         emit_backoff: timedelta = DEFAULT_EMIT_BACKOFF,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
@@ -294,7 +293,6 @@ class MonitorRunExecutor:
         self._prepare = prepare
         self._deadline_s = deadline_s
         self._history = history
-        self._on_run = on_run
         self._emit_attempts = emit_attempts
         self._emit_backoff = emit_backoff
         self._sleep = sleep
@@ -371,11 +369,6 @@ class MonitorRunExecutor:
         events = detect_events(loaded.domain_id, inputs, loaded.snapshot_baseline, snapshot)
         if events:
             await self._emit(ctx, run.target.id, number, events)
-        if self._on_run is not None:
-            try:
-                self._on_run(ctx.tenant_id)
-            except Exception as exc:  # noqa: BLE001 - a hook failure never fails the run
-                self._log_failed("on_run", exc)
         logger.info(
             "scheduled run of target %d done (%s, %d checks, %d events)",
             run.target.id,
@@ -573,65 +566,49 @@ class MonitorRunExecutor:
         return recorded, stored
 
 
-class AlertSink:
-    """The scheduler process's `EventSink` (M7-14c): `AlertService` records the events (raising
-    `EmitIncomplete` when some were not recorded, so the executor retries), and the tenant is
-    remembered for `release_suppressed`.
+class AlertReleaser:
+    """Releases suppressed alerts once their `min_realert` window has ended (M7-14c).
 
-    Releasing: `AlertService.release_suppressed` is per tenant and there is no cross-tenant query
-    for streams with a suppressed head, so this keeps, per process and in memory, the tenants to
-    release with a deadline: a tenant whose events were offered stays until `min_realert` after
-    that (by then every alert suppressed so far has left its window), a tenant that only ran
-    (`note_run`, the executor's `on_run` hook) for one pass. `release_pending` (sync, worker
-    thread) releases each pending tenant and drops it once its deadline has passed;
-    `run_release` calls it every `interval`. After a restart, the next run of a tenant's target
-    puts the tenant back, so a suppressed state is released at the latest one run interval after
-    its window ended. Thread-safe."""
+    Each pass reads, cross-tenant and read-only, the ids of the tenants with a suppressed stream
+    head due for release (`AlertReleaseRepository.tenants_with_suppressed_heads`, longest due
+    first, at most `tenants` per pass) and calls `AlertService.release_suppressed` for each with
+    `TenantContext(tenant_id, principal=None)`. Nothing is kept in memory: after a restart, or for
+    a tenant without any enabled monitor target, the next pass still finds the head.
+    `release_pending` is sync (worker thread); `run` calls it every `interval` until cancelled."""
 
     def __init__(
         self,
+        factory: sessionmaker[Session],
         alerts: AlertService,
         clock: Clock,
         *,
         interval: timedelta = DEFAULT_RELEASE_INTERVAL,
+        tenants: int = DEFAULT_RELEASE_TENANTS,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
         if not isinstance(interval, timedelta) or interval <= timedelta(0):
             raise ValueError("interval must be a positive timedelta")
+        if type(tenants) is not int or not 1 <= tenants <= MAX_LIMIT:
+            raise ValueError(f"tenants must be an int between 1 and {MAX_LIMIT}")
+        self._factory = factory
         self._alerts = alerts
         self._clock = clock
         self._interval = interval
+        self._tenants = tenants
         self._sleep = sleep
-        self._pending: dict[int, datetime] = {}
-        self._lock = threading.Lock()
 
-    def __call__(self, ctx: TenantContext, events: Sequence[ChangeEvent]) -> None:
-        try:
-            self._alerts(ctx, events)
-        finally:
-            self._note(ctx.tenant_id, self._alerts.min_realert)
-
-    def note_run(self, tenant_id: int) -> None:
-        """`on_run` hook of the executor: release this tenant at the next pass."""
-        self._note(tenant_id, timedelta(0))
-
-    def _note(self, tenant_id: int, window: timedelta) -> None:
-        until = self._clock.now() + window
-        with self._lock:
-            known = self._pending.get(tenant_id)
-            self._pending[tenant_id] = until if known is None else max(known, until)
-
-    def pending(self) -> dict[int, datetime]:
-        """Tenant id -> release deadline (a copy)."""
-        with self._lock:
-            return dict(self._pending)
+    def due_tenants(self, now: datetime) -> list[int]:
+        with self._factory.begin() as db:
+            return AlertReleaseRepository(db).tenants_with_suppressed_heads(
+                now, self._tenants, window=self._alerts.min_realert
+            )
 
     def release_pending(self) -> int:
-        """Release the pending tenants' suppressed alerts that are due; returns the number
-        released. A failure for one tenant is logged by type and the tenant stays pending."""
+        """One pass; returns the number of alerts released. A failure for one tenant is logged
+        by type and the others still run (the failed one is due again at the next pass)."""
         now = self._clock.now()
         released = 0
-        for tenant_id, until in sorted(self.pending().items()):
+        for tenant_id in self.due_tenants(now):
             try:
                 released += self._alerts.release_suppressed(TenantContext(tenant_id, None), now)
             except Exception as exc:  # noqa: BLE001 - one tenant never blocks the others
@@ -640,14 +617,9 @@ class AlertSink:
                     type(exc).__name__,
                     extra={"event": "monitor_run.release_failed", "tenant_id": tenant_id},
                 )
-                continue
-            if now >= until:
-                with self._lock:
-                    if self._pending.get(tenant_id) == until:
-                        del self._pending[tenant_id]
         return released
 
-    async def run_release(self) -> None:
+    async def run(self) -> None:
         """Call `release_pending` in a worker thread every `interval` until cancelled."""
         while True:
             try:
@@ -663,11 +635,10 @@ class AlertSink:
 
 __all__ = [
     "HISTORY_LIMIT",
-    "AlertSink",
+    "AlertReleaser",
     "EventSink",
     "MonitorRunExecutor",
     "RegistryFn",
-    "RunHook",
     "RunOutcome",
     "error_result",
     "list_view_of_record",

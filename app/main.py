@@ -32,7 +32,7 @@ from app.services.alerts import AlertService
 from app.services.auth import SessionPolicy, purge_sessions
 from app.services.clock import Clock, SystemClock
 from app.services.dns_snapshot import heartbeat_from_settings
-from app.services.monitor_run import AlertSink, MonitorRunExecutor
+from app.services.monitor_run import AlertReleaser, MonitorRunExecutor
 from app.services.scheduler import MonitorScheduler, SchedulerConfig, maintenance_job
 from app.services.seed_sync import SeedSyncError, run_seed_sync
 from app.web.auth import router as auth_router
@@ -134,7 +134,6 @@ class AlertWiring:
     factory: sessionmaker[Session]
     clock: Clock
     alerts: AlertService
-    sink: AlertSink
 
 
 def start_scheduler(app: FastAPI) -> MonitorScheduler | None:
@@ -148,15 +147,13 @@ def start_scheduler(app: FastAPI) -> MonitorScheduler | None:
     factory = _session_factory(Request({"type": "http", "app": app}))
     clock = SystemClock()
     alerts = AlertService.from_settings(factory, clock, cfg)
-    sink = AlertSink(alerts, clock)
-    app.state.alert_wiring = AlertWiring(factory, clock, alerts, sink)
+    app.state.alert_wiring = AlertWiring(factory, clock, alerts)
     executor = MonitorRunExecutor(  # M7-10
         factory,
         CachingResolver(build_resolver(cfg)),
         clock,
         heartbeat=heartbeat_from_settings(cfg),
-        sink=sink,
-        on_run=sink.note_run,
+        sink=alerts,
     )
     scheduler = MonitorScheduler(
         factory,
@@ -179,7 +176,8 @@ def start_alert_tasks(app: FastAPI) -> list[asyncio.Task[None]]:
     cfg: Settings = app.state.settings
     if wiring is None or cfg.role not in ("worker", "all"):
         return []
-    tasks = [asyncio.create_task(wiring.sink.run_release(), name="alerts.release")]
+    releaser = AlertReleaser(wiring.factory, wiring.alerts, wiring.clock)
+    tasks = [asyncio.create_task(releaser.run(), name="alerts.release")]
     try:
         cipher = SecretCipher(cfg.encryption_key.get_secret_value())
     except SecretsError as exc:

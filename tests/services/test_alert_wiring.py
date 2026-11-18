@@ -42,7 +42,7 @@ from app.services import alerts as alerts_module
 from app.services.alert_dispatch import AlertDispatcher, ChannelRegistry, seal_secrets
 from app.services.alerts import AlertService, EmitIncomplete, EmitResult
 from app.services.change_detect import ChangeEvent
-from app.services.monitor_run import AlertSink, MonitorRunExecutor, RunOutcome
+from app.services.monitor_run import AlertReleaser, MonitorRunExecutor, RunOutcome
 from app.services.scheduler import ScheduledRun
 from tests.services import test_monitor_run as mr
 from tests.services.test_alert_dispatch import FakeChannel
@@ -205,12 +205,10 @@ class Sleeps:
 
 def wiring(
     w: mr.World, *, min_realert: timedelta = HOUR, failures: int = 0, **kw: Any
-) -> tuple[AlertService, AlertSink, MonitorRunExecutor]:
+) -> tuple[AlertService, MonitorRunExecutor]:
     factory: Any = Flaky(w.factory, failures) if failures else w.factory
     service = AlertService(factory, w.clock, min_realert=min_realert)
-    sink = AlertSink(service, w.clock)
-    executor = w.executor(sink=sink, on_run=sink.note_run, **kw)
-    return service, sink, executor
+    return service, w.executor(sink=service, **kw)
 
 
 async def run(w: mr.World, executor: MonitorRunExecutor, due: DueTarget) -> RunOutcome | None:
@@ -252,7 +250,7 @@ def zen(w: mr.World, outcome: str) -> None:
 
 
 async def test_a_change_makes_one_alert_and_an_identical_run_none(world: mr.World) -> None:
-    _, _, executor = wiring(world)
+    _, executor = wiring(world)
     due = world.target()
     await run(world, executor, due)
     assert alerts(world) == []  # first run: the baseline
@@ -267,7 +265,7 @@ async def test_a_change_makes_one_alert_and_an_identical_run_none(world: mr.Worl
 
 
 async def test_an_error_run_never_alerts_a_removal_or_clearing(world: mr.World) -> None:
-    _, _, executor = wiring(world)
+    _, executor = wiring(world)
     due = world.target()
     await run(world, executor, due)
     zen(world, "listed")
@@ -305,10 +303,10 @@ async def test_a_transient_db_error_on_emit_is_retried_and_the_alert_kept(
     world: mr.World, caplog: pytest.LogCaptureFixture
 ) -> None:
     sleeps = Sleeps()
-    _, _, executor = wiring(world, sleep=sleeps)
+    _, executor = wiring(world, sleep=sleeps)
     due = world.target()
     await run(world, executor, due)
-    _, _, flaky = wiring(world, failures=1, sleep=sleeps)
+    _, flaky = wiring(world, failures=1, sleep=sleeps)
     world.zone(spf=mr.SPF_Y)
     with caplog.at_level(logging.WARNING):
         out = await run(world, flaky, due)
@@ -324,10 +322,10 @@ async def test_emit_retries_are_bounded_and_never_fail_the_run(
     world: mr.World, caplog: pytest.LogCaptureFixture
 ) -> None:
     sleeps = Sleeps()
-    _, _, executor = wiring(world, sleep=sleeps)
+    _, executor = wiring(world, sleep=sleeps)
     due = world.target()
     await run(world, executor, due)
-    _, _, flaky = wiring(world, failures=99, sleep=sleeps)
+    _, flaky = wiring(world, failures=99, sleep=sleeps)
     world.zone(spf=mr.SPF_Y)
     with caplog.at_level(logging.WARNING):
         out = await run(world, flaky, due)
@@ -404,11 +402,22 @@ def test_executor_rejects_bad_emit_settings(world: mr.World, kw: dict[str, Any])
         world.executor(**kw)
 
 
-def test_alert_sink_rejects_a_bad_interval(world: mr.World) -> None:
+def test_releaser_rejects_bad_settings(world: mr.World) -> None:
     service = AlertService(world.factory, world.clock)
-    for bad in (timedelta(0), 30):
+    for kw in ({"interval": timedelta(0)}, {"interval": 30}, {"tenants": 0}, {"tenants": 1001}):
         with pytest.raises(ValueError):
-            AlertSink(service, world.clock, interval=bad)  # type: ignore[arg-type]
+            AlertReleaser(world.factory, service, world.clock, **kw)  # type: ignore[arg-type]
+
+
+def flap(w: mr.World, service: AlertService, tenant: str) -> None:
+    """listed -> cleared -> listed, 10 minutes apart: the last one is a suppressed head."""
+    domain, ctx = w.domains[tenant], w.ctx(tenant)
+    listed = ChangeEvent("new_listing", domain, "zen", None, "listed", "dnsbl")
+    cleared = ChangeEvent("listing_cleared", domain, "zen", "listed", "not_listed", "dnsbl")
+    for event in (listed, cleared, listed):
+        service.emit(ctx, [event])
+        w.clock.at += timedelta(minutes=10)
+    assert alerts(w, tenant)[-1] == ("new_listing", True)
 
 
 # --- release of suppressed alerts and delivery ---------------------------------------------------
@@ -418,7 +427,8 @@ async def test_flapping_listing_is_delivered_once_after_the_window(world: mr.Wor
     """listed -> cleared -> listed inside min_realert: the second "listed" is suppressed, then
     released and delivered exactly once after the window."""
     cipher = SecretCipher(Fernet.generate_key().decode())
-    service, sink, executor = wiring(world)
+    service, executor = wiring(world)
+    releaser = AlertReleaser(world.factory, service, world.clock)
     channel = FakeChannel()
     dispatcher = AlertDispatcher(
         world.factory, service, ChannelRegistry({"webhook": channel}), cipher, world.clock
@@ -431,7 +441,7 @@ async def test_flapping_listing_is_delivered_once_after_the_window(world: mr.Wor
         world.clock.at = t0 + timedelta(minutes=minutes)
         zen(world, outcome)
         await run(world, executor, due)
-        await asyncio.to_thread(sink.release_pending)
+        await asyncio.to_thread(releaser.release_pending)
         await dispatcher.run_once()
 
     def sent() -> list[str]:
@@ -449,59 +459,61 @@ async def test_flapping_listing_is_delivered_once_after_the_window(world: mr.Wor
     assert sent() == ["ALERT_NEW_LISTING", "ALERT_LISTING_CLEARED"]
     # Still inside the window (opened by the first delivered "listed" at minute 10).
     world.clock.at = t0 + timedelta(minutes=69)
-    assert sink.release_pending() == 0
-    world.clock.at = t0 + timedelta(minutes=70, seconds=1)
-    assert sink.release_pending() == 1
+    assert releaser.due_tenants(world.clock.now()) == []
+    assert releaser.release_pending() == 0
+    world.clock.at = t0 + timedelta(minutes=70)
+    assert releaser.release_pending() == 1
     await dispatcher.run_once()
     assert sent() == ["ALERT_NEW_LISTING", "ALERT_LISTING_CLEARED", "ALERT_NEW_LISTING"]
-    # Again later: nothing more, and the tenant leaves the pending set after its deadline.
+    # Later passes: nothing more.
     world.clock.at = t0 + timedelta(minutes=95)
-    assert sink.release_pending() == 0
+    assert releaser.due_tenants(world.clock.now()) == []
+    assert releaser.release_pending() == 0
     await dispatcher.run_once()
-    assert len(channel.calls) == 3 and sink.pending() == {}
+    assert len(channel.calls) == 3
 
 
-def test_after_a_restart_the_next_run_of_the_tenant_releases(world: mr.World) -> None:
-    """A suppressed head from before a restart: the new process only learns the tenant from a
-    run (`note_run`), which is enough to release it."""
-    service = AlertService(world.factory, world.clock, min_realert=HOUR)
-    domain = world.domains["a"]
-    ctx = world.ctx("a")
-    listed = ChangeEvent("new_listing", domain, "zen", None, "listed", "dnsbl")
-    cleared = ChangeEvent("listing_cleared", domain, "zen", "listed", "not_listed", "dnsbl")
-    service.emit(ctx, [listed])
-    world.clock.at += timedelta(minutes=10)
-    service.emit(ctx, [cleared])
-    world.clock.at += timedelta(minutes=10)
-    service.emit(ctx, [listed])
-    assert alerts(world)[-1] == ("new_listing", True)
-    restarted = AlertSink(AlertService(world.factory, world.clock, min_realert=HOUR), world.clock)
+@pytest.mark.parametrize("tenant", ["a", "b"])
+def test_a_new_releaser_finds_heads_from_before_a_restart(world: mr.World, tenant: str) -> None:
+    """No in-memory state: a fresh releaser (a restarted process) releases a suppressed head
+    exactly once, also for a tenant without any monitor target, and only its tenant's."""
+    flap(world, AlertService(world.factory, world.clock, min_realert=HOUR), tenant)
+    with world.factory() as db:
+        assert repo_for(world.ctx(tenant), db).monitor_targets.list() == []
+    other = "b" if tenant == "a" else "a"
+    before_other = alerts(world, other)
+    restarted = AlertReleaser(
+        world.factory, AlertService(world.factory, world.clock, min_realert=HOUR), world.clock
+    )
+    assert restarted.release_pending() == 0  # still inside the window
     world.clock.at += HOUR
-    assert restarted.release_pending() == 0  # nothing known yet
-    restarted.note_run(ctx.tenant_id)
-    assert restarted.release_pending() == 1 and restarted.pending() == {}
-    assert alerts(world)[-1] == ("new_listing", False)
+    assert restarted.due_tenants(world.clock.now()) == [world.tenants[tenant]]
+    assert restarted.release_pending() == 1
+    assert alerts(world, tenant)[-1] == ("new_listing", False)
+    again = AlertReleaser(world.factory, AlertService(world.factory, world.clock), world.clock)
+    assert again.release_pending() == 0 and restarted.release_pending() == 0
+    assert alerts(world, other) == before_other
 
 
-def test_a_release_failure_keeps_the_tenant_pending(
+def test_a_release_failure_is_retried_at_the_next_pass(
     world: mr.World, caplog: pytest.LogCaptureFixture
 ) -> None:
-    service = AlertService(Flaky(world.factory, 1), world.clock)  # type: ignore[arg-type]
-    sink = AlertSink(service, world.clock)
-    sink.note_run(world.tenants["a"])
+    flap(world, AlertService(world.factory, world.clock, min_realert=HOUR), "a")
+    world.clock.at += HOUR
+    flaky = AlertService(Flaky(world.factory, 1), world.clock, min_realert=HOUR)  # type: ignore[arg-type]
+    releaser = AlertReleaser(world.factory, flaky, world.clock)
     with caplog.at_level(logging.ERROR):
-        assert sink.release_pending() == 0
-    assert world.tenants["a"] in sink.pending()
+        assert releaser.release_pending() == 0
     assert any(getattr(r, "event", "") == "monitor_run.release_failed" for r in caplog.records)
     assert "secret detail" not in caplog.text
-    assert sink.release_pending() == 0 and sink.pending() == {}
+    assert releaser.release_pending() == 1 and releaser.release_pending() == 0
 
 
 async def test_release_loop_runs_off_the_loop_until_cancelled(world: mr.World) -> None:
     passes: list[int] = []
     sleeps = Sleeps()
 
-    class Counting(AlertSink):
+    class Counting(AlertReleaser):
         def release_pending(self) -> int:
             passes.append(threading.get_ident())
             if len(passes) == 1:
@@ -512,8 +524,9 @@ async def test_release_loop_runs_off_the_loop_until_cancelled(world: mr.World) -
         await sleeps(seconds)
         await asyncio.sleep(0)
 
-    sink = Counting(AlertService(world.factory, world.clock), world.clock, sleep=sleep)
-    task = asyncio.create_task(sink.run_release())
+    service = AlertService(world.factory, world.clock)
+    releaser = Counting(world.factory, service, world.clock, sleep=sleep)
+    task = asyncio.create_task(releaser.run())
     while len(passes) < 3:
         await asyncio.sleep(0.01)
     task.cancel()
