@@ -157,7 +157,33 @@ def _tampered() -> list[Any]:
     ]
 
 
-@pytest.mark.parametrize("cookie", _tampered())
+# Stable ids: the tokens are generated at import, different in every process (pytest-xdist).
+TAMPERED_IDS = [
+    "empty",
+    "dot",
+    "token_only",
+    "token_dot",
+    "dot_signature",
+    "signature_changed",
+    "token_swapped",
+    "separator_dropped",
+    "appended",
+    "truncated",
+    "colon_separator",
+    "token_padding",
+    "token_non_ascii",
+    "token_plus",
+    "signature_slash",
+    "leading_space",
+    "very_long",
+    "none",
+    "int",
+    "bytes",
+    "list",
+]
+
+
+@pytest.mark.parametrize("cookie", _tampered(), ids=TAMPERED_IDS)
 def test_unsign_rejects_tampered_or_malformed(cookie: Any) -> None:
     assert unsign_session_token(cookie, SECRET) is None
 

@@ -10,12 +10,13 @@ PostgreSQL. In `tests/conftest.py`, `migrated_db_url` gives each test an empty m
 ## CI jobs and PostgreSQL
 
 Workflow `.github/workflows/ci.yml` runs lint and type checks in `lint` and splits the tests into
-two jobs on separate runners, selected by the `--db-backend` option (`tests/conftest.py`):
+two checks, selected by the `--db-backend` option (`tests/conftest.py`). Each check runs as a
+matrix of shards on separate runners (see "Shards" below):
 
-| Job | Command | Runs | Database |
-|-----|---------|------|----------|
-| `test-sqlite` | `uv run pytest -n auto --db-backend=sqlite` (two steps, see below) | every test except the PostgreSQL params: non-DB tests and the SQLite params | none |
-| `test-postgres` | `uv run pytest -n auto --db-backend=postgresql` | only the PostgreSQL params | `postgres:17` service |
+| Check | Shard command | Runs | Database |
+|-------|---------------|------|----------|
+| `test-sqlite` | `uv run pytest -n auto --db-backend=sqlite --shard=K/4 -m "$PYTEST_MARKERS"` | every test except the PostgreSQL params: non-DB tests and the SQLite params | none |
+| `test-postgres` | `uv run pytest -n auto --db-backend=postgresql --shard=K/6 -m "$PYTEST_MARKERS"` | only the PostgreSQL params | `postgres:17` service per shard |
 
 A test is a PostgreSQL param if it carries the skip marker with `PG_SKIP_REASON`, that is, exactly
 the tests that would be skipped without PostgreSQL. The two sides are disjoint and together are the
@@ -49,7 +50,7 @@ repository settings, otherwise the upload is rejected.
 
 ## Parallel runs (pytest-xdist, M7-00)
 
-Both test jobs run with `-n auto`: pytest-xdist starts one worker process per CPU available to the
+Every test shard runs with `-n auto`: pytest-xdist starts one worker process per CPU available to the
 job (without psutil, `auto` is the CPU count the process may use, the same number `nproc` prints in
 the job log). Plain `uv run pytest` without `-n` still runs in a single process, unchanged.
 
@@ -66,23 +67,68 @@ the job log). Plain `uv run pytest` without `-n` still runs in a single process,
 - Workers share no database, file or schema; the per-test isolation inside a worker is the same as
   in a single-process run.
 
-pytest-xdist requires every worker to collect the same test ids. `tests/core/test_csrf.py` and
-`tests/core/test_security.py` build parameter ids from tokens generated at import time, which differ
-in every process, so the `test-sqlite` job runs them in a second, single-process step and the
-first step ignores them. Together the two steps run exactly the `--db-backend=sqlite` selection.
-The PostgreSQL side has no such parameters. A new test with process-dependent ids makes the xdist
-step fail with "Different tests were collected", never skip silently.
-
-Local runs (one PostgreSQL suite at a time against the throwaway container; the worker databases
-are `ci_test_gw0`, `ci_test_gw1`, ...):
-
-```
-TEST_DATABASE_URL=postgresql://USER:PASSWORD@localhost:5432/ci_test uv run pytest -q --tb=short -n auto --db-backend=postgresql
-uv run pytest -q --tb=short -n auto --db-backend=sqlite --ignore=tests/core/test_csrf.py --ignore=tests/core/test_security.py
-uv run pytest -q --tb=short --db-backend=sqlite tests/core/test_csrf.py tests/core/test_security.py
-```
+pytest-xdist requires every worker to collect the same test ids, so parameter ids must not depend
+on the process (no tokens or object addresses in ids; give such parameters `ids=`). A test with
+process-dependent ids makes the run fail with "Different tests were collected", never skip
+silently. Since M7-00b the whole tree runs under xdist, `tests/core/test_csrf.py` and
+`tests/core/test_security.py` included.
 
 Use `-n 4` (or any number) to pick the worker count; `-n 0` disables xdist.
+
+## Shards (M7-00b)
+
+`--shard=K/N` (`tests/conftest.py`, `tests/support/sharding.py`) collects only the test files of
+shard K of N; the other files are not even imported. Whole files are assigned, so module-scoped
+fixtures (the tenancy `world`) are never duplicated across shards. The split is deterministic: the
+files are dealt out heaviest first to the least loaded shard, by the measured seconds per file in
+`tests/support/shard_weights.json` for the selected `--db-backend` (a file never measured counts
+as 1 s, a file measured only on the other backend as 0). The shards of one N are disjoint and
+together are exactly the unsharded selection; `tests/support/test_sharding.py` checks this for
+the real tree and that the `ci.yml` matrices list every shard 1..N with the same N.
+
+In CI, `test-sqlite` runs 4 shards and `test-postgres` 6 (jobs `test-sqlite-shard` and
+`test-postgres-shard`, each shard `-n auto` on its own runner, the PostgreSQL ones with their own
+service). The jobs named `test-sqlite` and `test-postgres` keep the required check names: they
+need all their shards, run even when a shard failed (`if: always()`), and fail unless every shard
+succeeded. Shards run with `fail-fast: false`, so every failing shard reports.
+
+The weights only affect balance, never which tests run. Refresh them after large test changes:
+run each side unsharded with `--durations=0 --durations-min=0` (or every shard and concatenate the
+outputs) and pass the two outputs to `uv run python -m tests.support.sharding SQLITE_LOG PG_LOG`.
+
+## The `slow` marker (M7-00b)
+
+`slow` marks the redundant rows of the regex timing (ReDoS) tests: per guarded entry point one
+timing test keeps running everywhere, the other rows of the same test carry
+`pytest.mark.slow`. CI deselects them on `dev` pushes and pull requests
+(`PYTEST_MARKERS=not integration and not slow` in `ci.yml`) and runs them on `main` pushes and in
+the weekly scheduled run (Tuesdays 03:41 UTC, `not integration`). A plain local `uv run pytest`
+runs them (the default `addopts` excludes only `integration`).
+
+Timing tests that stay on every run (they keep "regex timeout enforced by test" true on dev):
+`tests/core/test_safe_regex.py::test_catastrophic_pattern_is_cut_off[(a+)+$-...]`,
+`test_process_stays_responsive_after_timeout`, `test_batch_with_catastrophic_rule_in_the_middle`
+and the other cut-off tests there; `tests/services/test_content_rules_engine.py`
+(`..._real_worker`); `tests/parsers/test_content_html.py` (`space_run_both_sides` rows of both
+linearity tests, `test_charset_search_linear_on_whitespace_runs`);
+`tests/parsers/test_content_subject.py` (`space_run_around_counter`); `tests/parsers/test_spf.py`
+(`test_adversarial_inputs_are_fast`); `tests/parsers/test_received.py` (`test_scanners_linear`,
+`test_public_api_bounded_time`); `tests/parsers/test_authres.py`
+(`test_10k_resinfo_is_linear`). List the slow rows with `uv run pytest --collect-only -q -m slow`.
+
+## Running everything locally
+
+The CI-equivalent run of one side, unsharded (shards only split the same selection):
+
+```
+uv run pytest -q --tb=short -n auto --db-backend=sqlite -m "not integration and not slow"
+TEST_DATABASE_URL=postgresql://USER:PASSWORD@localhost:5432/ci_test uv run pytest -q --tb=short -n auto --db-backend=postgresql -m "not integration and not slow"
+```
+
+One CI shard: add `--shard=2/4` (SQLite) or `--shard=5/6` (PostgreSQL). Everything, as on `main`:
+`uv run pytest -q --tb=short -n auto` (with `TEST_DATABASE_URL` set for the PostgreSQL params);
+only the slow rows: `uv run pytest -q -m slow`. One PostgreSQL run at a time against the same
+server (the worker databases are `ci_test_gw0`, `ci_test_gw1`, ...).
 
 ## Seed sync at app startup
 

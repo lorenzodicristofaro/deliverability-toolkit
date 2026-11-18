@@ -40,14 +40,25 @@ on:
       - "docs/SETUP.md"
       - "docs/UNBOUND.md"
       - "docs/WORKFLOW.md"
+  # Weekly full run on the default branch, `slow` tests included (M7-00b, docs/TESTING.md).
+  schedule:
+    - cron: "41 3 * * 2"
 
 # Read-only token, no secrets, nothing is pushed anywhere.
 permissions:
   contents: read
 
+# The event name keeps the weekly scheduled run and `main` pushes from cancelling each other.
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
+
+# Tests marked `slow` (redundant regex timing rows, M7-00b) run only on `main` pushes and in the
+# weekly scheduled run; `dev` pushes and pull requests deselect them.
+env:
+  PYTEST_MARKERS: >-
+    ${{ (github.event_name == 'schedule' || (github.event_name == 'push' && github.ref == 'refs/heads/main'))
+    && 'not integration' || 'not integration and not slow' }}
 
 # Third-party actions are pinned to a full commit SHA; the tag in the comment is the release
 # the SHA belongs to (tags and SHAs checked with `git ls-remote` against each official repo).
@@ -65,33 +76,51 @@ jobs:
       - run: uv run ruff format --check .
       - run: uv run mypy app
 
-  # The two test jobs partition the suite with --db-backend (tests/conftest.py, docs/TESTING.md):
-  # this one runs every test except the PostgreSQL params, with no database service.
-  test-sqlite:
+  # The two test checks partition the suite with --db-backend (tests/conftest.py, docs/TESTING.md).
+  # They run as shards (`--shard=K/N`: SQLite 4, PostgreSQL 6; whole test files, split by measured
+  # cost in tests/support/shard_weights.json); the shards are disjoint and together are the side.
+  # `test-sqlite` and `test-postgres` keep the required check names: they only gather the shard
+  # results and fail unless every shard succeeded (a failed, cancelled or skipped shard fails).
+  # This side runs every test except the PostgreSQL params, with no database service.
+  test-sqlite-shard:
+    name: test-sqlite shard ${{ matrix.shard }}/4
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
       - run: uv sync --frozen
       - run: nproc  # runner CPU count; `-n auto` starts one pytest-xdist worker per CPU
-      # pytest-xdist (M7-00, docs/TESTING.md): every worker must collect the same test ids, and
-      # test_csrf.py and test_security.py build parameter ids from tokens generated at import
-      # (different in every process). They run in the second step, single process; together the
-      # two steps run exactly the --db-backend=sqlite selection.
       - run: >-
           uv run pytest -q --tb=short --durations=25 -n auto --db-backend=sqlite
-          --ignore=tests/core/test_csrf.py --ignore=tests/core/test_security.py
-      - if: success() || failure()  # also report these when the first step failed
-        run: >-
-          uv run pytest -q --tb=short --db-backend=sqlite
-          tests/core/test_csrf.py tests/core/test_security.py
+          --shard=${{ matrix.shard }}/4 -m "$PYTEST_MARKERS"
+
+  test-sqlite:
+    if: always()
+    needs: test-sqlite-shard
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "shard results: $RESULTS"
+          for result in $RESULTS; do [ "$result" = success ] || exit 1; done
 
   # Only the PostgreSQL params. --db-backend=postgresql refuses to run without TEST_DATABASE_URL,
-  # so this job cannot skip everything and pass.
-  test-postgres:
+  # so a shard cannot skip everything and pass.
+  test-postgres-shard:
+    name: test-postgres shard ${{ matrix.shard }}/6
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6]
     # Ephemeral PostgreSQL for the DB tests (same tag as compose.yaml). The credentials are
     # throwaway literals valid only for this job's service container: not secrets, not reused.
     services:
@@ -116,8 +145,22 @@ jobs:
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
       - run: uv sync --frozen
       - run: nproc  # runner CPU count; `-n auto` starts one pytest-xdist worker per CPU
-      # Each worker creates and uses its own database ci_test_gwN on this service.
-      - run: uv run pytest -q --tb=short --durations=25 -n auto --db-backend=postgresql
+      # Each worker creates and uses its own database ci_test_gwN on this shard's service.
+      - run: >-
+          uv run pytest -q --tb=short --durations=25 -n auto --db-backend=postgresql
+          --shard=${{ matrix.shard }}/6 -m "$PYTEST_MARKERS"
+
+  test-postgres:
+    if: always()
+    needs: test-postgres-shard
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "shard results: $RESULTS"
+          for result in $RESULTS; do [ "$result" = success ] || exit 1; done
 
   # Full CI on `main`: the Docker jobs without any path filter (reusable workflow, its `on:` paths
   # do not apply to workflow_call).
@@ -129,4 +172,6 @@ jobs:
   # the same docs-only skip as the test jobs (maintainer decision 2026-11-12): the weekly run
   # covers new advisories on quiet weeks.
   pip-audit:
+    # Not on the weekly schedule of this workflow: pip-audit.yml has its own weekly run.
+    if: github.event_name != 'schedule'
     uses: ./.github/workflows/pip-audit.yml

@@ -199,7 +199,15 @@ def test_huge_text_within_hard_cap() -> None:
 # --- search_all: cut-off ---------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(("pattern", "text"), CATASTROPHIC)
+# M7-00b: the first pattern runs on every dev run (with the other cut-off tests below, it keeps
+# "regex timeout enforced by test"); the other shapes are marked `slow` (main and weekly).
+@pytest.mark.parametrize(
+    ("pattern", "text"),
+    [
+        pytest.param(pattern, text, marks=() if i == 0 else pytest.mark.slow)
+        for i, (pattern, text) in enumerate(CATASTROPHIC)
+    ],
+)
 def test_catastrophic_pattern_is_cut_off(
     recorded: list[_RecordingPopen], pattern: str, text: str
 ) -> None:

@@ -332,9 +332,16 @@ _ADVERSARIAL_STYLES: list[tuple[str, Callable[[int], str]]] = [
 ]
 
 
-@pytest.mark.parametrize(
-    "make", [m for _, m in _ADVERSARIAL_STYLES], ids=[i for i, _ in _ADVERSARIAL_STYLES]
-)
+# M7-00b: one row of each linearity test runs on every dev run (both runs of spaces around
+# !important); the other rows are marked `slow` and run on `main` pushes and weekly.
+_DEV_ROW = "space_run_both_sides"
+_ADVERSARIAL_PARAMS = [
+    pytest.param(m, id=i, marks=() if i == _DEV_ROW else pytest.mark.slow)
+    for i, m in _ADVERSARIAL_STYLES
+]
+
+
+@pytest.mark.parametrize("make", _ADVERSARIAL_PARAMS)
 def test_hidden_reasons_linear_on_adversarial_values(make: Callable[[int], str]) -> None:
     def call(n: int) -> Callable[[], object]:
         style = make(n)
@@ -343,9 +350,7 @@ def test_hidden_reasons_linear_on_adversarial_values(make: Callable[[int], str])
     assert growth(call, 2_500) < _GROWTH_LIMIT
 
 
-@pytest.mark.parametrize(
-    "make", [m for _, m in _ADVERSARIAL_STYLES], ids=[i for i, _ in _ADVERSARIAL_STYLES]
-)
+@pytest.mark.parametrize("make", _ADVERSARIAL_PARAMS)
 def test_parse_content_linear_on_adversarial_styles(make: Callable[[int], str]) -> None:
     cap = ContentLimits().max_style_chars
 

@@ -290,6 +290,20 @@ def test_double_submit_tokens_are_unique() -> None:
         "é" * len(DOUBLE),
         DOUBLE[:43] + "." + "=" * 43,
     ],
+    # Stable ids: the tokens are generated at import, different in every process (pytest-xdist).
+    ids=[
+        "none",
+        "int",
+        "empty",
+        "x",
+        "appended",
+        "truncated",
+        "dot_replaced",
+        "forged",
+        "session_cookie",
+        "non_ascii",
+        "padding_signature",
+    ],
 )
 def test_valid_double_submit_cookie_rejects_malformed(value: object) -> None:
     assert valid_double_submit_cookie(value, SECRET) is False
@@ -310,6 +324,17 @@ def test_valid_double_submit_cookie_accepts_own() -> None:
         (DOUBLE, {}, False),
         (SESSION_CSRF, {**AUTH, **ANON}, True),
         (DOUBLE, {**AUTH, **ANON}, False),
+    ],
+    # Stable ids: the tokens are generated at import, different in every process (pytest-xdist).
+    ids=[
+        "session-auth",
+        "none-auth",
+        "non_ascii-auth",
+        "double-anon",
+        "none-anon",
+        "double-no_cookie",
+        "session-auth_and_anon",
+        "double-auth_and_anon",
     ],
 )
 def test_check_token(submitted: str | None, cookies: dict[str, str], expected: bool) -> None:

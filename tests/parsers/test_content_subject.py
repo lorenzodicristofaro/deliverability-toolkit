@@ -278,14 +278,21 @@ def _best_batch(fn: Callable[[], object], repeats: int) -> float:
     return best
 
 
+# M7-00b: the row with two runs runs on every dev run; the others are marked `slow` (they run
+# on `main` pushes and weekly).
 @pytest.mark.parametrize(
     "make",
     [
-        lambda n: "re" + " " * n + "x",
-        lambda n: "re" + " " * n + "[1]" + " " * n + "x",
-        lambda n: " " * n + "fwd" + " " * n,
+        pytest.param(lambda n: "re" + " " * n + "x", id="space_run", marks=pytest.mark.slow),
+        pytest.param(
+            lambda n: "re" + " " * n + "[1]" + " " * n + "x", id="space_run_around_counter"
+        ),
+        pytest.param(
+            lambda n: " " * n + "fwd" + " " * n,
+            id="leading_and_trailing_run",
+            marks=pytest.mark.slow,
+        ),
     ],
-    ids=["space_run", "space_run_around_counter", "leading_and_trailing_run"],
 )
 def test_reply_regex_linear_on_whitespace_runs(make: Callable[[int], str]) -> None:
     """R1-01: no adjacent \\s* in _REPLY. Relative bound (n vs 4n), no wall-clock threshold."""

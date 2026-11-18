@@ -70,6 +70,7 @@ asyncio_default_fixture_loop_scope = "function"
 addopts = "-m 'not integration'"
 markers = [
     "integration: needs Docker and network (tests/integration); run with -m integration",
+    "slow: redundant regex timing rows (M7-00b); CI runs them on main pushes and weekly only",
 ]
 
 [[tool.mypy.overrides]]
