@@ -345,6 +345,9 @@ Tickets (docs/tickets/M7-*.md, split 2026-11-13; model in brackets):
   - [ ] Follow-up (medium): operator command to re-encrypt stored secrets after ENCRYPTION_KEY rotation (repository rotate_all exists and is tested) + docs/SETUP.md section 10 text.
   - [ ] Follow-up (low, QA nits): if the tenant is deleted mid-create, the tenant FK error is answered 409 "name taken" (re-check name_taken after rollback); test-send limit per (tenant, channel id) resets when a channel is recreated; tenants_with_due takes the lowest 100 tenant ids per pass (fairness, see M7-14c); no ARCHITECTURE paragraph on alert channels yet (M7-20 docs).
 - [x] M7-16 alert channel email (sonnet; depends M7-15)
+  - Status: done (QA APPROVE round 2; round 2 by opus after recipient-validation blocker). stdlib smtplib in a thread, operator relay trusted (ARCHITECTURE section 9), strict recipient validation at API and send time, codes not_configured/auth_unsupported/smtp_5xx permanent, timeout/tls_error/connect_error/smtp_4xx retryable.
+  - [ ] Follow-up (should-fix, UX): mixed-case recipients like John@Example.com get 422; normalise (strip + lowercase) in alert-channel POST/PATCH before validate_config, test that it is stored lowercase.
+  - [ ] Follow-up (nits): email channel builds its own Settings(); encoded-word in a param shows a decoded line break in the Subject; test budget derived in the channel from DEFAULT_TEST_TIMEOUT; SMTP_FROM accepts %; no SSL-mode (tls) loopback test.
 - [ ] M7-21b domain ownership verification by email (opus; depends M7-21a, M7-16; parallel-safe no)
 - [ ] M7-17 alert channel generic webhook (sonnet; depends M7-15, M7-01)
 - [ ] M7-18 alert channel Slack, payload to verify in official docs (sonnet; depends M7-17)
