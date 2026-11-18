@@ -578,6 +578,73 @@ async def test_retry_with_backoff_then_abandon(
     assert len(sender.calls) == 3
 
 
+async def test_permanent_failure_is_abandoned_after_one_attempt(world: World) -> None:
+    world.route("new_listing", 1)
+    svc = world.service(max_attempts=5)
+    svc.emit(world.ctx, [listing(world)])
+    sender = FakeSender([DeliveryError("http_4xx", permanent=True)])
+    report = await svc.deliver_due(world.ctx, sender)
+    assert (report.abandoned, report.failed) == (1, 0)
+    (d,) = world.deliveries()
+    assert (d.status, d.attempts, d.last_error, d.next_attempt_at) == (
+        "abandoned",
+        1,
+        "http_4xx",
+        None,
+    )
+    world.clock.advance(timedelta(days=1))
+    assert await svc.deliver_due(world.ctx, sender) == alerts_module.DeliveryReport()
+    assert len(sender.calls) == 1
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [DeliveryError("http_5xx"), DeliveryError("http_5xx", permanent=False), RuntimeError("x")],
+    ids=["retryable", "explicit_retryable", "exception"],
+)
+async def test_retryable_failure_is_retried(world: World, failure: BaseException) -> None:
+    world.route("new_listing", 1)
+    svc = world.service(max_attempts=5, backoff_base=timedelta(minutes=1))
+    svc.emit(world.ctx, [listing(world)])
+    sender = FakeSender([failure])
+    assert (await svc.deliver_due(world.ctx, sender)).failed == 1
+    (d,) = world.deliveries()
+    assert (d.status, d.attempts, d.next_attempt_at) == ("failed", 1, T0 + timedelta(minutes=1))
+    world.clock.advance(timedelta(minutes=1))
+    assert (await svc.deliver_due(world.ctx, sender)).sent == 1
+
+
+async def test_timeout_stays_retryable(world: World) -> None:
+    world.route("new_listing", 1)
+    svc = world.service(send_timeout=timedelta(milliseconds=20))
+
+    async def hang(_ctx: TenantContext, _channel: int, _message: AlertMessage) -> None:
+        await asyncio.sleep(5)
+
+    svc.emit(world.ctx, [listing(world)])
+    assert (await svc.deliver_due(world.ctx, hang)).failed == 1
+    (d,) = world.deliveries()
+    assert (d.status, d.last_error) == ("failed", "timeout")
+
+
+async def test_stale_worker_cannot_abandon(world: World) -> None:
+    world.route("new_listing", 1)
+    svc = world.service()
+    svc.emit(world.ctx, [listing(world)])
+
+    async def overtaken(ctx: TenantContext, _channel: int, _message: AlertMessage) -> None:
+        # While this worker sends, the delivery's state moves on (another worker sent it).
+        (d,) = world.deliveries()
+        with world.factory.begin() as db:
+            assert repo_for(ctx, db).alert_deliveries.mark_sent(d.id, 1, T0)
+        raise DeliveryError("http_4xx", permanent=True)
+
+    report = await svc.deliver_due(world.ctx, overtaken)
+    assert (report.skipped, report.abandoned) == (1, 0)
+    (d,) = world.deliveries()
+    assert (d.status, d.last_error) == ("sent", None)
+
+
 async def test_failures_store_and_log_no_secret_or_body(
     world: World, caplog: pytest.LogCaptureFixture
 ) -> None:

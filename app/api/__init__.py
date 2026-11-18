@@ -6,6 +6,7 @@ therefore need the CSRF header (`X-CSRF-Token`, enforced by `app.core.csrf.CSRFM
 
 from fastapi import APIRouter
 
+from app.api.v1.alert_channels import router as alert_channels_router
 from app.api.v1.checks import router as checks_router
 from app.api.v1.content import router as content_router
 from app.api.v1.custom_checks import router as custom_checks_router
@@ -34,5 +35,6 @@ api_router.include_router(dnsbl_lists_router)
 api_router.include_router(monitors_router)
 api_router.include_router(history_router)
 api_router.include_router(domain_verification_router)
+api_router.include_router(alert_channels_router)
 
 __all__ = ["api_router"]

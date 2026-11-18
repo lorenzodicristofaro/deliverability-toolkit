@@ -48,6 +48,7 @@ from app.core.tenancy import TenantContext
 from app.esp.profile import read_esp_profiles
 from app.main import create_app
 from app.repositories import repo_for
+from app.repositories.alert_channels import AlertChannelRecord
 from app.repositories.base import MAX_LIMIT
 from app.repositories.content_rules import ContentRuleRecord
 from app.repositories.custom_checks import CustomCheckRecord
@@ -257,6 +258,19 @@ def _esp_hosts(_w: World, _role: str) -> dict[str, Any]:
 
 
 _MONITOR_404 = "monitor.error.not_found"
+
+_CHANNELS_404 = "alert.channel.error.not_found"
+# Alert channels (M7-15): `alert.manage`, owner/admin only (instance admin is owner of A).
+_CHANNEL_ON_B = _by_role(404, 403)
+
+
+def _channel_smuggle(w: World, _role: str) -> dict[str, Any]:
+    return {"kind": "email", "name": "probe", "config": {"recipients": ["probe@example.com"]},
+            "tenant_id": w.tenants["b"]}  # fmt: skip
+
+
+def _channel_patch(_w: World, _role: str) -> dict[str, Any]:
+    return {"enabled": False}
 
 
 def _monitor_body(_w: World, _role: str) -> dict[str, Any]:
@@ -553,6 +567,28 @@ MATRIX: dict[tuple[str, str], Entry] = {
     ("POST", "/api/v1/domains/{domain_id}/verification/check"): Entry(Kind.DOMAIN),
     ("POST", "/domains/{domain_id}/verification"): Entry(Kind.DOMAIN),
     ("POST", "/domains/{domain_id}/verification/check"): Entry(Kind.DOMAIN),
+    # Alert channel API (app.api.v1.alert_channels, M7-15): every route needs `alert.manage`
+    # (owner/admin); analysts and client viewers get 403 before any id is looked at, the writers
+    # 404 on tenant B's channel (`b_alert_channel`, unchanged). A smuggled `tenant_id` is an
+    # unknown field (422). Per role, secrets and the test send: tests/api/test_alert_channels.py.
+    ("GET", "/api/v1/alert-channels"): Entry(
+        Kind.COLLECTION, own=_by_role(200, 403), not_found=_CHANNELS_404
+    ),
+    ("POST", "/api/v1/alert-channels"): Entry(
+        Kind.COLLECTION, body=_channel_smuggle, smuggle=_by_role(422, 403), not_found=_CHANNELS_404
+    ),
+    ("GET", "/api/v1/alert-channels/{channel_id}"): Entry(
+        Kind.RULE, own=_CHANNEL_ON_B, not_found=_CHANNELS_404
+    ),
+    ("PATCH", "/api/v1/alert-channels/{channel_id}"): Entry(
+        Kind.RULE, body=_channel_patch, own=_CHANNEL_ON_B, not_found=_CHANNELS_404
+    ),
+    ("DELETE", "/api/v1/alert-channels/{channel_id}"): Entry(
+        Kind.RULE, own=_CHANNEL_ON_B, not_found=_CHANNELS_404
+    ),
+    ("POST", "/api/v1/alert-channels/{channel_id}/test"): Entry(
+        Kind.RULE, own=_CHANNEL_ON_B, not_found=_CHANNELS_404
+    ),
 }
 
 # Public routes by (method, path): a new method on an exempt path is NOT exempt. Keep this
@@ -894,7 +930,24 @@ def b_monitor(w: World) -> MonitorTargetRecord:
     return created
 
 
+def b_alert_channel(w: World) -> AlertChannelRecord:
+    """Tenant B's alert channel, created on first use. Its name holds a tenant B secret, so
+    `leaks` catches it in any response or log line. The world baseline does not cover these."""
+    w.db.expire_all()
+    repository = repo_for(TenantContext(w.tenants["b"], w.users["b_owner"]), w.db).alert_channels
+    for existing in repository.list_all():
+        return existing
+    created = repository.create(
+        kind="webhook", name=f"{B_TENANT_NAME} channel", enabled=True, config={},
+        secret_token="b-private-token", secret_fields=["url"], now=datetime(2030, 1, 1, tzinfo=UTC),
+    )  # fmt: skip
+    w.db.commit()
+    return created
+
+
 def _path(w: World, case: Case) -> str:
+    if "{channel_id}" in case.leaf.path:
+        return case.leaf.path.replace("{channel_id}", str(b_alert_channel(w).id))
     if "{custom_check_id}" in case.leaf.path:
         return case.leaf.path.replace("{custom_check_id}", str(b_custom_check(w).id))
     if "{rule_id}" in case.leaf.path:
@@ -960,6 +1013,7 @@ def _check_case(world: World, logs: pytest.LogCaptureFixture, case: Case) -> Non
     )
     esp_before = b_esp(world) if "/esps" in case.leaf.path else None
     monitor_before = b_monitor(world) if "/monitor" in case.leaf.path else None
+    channel_before = b_alert_channel(world) if "/alert-channels" in case.leaf.path else None
     if "/history/" in case.leaf.path:
         b_history(world)
     tenant = "b" if case.target.startswith("b_session") else "a"
@@ -997,6 +1051,10 @@ def _check_case(world: World, logs: pytest.LogCaptureFixture, case: Case) -> Non
         assert b_monitor(world) == monitor_before, "tenant B's monitor target changed"
         if response.status_code == 200 and case.leaf.key == ("GET", "/api/v1/monitors"):
             assert monitor_before.id not in {i["id"] for i in response.json()["items"]}
+    if channel_before is not None:
+        assert b_alert_channel(world) == channel_before, "tenant B's alert channel changed"
+        if response.status_code == 200 and case.leaf.key == ("GET", "/api/v1/alert-channels"):
+            assert response.json() == {"items": []}
     after_a = world.state("a")
     if case.target == "smuggle" and response.status_code == 303:
         # The UI create ignores the smuggled tenant_id: the domain lands in tenant A only.

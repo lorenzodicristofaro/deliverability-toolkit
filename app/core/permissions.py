@@ -19,9 +19,10 @@ Rules (SPEC section 3, ARCHITECTURE section 4 items 3 and 6):
     owner, admin, analyst: monitor.read, monitor.manage (all domains of the tenant)
     owner, admin:          rules.manage (scope `tenant`, own active tenant only)
     owner, admin:          domain.verify (all domains of the tenant)
+    owner, admin:          alert.manage (the tenant's alert channels, M7-15)
     client_viewer:         check.run, monitor.read (assigned domains only); never dns.tools,
                            message.analyze, content.analyze, rules.read, rules.manage,
-                           monitor.manage or domain.verify
+                           monitor.manage, domain.verify or alert.manage
     instance admin flag:   instance.manage, rules.manage (scope `global` only), whatever the
                            tenant role (or none)
 - Per-user feature toggles can only deny: a toggle keyed by the action value that is not exactly
@@ -100,6 +101,13 @@ class Action(enum.StrEnum):
     # Deniable per user with `{"domain.verify": false}`, independent of `domain.update`. Reading
     # the verification status is `domain.read`.
     DOMAIN_VERIFY = "domain.verify"
+    # Configure the tenant's alert channels (M7-15): list, read, create, change, delete and send
+    # a test alert. Tenant-level, owner/admin only: a channel stores a credential or a webhook
+    # URL (integration-like) and SPEC section 3 gives the analyst "no user/integration
+    # management"; client viewers never (not in their set, so no toggle grants it). Reading is
+    # part of the same action: channel configuration is an integration detail. Deniable per user
+    # with `{"alert.manage": false}`.
+    ALERT_MANAGE = "alert.manage"
 
 
 # --- Resources -------------------------------------------------------------------------------
@@ -159,6 +167,7 @@ _RESOURCE_KIND: Mapping[Action, type[Resource]] = MappingProxyType(
         Action.RULES_MANAGE: RuleScopeResource,
         Action.MONITOR_READ: DomainResource,
         Action.MONITOR_MANAGE: DomainResource,
+        Action.ALERT_MANAGE: TenantResource,
     }
 )
 
@@ -191,6 +200,7 @@ ROLE_ACTIONS: Mapping[MembershipRole, frozenset[Action]] = MappingProxyType(
                 Action.RULES_READ,
                 Action.RULES_MANAGE,  # tenant scope only; global goes through the instance flag
                 Action.DOMAIN_VERIFY,
+                Action.ALERT_MANAGE,
             }
         )
         | _DOMAIN_ALL
@@ -207,6 +217,7 @@ ROLE_ACTIONS: Mapping[MembershipRole, frozenset[Action]] = MappingProxyType(
                 Action.RULES_READ,
                 Action.RULES_MANAGE,  # tenant scope only; global goes through the instance flag
                 Action.DOMAIN_VERIFY,
+                Action.ALERT_MANAGE,
             }
         )
         | _DOMAIN_ALL

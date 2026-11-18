@@ -66,6 +66,7 @@ ROLE_EXPECTED: dict[str, dict[Action, set[str]]] = {
         ACT.MONITOR_READ: DOMAIN_ALL,
         ACT.MONITOR_MANAGE: DOMAIN_ALL,
         ACT.DOMAIN_VERIFY: DOMAIN_ALL,
+        ACT.ALERT_MANAGE: TENANT_LEVEL,
     },
     "admin": {
         ACT.TENANT_READ: TENANT_LEVEL,
@@ -84,6 +85,7 @@ ROLE_EXPECTED: dict[str, dict[Action, set[str]]] = {
         ACT.MONITOR_READ: DOMAIN_ALL,
         ACT.MONITOR_MANAGE: DOMAIN_ALL,
         ACT.DOMAIN_VERIFY: DOMAIN_ALL,
+        ACT.ALERT_MANAGE: TENANT_LEVEL,
     },
     "analyst": {
         ACT.TENANT_READ: TENANT_LEVEL,
@@ -155,8 +157,8 @@ MATRIX = [
 
 
 def test_matrix_size() -> None:
-    # 5 role kinds x admin flag x active flag x 18 actions, each over 9 situations.
-    assert len(MATRIX) * len(SITUATIONS) == 5 * 2 * 2 * 18 * 9 == 3240
+    # 5 role kinds x admin flag x active flag x 19 actions, each over 9 situations.
+    assert len(MATRIX) * len(SITUATIONS) == 5 * 2 * 2 * 19 * 9 == 3420
     # The toggle matrices (M7-00b): the full product with no toggle set, plus the toggle cases
     # (see `_slim`). `test_slimmed_matrices_keep_every_outcome_path` proves the equivalence.
     assert len(M5_MATRIX) == 3 * 4 * 8 * 9 + (3 * 4 * 9 - 12) + (4 * 9 - 4) + 3 * 4 * 6 == 1064
@@ -201,6 +203,7 @@ def test_action_list_is_the_m1_set_plus_later_milestone_actions() -> None:
         "monitor.read",  # M7-11
         "monitor.manage",  # M7-11
         "domain.verify",  # M7-21a
+        "alert.manage",  # M7-15
     }
 
 
@@ -1399,6 +1402,38 @@ def test_domain_verify_toggle_is_independent_of_domain_update() -> None:
     assert can(p, Action.DOMAIN_UPDATE, res) is True
     q = _p(memberships=(_grant("admin", toggles={"domain.update": False}),))
     assert can(q, Action.DOMAIN_VERIFY, res) is True
+
+
+# --- M7-15: alert.manage -------------------------------------------------------------------------
+
+ALERT_TOGGLES: list[tuple[str, dict[str, Any]]] = [
+    ("none", {}),
+    ("true", {"alert.manage": True}),
+    ("false", {"alert.manage": False}),
+    ("none_value", {"alert.manage": None}),
+    ("str_true", {"alert.manage": "true"}),
+    ("one", {"alert.manage": 1}),
+    ("other_action_false", {"monitor.manage": False}),
+]
+
+
+@pytest.mark.parametrize("role", ["owner", "admin", "analyst", "client_viewer"])
+@pytest.mark.parametrize(("label", "toggles"), ALERT_TOGGLES, ids=[c[0] for c in ALERT_TOGGLES])
+def test_alert_manage_roles_x_toggles(role: str, label: str, toggles: dict[str, Any]) -> None:
+    p = _p(memberships=(_grant(role, toggles=toggles),))
+    expected = role in ("owner", "admin") and label in ("none", "true", "other_action_false")
+    assert can(p, Action.ALERT_MANAGE, TenantResource(A)) is expected
+    assert can(p, "alert.manage", TenantResource(A)) is expected
+    assert can(p, Action.ALERT_MANAGE, TenantResource(B)) is False
+    assert can(p, Action.ALERT_MANAGE, DomainResource(A, ASSIGNED)) is False
+    assert can(p, Action.ALERT_MANAGE, InstanceResource()) is False
+
+
+def test_alert_manage_is_not_given_by_the_instance_admin_flag() -> None:
+    p = _p(is_instance_admin=True, memberships=(_grant("analyst"),))
+    assert can(p, Action.ALERT_MANAGE, TenantResource(A)) is False
+    q = _p(memberships=(_grant("client_viewer"), _grant("owner", B)))
+    assert can(q, Action.ALERT_MANAGE, TenantResource(A)) is False
 
 
 def test_domain_verify_needs_a_domain_resource_and_does_not_leak_across_tenants() -> None:

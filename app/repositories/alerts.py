@@ -556,6 +556,12 @@ class AlertDeliveryRepository(_TenantRepository):
             values.update(status="failed", next_attempt_at=_aware(retry_at, "retry_at"))
         return self._conditional(delivery_id, attempt, values)
 
+    def mark_abandoned(self, delivery_id: object, attempt: object, error: object) -> bool:
+        """`abandoned` at once after attempt number `attempt` failed permanently (no further
+        attempt). Same guard as `mark_sent`: only while the delivery is still due with the
+        claimed attempt count, so a stale worker cannot abandon it."""
+        return self.mark_failed(delivery_id, attempt, error, None)
+
 
 # --- rules -------------------------------------------------------------------------------------
 
