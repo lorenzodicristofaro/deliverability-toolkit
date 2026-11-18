@@ -248,6 +248,31 @@ def test_tenants_with_due(db: Session, tenants: Any) -> None:
     assert system.tenants_with_due(T0, 10) == []
 
 
+def test_tenants_with_due_puts_the_longest_waiting_tenant_first(db: Session, tenants: Any) -> None:
+    """M7-14c fairness: the order is by oldest due delivery, not by tenant id, so a higher id
+    left out of one pass (limit) is first once its delivery has waited longest."""
+    a, b = sorted(tenants, key=lambda c: c.tenant_id)
+    _alert_with_delivery(db, a, 1, 1)
+    _alert_with_delivery(db, b, 1, 2)
+    db.execute(
+        AlertDelivery.__table__.update()
+        .where(AlertDelivery.tenant_id == b.tenant_id)
+        .values(next_attempt_at=T0 - timedelta(hours=1))
+    )
+    db.commit()
+    system = AlertDispatchRepository(db)
+    assert system.tenants_with_due(T0, 1) == [b.tenant_id]
+    assert system.tenants_with_due(T0, 10) == [b.tenant_id, a.tenant_id]
+    # Served: B's delivery is claimed (due again after the lease), so A comes first.
+    db.execute(
+        AlertDelivery.__table__.update()
+        .where(AlertDelivery.tenant_id == b.tenant_id)
+        .values(next_attempt_at=T0 + timedelta(minutes=5))
+    )
+    db.commit()
+    assert system.tenants_with_due(T0, 1) == [a.tenant_id]
+
+
 @pytest.mark.parametrize(
     ("now", "limit"),
     [(datetime(2026, 1, 1), 1), (T0, 0), (T0, MAX_LIMIT + 1), (T0, True), (T0, "5")],

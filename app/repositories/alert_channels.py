@@ -273,18 +273,21 @@ class AlertDispatchRepository:
 
     def tenants_with_due(self, now: object, limit: object) -> list[int]:
         """Ids of the tenants that have a due (`pending`/`failed`, `next_attempt_at <= now`)
-        delivery, ascending, at most `limit` (1..MAX_LIMIT). Read-only; ids only."""
+        delivery, at most `limit` (1..MAX_LIMIT), the tenant whose oldest due delivery waits
+        longest first (then by id). Fair under load (M7-14c): a served tenant's deliveries
+        leave the due set or come back later (lease, backoff), so a tenant left out of one pass
+        moves up in the next instead of starving behind lower ids. Read-only; ids only."""
         at = _aware(now, "now")
         if type(limit) is not int or not 1 <= limit <= MAX_LIMIT:
             raise AlertChannelInvalid("limit", "out_of_range")
         stmt = (
             select(AlertDelivery.tenant_id)
-            .distinct()
             .where(
                 AlertDelivery.status.in_(DUE_STATUSES),
                 AlertDelivery.next_attempt_at <= at,
             )
-            .order_by(AlertDelivery.tenant_id)
+            .group_by(AlertDelivery.tenant_id)
+            .order_by(func.min(AlertDelivery.next_attempt_at), AlertDelivery.tenant_id)
             .limit(limit)
         )
         return list(self._session.scalars(stmt))
