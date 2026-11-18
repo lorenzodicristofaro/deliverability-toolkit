@@ -28,8 +28,8 @@ Resume with `/gm`. Milestone **M7 — Monitoring**, tickets in docs/tickets/M7-*
 ## Notes
 - Agent worktrees: give coders the dev hash, `git checkout -B <branch> <hash>`; if a branch is held by another
   worktree, use a new local branch name and merge the commit directly.
-- Local full suite the CI way: `-n auto --ignore=tests/core/test_security.py --ignore=tests/core/test_csrf.py`, then
-  those two single-process. PG: prefix TEST_DATABASE_URL=postgresql://ci:ci-throwaway-password@localhost:5432/ci_test,
+- Local full suite the CI way (since M7-00b): see docs/TESTING.md (shards via `--shard`, `-m "not slow"` on dev; plain `-n auto` over the whole tree now works).
+  PG: prefix TEST_DATABASE_URL=postgresql://ci:ci-throwaway-password@localhost:5432/ci_test,
   one run at a time.
 - Routers live in app/api/__init__.py (not app/main.py). Test files in tests/api and tests/services must not share a
   basename (no __init__.py): API tests use the `_api` suffix.
