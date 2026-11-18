@@ -1,7 +1,7 @@
 # M7-15 Alert channel configuration, encrypted secrets, dispatcher interface
 Milestone: M7
 Branch: feature/m7-15-alert-channels
-Files in scope: app/models/alert_channel.py, app/models/__init__.py, migrations/versions/<next revision>_alert_channels.py, app/repositories/alert_channels.py, app/repositories/__init__.py, app/services/alert_dispatch.py (Channel protocol, registry, worker loop), app/api/v1/alert_channels.py, app/core/permissions.py, app/main.py (router registration only), tests/api/test_alert_channels.py, tests/services/test_alert_dispatch.py, tests/repositories/test_alert_channels.py, locales/en.json, locales/it.json
+Files in scope: app/models/alert_channel.py, app/models/__init__.py, migrations/versions/<next revision>_alert_channels.py, app/repositories/alert_channels.py, app/repositories/__init__.py, app/services/alert_dispatch.py (Channel protocol, registry, worker loop), app/api/v1/alert_channels.py, app/core/permissions.py, app/main.py (router registration only), tests/api/test_alert_channels.py, tests/services/test_alert_dispatch.py, tests/repositories/test_alert_channels_repository.py (renamed: basename clash with tests/api), locales/en.json, locales/it.json
 Out of scope: concrete channels, alert creation (M7-14), UI
 Depends on: M7-14, M7-14b, M7-11
 Parallel-safe: no (models, migrations, permissions, router registry, locales)
