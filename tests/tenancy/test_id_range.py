@@ -90,6 +90,10 @@ def _monitor(_w: World) -> dict[str, Any]:
     return {"check_ids": ["spf"], "interval_seconds": 86400}
 
 
+def _monitor_form(_w: World) -> dict[str, str]:
+    return {"interval_seconds": "86400", "check_ids": "spf"}
+
+
 Payload = Callable[[World], Any] | None
 
 # (method, route path) -> request payload. Must list every route with a numeric path id.
@@ -104,6 +108,9 @@ ID_ROUTES: dict[tuple[str, str], Payload] = {
     ("GET", "/domains/{domain_id}/esps"): None,
     ("POST", "/domains/{domain_id}/esps"): _esp_form,
     ("POST", "/domains/{domain_id}/esps/{esp_id}/remove"): None,
+    ("GET", "/domains/{domain_id}/monitoring"): None,
+    ("POST", "/domains/{domain_id}/monitoring"): _monitor_form,
+    ("POST", "/domains/{domain_id}/monitoring/delete"): None,
     ("GET", "/api/v1/domains/{domain_id}"): None,
     ("PATCH", "/api/v1/domains/{domain_id}"): _name,
     ("DELETE", "/api/v1/domains/{domain_id}"): None,
