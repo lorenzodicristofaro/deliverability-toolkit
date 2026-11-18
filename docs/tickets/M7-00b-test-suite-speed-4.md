@@ -1,0 +1,38 @@
+# M7-00b CI test speed 4: halve the test jobs again (sharding, per-test app cost, permission matrices)
+Milestone: M7 (infrastructure, not a monitoring feature; scheduled before M7-13)
+Branch: feature/m7-00b-test-speed-4
+Files in scope: tests/conftest.py, tests/support/**, tests/core/test_permissions.py, tests/core/test_csrf.py, tests/core/test_security.py, test fixtures that build the app or the TestClient (tests/api/**, tests/web/**, tests/tenancy/** fixtures only), the regex timing tests listed below, pyproject.toml (pytest markers/options, a sharding plugin if chosen), uv.lock, .github/workflows/ci.yml, docs/TESTING.md, CLAUDE.md "Commands" only if the local CI-equivalent command changes (maintainer file: propose the line, do not edit)
+Out of scope: anything under app/; changing what a test asserts; removing or skipping tests other than as allowed in criteria 3 and 4; tenancy matrices (tests/tenancy/**, `test_tenancy_matrix`, `test_domain_route_matrix`); malformed-input tables of parsers and checks; the SQLite/PostgreSQL split by `--db-backend`.
+Depends on: none
+Parallel-safe: no (shared fixtures, CI workflow)
+Model: opus
+Approval: maintainer, 2026-11-18: "idealmente vorrei di nuovo dimezzare i tempi di test se possibile". Slimming the combinatorial matrices of tests/core/test_permissions.py and moving the redundant regex timing tests off dev runs are approved under the equivalence conditions below; everything else keeps the M7-00 rule (no test removed, skipped, de-parametrised or marked flaky).
+
+Context (measured by the GM, 2026-11-18, dev 8fac9ef):
+- Baseline dev CI run 44185669478 on ea6d500 (whole job incl. setup): test-sqlite 7.3 min, test-postgres 6.0 min, lint 15 s. After M7-00 it was 5.5 / 6.1 min (run 43523482419); the suite grew since.
+- 40,611 test ids collected. tests/core/test_permissions.py alone has 15,662 (39%), but runs in about 8 s single process: it inflates the count and the collection on every xdist worker, not the run time. Largest: `test_m5_actions_roles_x_toggles_x_states` 7,776, `test_matrix` 3,240, `test_monitor_roles_x_toggles_x_states` 2,400, `test_domain_verify_roles_x_toggles_x_states` 960, `test_check_run_roles_x_toggles_x_states` 840. Six of the nine `M5_TOGGLE_KINDS` (false, none_value, str_yes, str_true, zero, one) always give "denied" and are multiplied by every state and resource.
+- Local SQLite side, 16 CPUs, `-n auto`: 80 s wall, 32,533 passed; summed per-test time setup 199 s, call 334 s, teardown 1 s. The cost is in tests/api/** and tests/web/**: most of them build the app and enter `TestClient(app)` (lifespan) inside the test body; 47 test files do this. Slowest files (summed s): api/test_domains 29, api/test_monitors_api 26, api/test_history_api 26, api/test_checks_api 24, parsers/test_content_html 23 (regex timing), api/test_dkim_selectors_api 22, tenancy/test_matrix 20.
+- CI job logs are not readable with the agent token: the CI runner CPU count is unknown. Do not assume more CPUs than `nproc` prints; ask the GM to relay the numbers from the maintainer if needed.
+- The repository is public with unlimited Actions minutes (since 2026-11-11): more parallel jobs cost nothing.
+
+Steps:
+1. Measure before changing anything: per-file and setup/call split on both backends (method: docs/tickets/M7-00-ci-postgres-speed.md), plus the cost of one app build + lifespan enter/exit. Record in "Measured".
+2. Shard both test jobs with a CI matrix (e.g. 3 shards each; choose the count from the measurement). Sharding must be deterministic and file-based or module-based (so module fixtures are not duplicated), via an option in tests/conftest.py or a pinned plugin (pytest-split or equivalent; record the choice and reason). Every shard keeps `-n auto`.
+3. Reduce per-test app cost in api/web fixtures without sharing mutable state between tests: e.g. build the app once per module or session and reset the DB per test (the existing TRUNCATE/template mechanism), reuse a lifespan where the test does not test startup. Tests that test startup, lifespan, seed sync or settings keep building their own app.
+4. Slim tests/core/test_permissions.py (criterion 3).
+5. Regex timing tests (criterion 4) and the stable-id follow-up for test_csrf.py / test_security.py from M7-00 (criterion 5).
+
+Acceptance criteria:
+1. Same tests, same backends. Apart from criteria 3 and 4, the set of executed test ids is identical before and after, per backend; for sharded jobs, the union of the shards equals the before set and no id runs in two shards. Proof from sorted `--collect-only -q` outputs recorded here (normalise only ids changed by criterion 5).
+2. Required checks keep working. Branch rulesets may require the check names `test-sqlite` and `test-postgres`: keep a final job with each of those names that `needs:` all its shards and fails if any shard failed or was cancelled (`if: always()`, check `needs.*.result`). Lint/type checks, `timeout-minutes` on every job, existing `needs:`, docs-only skip rules and secret scanning unchanged.
+3. Permission matrices: the full product stays only over dimensions that change the outcome (action x role x state x resource, plus instance-admin and active flags where they exist). Toggle handling is tested separately: every toggle kind (all nine M5 kinds and the monitor/verify/check equivalents) for every action and every role, on one allowing state and resource, and the "denied" kinds also on one non-member state. Equivalence proof recorded here: a small script or test that evaluates the old full product against `can()` and shows that every distinct (expected result, reason path) cell of the old matrix is represented in the new set (or argue it from `_m5_expected` and friends, line by line). Target: test_permissions.py at most 3,000 ids. `test_matrix_size` is updated to the new sizes.
+4. Regex timing (ReDoS) tests: on dev runs keep at least one timing test per guarded entry point (safe_regex runner, content HTML style patterns, content rules engine, SPF parser, Received, Authentication-Results); the others get a `slow` marker registered in pyproject.toml, are excluded on dev pushes/PRs and run on `main` pushes and in a weekly scheduled run. "Regex timeout enforced by test" (M5 acceptance) must stay true on every dev run: name the tests that keep it. List every test moved to `slow`.
+5. tests/core/test_csrf.py and tests/core/test_security.py get stable parametrize ids; the separate single-process CI step is removed; plain `uv run pytest -n auto` over the whole tree collects without error. docs/TESTING.md shows the CI-equivalent local command.
+6. Isolation: green with `-p no:randomly` on both backends, with worker counts 4 and auto, and single process; per-worker databases left empty; results recorded.
+7. docs/TESTING.md describes shards, the `slow` marker and how to run everything locally (including `-m slow`).
+8. Target, measured on dev CI after merge: each test check (`test-sqlite`, `test-postgres`, wall time from first shard start to the final job end) at most 50% of the baseline: test-sqlite at most 3.6 min, test-postgres at most 3.0 min. Record run ids, durations and `nproc`. Runner variance is several minutes: report two runs. If the target is missed, report the measured split to the GM rather than weakening any test.
+
+New i18n keys: none
+Notes: changes under .github/workflows/ are pushed by the maintainer (the GM token has no Workflows permission); the GM flags this merge for the maintainer up front with the exact push command. If a required-check name changes anyway, the maintainer must update the ruleset before the push.
+Measured: (coder)
+Status: open
