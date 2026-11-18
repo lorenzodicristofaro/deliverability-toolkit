@@ -355,6 +355,30 @@ def test_failed_then_abandoned(world: World) -> None:
     assert repo.due(retry + timedelta(days=1)) == []
 
 
+def test_mark_abandoned_is_guarded_like_mark_sent(world: World) -> None:
+    alert = world.alert()
+    repo = world.repos().alert_deliveries
+    d = repo.add_pending(alert.id, [1], T0)[0]
+    assert repo.mark_abandoned(d.id, 1, "http_4xx") is False  # not claimed yet
+    assert repo.claim(d.id, 0, T0, T0 + timedelta(minutes=5))
+    assert repo.mark_abandoned(d.id, 0, "http_4xx") is False  # stale attempt count
+    assert repo.mark_abandoned(d.id, 1, "http_4xx") is True
+    got = repo.get(d.id)
+    assert got is not None and (got.status, got.attempts, got.last_error) == (
+        "abandoned",
+        1,
+        "http_4xx",
+    )
+    assert got.next_attempt_at is None
+    assert repo.mark_abandoned(d.id, 1, "http_4xx") is False  # already final
+    assert repo.mark_sent(d.id, 1, T0) is False
+    other = repo.add_pending(world.alert(state_hash=h("2")).id, [1], T0)[0]
+    assert repo.claim(other.id, 0, T0, T0 + timedelta(minutes=5))
+    assert repo.mark_sent(other.id, 1, T0) is True
+    assert repo.mark_abandoned(other.id, 1, "http_4xx") is False  # a sent one never moves
+    assert repo.mark_abandoned(other.id, 1, "Bearer s3cr3t") is False
+
+
 def test_due_order_and_limit(world: World) -> None:
     repo = world.repos().alert_deliveries
     a1 = world.alert()

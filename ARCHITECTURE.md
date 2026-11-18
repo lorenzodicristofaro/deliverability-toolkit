@@ -266,7 +266,9 @@ newest snapshot of each domain is never pruned (it is the baseline of the next d
   than the lease; a send still running at the timeout is cancelled and is a retryable `timeout`
   failure, so a live send never outlasts its lease and two workers never send concurrently),
   then marked `sent` (a lost conditional mark is not counted as sent), or `failed` with exponential backoff (base * 2^(attempt-1), capped) from the
-  injected clock, or `abandoned` after `max_attempts`. Failures are stored and logged as a stable
+  injected clock, or `abandoned` after `max_attempts`, or `abandoned` at once when the failure
+  is permanent (`DeliveryError(code, permanent=True)`, M7-15; same attempt guard as `sent`, so a
+  stale worker cannot abandon). Failures are stored and logged as a stable
   code only, never a message, response body or secret.
 - Maintenance (M7-09): every `MAINTENANCE_INTERVAL_MINUTES` the scheduler process runs the session
   purge (`purge_sessions` with the session policy; every role also purges once at startup),

@@ -47,7 +47,7 @@ from app.services.alert_dispatch import (
     validate_config,
     validate_secrets,
 )
-from app.services.alerts import AlertMessage, AlertService
+from app.services.alerts import AlertMessage, AlertService, DeliveryReport
 from app.services.change_detect import ChangeEvent
 
 T0 = datetime(2026, 11, 18, 12, 0, tzinfo=UTC)
@@ -427,7 +427,6 @@ def test_delivery_ok_renders_in_tenant_language_with_decrypted_secrets(world: Wo
 
 FAILURES = [
     ("retryable", {"result": SendResult.retryable("http_5xx")}, "http_5xx"),
-    ("permanent", {"result": SendResult.permanent("http_4xx")}, "http_4xx"),
     ("exception", {"exc": RuntimeError(SECRET_URL)}, "internal_error"),
     ("not a result", {"result": "ok"}, "invalid_result"),
     ("config invalid", {"secret_errors": [FieldError("url", "x")]}, "config_invalid"),
@@ -453,14 +452,25 @@ def test_failures_become_failed_attempts_with_backoff(
     assert world.deliveries()[0][2] == 2
 
 
-def test_attempts_end_abandoned(world: World) -> None:
-    world.fake.result = SendResult.permanent("http_4xx")
+def test_retryable_attempts_end_abandoned(world: World) -> None:
+    world.fake.result = SendResult.retryable("http_5xx")
     world.emit(world.channel())
     dispatcher = world.dispatcher(alerts=world.alerts(max_attempts=2))
     asyncio.run(dispatcher.run_once())
     world.clock.advance(timedelta(hours=1))
     assert asyncio.run(dispatcher.run_once()).abandoned == 1
-    assert world.deliveries() == [(world.ctx.tenant_id, "abandoned", 2, "http_4xx")]
+    assert world.deliveries() == [(world.ctx.tenant_id, "abandoned", 2, "http_5xx")]
+
+
+def test_permanent_result_is_abandoned_after_one_attempt(world: World) -> None:
+    world.fake.result = SendResult.permanent("http_4xx")
+    world.emit(world.channel())
+    dispatcher = world.dispatcher(alerts=world.alerts(max_attempts=5))
+    assert asyncio.run(dispatcher.run_once()).abandoned == 1
+    assert world.deliveries() == [(world.ctx.tenant_id, "abandoned", 1, "http_4xx")]
+    world.clock.advance(timedelta(days=1))
+    assert asyncio.run(dispatcher.run_once()) == DeliveryReport()
+    assert len(world.fake.calls) == 1
 
 
 def test_channel_exception_does_not_stop_the_next_delivery(world: World) -> None:
@@ -487,8 +497,13 @@ def test_unusable_channels(world: World, caplog: pytest.LogCaptureFixture) -> No
     world.emit(999_999)  # plus a rule to a channel that does not exist: one alert, 3 deliveries
     with caplog.at_level(logging.DEBUG):
         asyncio.run(world.dispatcher().run_once())
-    codes = sorted(d[3] or "" for d in world.deliveries())
-    assert codes == ["channel_disabled", "channel_missing", "secret_unreadable"]
+    outcomes = sorted((d[3] or "", d[1]) for d in world.deliveries())
+    # A deleted channel is permanent (abandoned at once); the others are fixable and retried.
+    assert outcomes == [
+        ("channel_disabled", "failed"),
+        ("channel_missing", "abandoned"),
+        ("secret_unreadable", "failed"),
+    ]
     assert world.fake.calls == []
     assert SECRET_URL not in caplog.text
 

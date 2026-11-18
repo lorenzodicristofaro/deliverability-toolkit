@@ -31,8 +31,9 @@ here. The sender loads the channel, its secret token, the tenant language and th
 `ok` (and a missing, disabled, unregistered or unreadable channel) becomes a `DeliveryError`
 with a stable code, i.e. a failed attempt. A channel exception is caught by `deliver_due` (code
 `internal_error`); an exception for one tenant is logged and the loop goes on.
-`permanent` is retried like `retryable` until `max_attempts`: M7-14's delivery API has no
-"abandon now" path.
+A `permanent` result and a deleted channel raise `DeliveryError(code, permanent=True)`: M7-14
+abandons the delivery at once. `retryable`, timeouts and a disabled, unregistered,
+unreadable or misconfigured channel (all fixable by an operator) keep M7-14's backoff.
 `run(stop=None)` loops `run_once` every `poll_interval` until cancelled (or `stop` is set); a
 cancellation mid-send leaves that delivery claimed, and it is due again when its lease ends.
 
@@ -481,7 +482,7 @@ class AlertDispatcher:
         """The M7-14 `Sender`: returns when the channel accepted, else raises DeliveryError."""
         loaded = await asyncio.to_thread(self._load, ctx, channel_id, message.domain_id)
         if loaded is None:
-            raise DeliveryError(CHANNEL_MISSING)
+            raise DeliveryError(CHANNEL_MISSING, permanent=True)
         if not loaded.record.enabled:
             raise DeliveryError(CHANNEL_DISABLED)
         channel, resolved = self._resolve(ctx, loaded)
@@ -490,7 +491,8 @@ class AlertDispatcher:
         if not isinstance(result, SendResult):
             raise DeliveryError(INVALID_RESULT)
         if result.outcome is not SendOutcome.OK:
-            raise DeliveryError(error_code(result.code))
+            permanent = result.outcome is SendOutcome.PERMANENT
+            raise DeliveryError(error_code(result.code), permanent=permanent)
 
     def _due_tenants(self, now: datetime) -> list[int]:
         with self._factory.begin() as db:

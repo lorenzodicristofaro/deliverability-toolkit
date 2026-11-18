@@ -39,8 +39,10 @@ returned, before anything else. A crash between the remote accepting the message
 that commit re-sends it once the lease expires: exactly-once AT THE REMOTE END cannot be
 guaranteed; the guarantee is on alert creation. A failure is retried with exponential backoff
 (`backoff_base` * 2^(attempt-1), capped at `backoff_cap`) and becomes `abandoned` after
-`max_attempts`. Failures are logged and stored as a stable code only (`DeliveryError.code`),
-never a message, a response body or a secret.
+`max_attempts`; a permanent failure (`DeliveryError(code, permanent=True)`) is `abandoned` at
+once, under the same attempt guard as `mark_sent`. Timeouts are always retryable. Failures
+are logged and stored as a stable code only (`DeliveryError.code`), never a message, a
+response body or a secret.
 """
 
 from __future__ import annotations
@@ -176,11 +178,14 @@ def locked_head(repos: TenantRepositories, domain_id: int, stream: str) -> Alert
 
 class DeliveryError(Exception):
     """A channel could not deliver. `code` is a short stable slug (e.g. `timeout`,
-    `http_5xx`); it is the only thing stored or logged, so never put a body or secret in it."""
+    `http_5xx`); it is the only thing stored or logged, so never put a body or secret in it.
+    `permanent=True` (e.g. a 4xx the remote will never accept) abandons the delivery at once
+    instead of retrying it with backoff."""
 
-    def __init__(self, code: str) -> None:
+    def __init__(self, code: str, *, permanent: bool = False) -> None:
         super().__init__(code)
         self.code = code
+        self.permanent = permanent is True
 
 
 @dataclass(frozen=True, slots=True)
@@ -510,6 +515,8 @@ class AlertService:
             code = SEND_TIMEOUT  # cancelled before the lease ends: retryable
         except DeliveryError as exc:
             code = error_code(exc.code)
+            if exc.permanent:
+                return await self._abandon_now(ctx, delivery, attempt, code)
         except Exception as exc:  # noqa: BLE001 - a channel bug is a failed attempt
             code = INTERNAL_ERROR
             logger.error(
@@ -550,6 +557,33 @@ class AlertService:
             extra={"event": "alerts.delivery_failed", "tenant_id": ctx.tenant_id},
         )
         return "abandoned" if abandon else "failed"
+
+    async def _abandon_now(
+        self, ctx: TenantContext, delivery: DeliveryRecord, attempt: int, code: str
+    ) -> str:
+        """A permanent failure: `abandoned` at once, no further attempt. Conditional on the
+        claimed attempt like `mark_sent`, so a stale worker cannot abandon a delivery."""
+        marked = await asyncio.to_thread(
+            self._write,
+            ctx,
+            lambda r: r.alert_deliveries.mark_abandoned(delivery.id, attempt, code),
+        )
+        if not marked:
+            logger.warning(
+                "alert delivery %d failed permanently but not marked (state changed meanwhile)",
+                delivery.id,
+                extra={"event": "alerts.mark_abandoned_lost", "tenant_id": ctx.tenant_id},
+            )
+            return "skipped"
+        logger.warning(
+            "alert delivery %d to channel %d failed permanently (attempt %d, %s), abandoned",
+            delivery.id,
+            delivery.channel_id,
+            attempt,
+            code,
+            extra={"event": "alerts.delivery_failed", "tenant_id": ctx.tenant_id},
+        )
+        return "abandoned"
 
 
 __all__ = [
