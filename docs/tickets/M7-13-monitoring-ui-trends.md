@@ -12,7 +12,7 @@ Acceptance criteria:
 - Permission-aware: read-only for viewers, controls hidden and server-enforced; CSRF on forms.
 - Tests: permission and tenancy per role on every route, escaping of hostile record values in the diff view (a `"><script>` TXT value rendered escaped), empty states, en and it render with no missing keys.
 New i18n keys: monitor.tab.*, monitor.chart.*, monitor.diff.* (en + it, listed by the coder in the PR)
-Status: in-review
+Status: done (merged 8cb7933, QA APPROVE round 1)
 Notes (coder):
 - Routes: GET /domains/{id}/monitoring (query `bucket`, `cursor`, `from`, `to`), POST /domains/{id}/monitoring (create, or change the existing target), POST /domains/{id}/monitoring/delete. Everything goes through MonitorService / HistoryService; no repository in app/web/monitoring.py.
 - Charts: server-side inline SVG (stacked runs per status per bucket + per-check status strip), CSS classes only (the CSP allows no inline styles), native SVG `<title>` tooltips, a table view in `<details>`; no JS and no chart library (none shipped before). Chart CSS appended to app/web/static/app.css.
