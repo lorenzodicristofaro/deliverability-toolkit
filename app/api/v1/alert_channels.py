@@ -217,12 +217,22 @@ class ChannelsApi:
         except SecretsError:
             raise ChannelError(503, ENCRYPTION_KEY) from None
 
-    def _commit(self) -> None:
+    def _write(self, action: Callable[[], AlertChannelRecord | None]) -> AlertChannelRecord | None:
+        """Run a repository write and commit it. A concurrent duplicate name surfaces as an
+        IntegrityError at the flush or the commit: rolled back and answered 409. The error is
+        dropped (`from None`, no context, nothing logged), because its message carries the SQL
+        parameters, the encrypted secret token among them."""
+        failed = False
+        record: AlertChannelRecord | None = None
         try:
+            record = action()
             self._db.commit()
         except IntegrityError:
+            failed = True
+        if failed:  # raised outside the handler, so the error has no __context__
             self._db.rollback()
-            raise ChannelError(409, NAME_TAKEN_KEY) from None
+            raise ChannelError(409, NAME_TAKEN_KEY)
+        return record
 
     def create(self, payload: ChannelIn) -> AlertChannelRecord:
         if payload.kind not in CHANNEL_KINDS:
@@ -242,18 +252,19 @@ class ChannelsApi:
         if repo.count() >= MAX_CHANNELS:
             raise ChannelFieldInvalid(FieldError("channel", "limit_reached"))
         token, names = self._seal(secrets)
-        record = repo.create(
-            kind=payload.kind,
-            name=payload.name,
-            enabled=payload.enabled,
-            config=config,
-            secret_token=token,
-            secret_fields=names,
-            now=self._clock.now(),
+        record = self._write(
+            lambda: repo.create(
+                kind=payload.kind,
+                name=payload.name,
+                enabled=payload.enabled,
+                config=config,
+                secret_token=token,
+                secret_fields=names,
+                now=self._clock.now(),
+            )
         )
-        self._commit()
-        self._log("alert_channels.created", record)
         assert isinstance(record, AlertChannelRecord)
+        self._log("alert_channels.created", record)
         return record
 
     def update(self, channel_id: int | None, payload: ChannelPatch) -> AlertChannelRecord:
@@ -278,19 +289,19 @@ class ChannelsApi:
             )
             _first(errors)
             secret = self._seal(values)
-        record = repo.update(
-            current.id,
-            now=self._clock.now(),
-            name=payload.name if "name" in sent else None,
-            enabled=payload.enabled if "enabled" in sent else None,
-            config=config,
-            secret=secret,
+        record = self._write(
+            lambda: repo.update(
+                current.id,
+                now=self._clock.now(),
+                name=payload.name if "name" in sent else None,
+                enabled=payload.enabled if "enabled" in sent else None,
+                config=config,
+                secret=secret,
+            )
         )
-        if record is None:
+        if record is None:  # deleted meanwhile; nothing was written
             raise ChannelError(404, NOT_FOUND_KEY)
-        self._commit()
         self._log("alert_channels.updated", record)
-        assert isinstance(record, AlertChannelRecord)
         return record
 
     def delete(self, channel_id: int | None) -> None:

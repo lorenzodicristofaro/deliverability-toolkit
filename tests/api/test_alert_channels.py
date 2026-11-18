@@ -28,6 +28,7 @@ from app.core.tenancy import TenantContext
 from app.main import create_app
 from app.models import AlertChannel, AlertDelivery, AlertRule, Membership
 from app.repositories import repo_for
+from app.repositories.alert_channels import AlertChannelRepository
 from app.services.alert_dispatch import ChannelRegistry, SendResult, open_secrets
 from tests.api.test_domains import B_SECRET_NAME, KEY, World, _seed, call
 from tests.services.test_alert_dispatch import FakeChannel
@@ -372,6 +373,38 @@ def test_duplicate_name_is_409(world: World) -> None:
     response = call(world, "admin", "POST", LIST, json={**WEBHOOK, "name": " Ops hook "})
     assert response.status_code == 409
     assert len(channel_rows(world)) == 1
+
+
+def test_concurrent_duplicate_name_at_flush_is_409_and_logs_no_secret(
+    world: World, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The name check passes (as for two concurrent requests) and the UNIQUE constraint fires
+    at the repository flush: 409, rolled back, and neither the token nor the plaintext logged."""
+    caplog.set_level(logging.DEBUG)
+    assert call(world, "owner", "POST", LIST, json=WEBHOOK).status_code == 201
+    other = call(world, "owner", "POST", LIST, json={**WEBHOOK, "name": "Other"}).json()["id"]
+    before = channel_rows(world)
+    monkeypatch.setattr(AlertChannelRepository, "name_taken", lambda *_a, **_k: False)
+    caplog.clear()
+    taken = {"detail": t("alert.channel.error.name_taken", "en")}
+    created = call(world, "admin", "POST", LIST, json=WEBHOOK)
+    assert (created.status_code, created.json()) == (409, taken)
+    renamed = call(
+        world,
+        "owner",
+        "PATCH",
+        one(other),
+        json={"name": "Ops hook", "secrets": WEBHOOK["secrets"]},
+    )
+    assert (renamed.status_code, renamed.json()) == (409, taken)
+    assert channel_rows(world) == before
+    logs = "\n".join(f"{r.getMessage()} {r.__dict__}" for r in caplog.records)
+    for row in before:
+        assert row[4] not in logs  # stored ciphertexts
+    for text in ("gAAAAA", "IntegrityError", "INSERT", "UPDATE", "UNIQUE", "unique"):
+        assert text not in logs
+    for response in (created, renamed):
+        no_secret(response, caplog)
 
 
 def test_per_tenant_cap(world: World) -> None:
