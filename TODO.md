@@ -327,7 +327,8 @@ Tickets (docs/tickets/M7-*.md, split 2026-11-13; model in brackets):
 - [x] M7-14 alert state, dedup, exactly-once design (opus; depends M7-10, M7-10b)
   - Status: done (73f4589, QA APPROVE round 3, maintainer-authorized). Design in ARCHITECTURE section 6; migration 0016; emit API raises EmitIncomplete; release_suppressed per tenant; head row locked FOR UPDATE. Wiring, periodic release and settings: M7-14c.
   - [ ] Follow-up (low, QA nit): the release head query runs window functions over all of a tenant's alerts per page; bound it with an alert retention policy (later ticket). The emit-vs-release PostgreSQL race test takes ~1.4 s (1 s forced wait).
-- [ ] M7-14c wire alert emission into monitoring runs, start the delivery worker (opus; depends M7-14, M7-15 dispatcher loop)
+- [x] M7-14c wire alert emission into monitoring runs, start the delivery worker (opus; depends M7-14, M7-15 dispatcher loop)
+  - Status: done (dd152a5, QA APPROVE round 3, maintainer-authorized). Run executor sink, AlertDispatcher and AlertReleaser start with ROLE worker/all; latest-run guard before emit retries; new ALERT_* settings. Remaining replica window documented, closed by M7-14d.
 - [ ] M7-14d close the stale-replay window: latest-run check and alert insert in one transaction under the head-row lock (opus, concurrency; depends M7-14c) — ticket: docs/tickets/M7-14d-alert-replica-window.md
 - [x] M7-14b secret encryption service, Fernet/MultiFernet, ARCHITECTURE §9 (opus; no deps)
   - Status: done (383dfd1, QA APPROVE round 2; round 1: secrets reachable via exception __context__, fixed).

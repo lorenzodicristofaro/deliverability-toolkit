@@ -21,7 +21,7 @@ Acceptance criteria:
 - Invalid setting values stop the app at startup with an i18n error.
 - No network in unit tests; no blocking DB call on the event loop.
 New i18n keys: config errors for the new settings (en + it); exact names follow the existing config error key pattern; locale files touched, so serialize
-Status: in-review
+Status: done
 Note: `log_events` is in app/services/monitor_run.py (checked by the GM 2026-11-18). `release_suppressed` and the emit-failure exception come from M7-14 round 2: use their final names from the merged code.
 Notes (coder, 2026-11-18):
 - Wiring: the executor's sink in the scheduler process is `AlertService.from_settings`; the executor now calls the sink in a worker thread (`asyncio.to_thread`). On `EmitIncomplete` it retries the same events, 3 attempts in all, backoff 2 s then 4 s (`DEFAULT_EMIT_ATTEMPTS` / `DEFAULT_EMIT_BACKOFF`, project choices, constructor args), only while the run is still the latest started for that target in this executor; other sink exceptions are logged by type, never retried, never fail the run.
