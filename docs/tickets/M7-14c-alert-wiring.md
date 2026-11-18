@@ -10,13 +10,16 @@ Why: M7-14 (branch feature/m7-14-alert-state-dedup, in review) built alert state
 Scope:
 - Replace the log-only event sink with a call to the alerts service `emit`. Sync DB work runs via asyncio.to_thread / run_in_threadpool, never on the event loop.
 - Start the M7-15 dispatcher loop in the scheduler process only (ROLE worker or all, never ROLE=web), with clean shutdown (cancel and await on lifespan exit).
-- Move M7-14's constructor settings (min_realert default 1 h, max attempts, backoff, lease) to settings in app/core/config.py with validated ranges; add to .env.example, forward in compose.yaml (tests/test_compose_config.py enforces it) and add rows to docs/SETUP.md section 11.
+- Call the M7-14 round-2 `release_suppressed` function periodically from the scheduler process (e.g. each dispatcher tick or maintenance run), so a stream whose last state was suppressed during `min_realert` is delivered once the window ends (GM decision 2026-11-18, M7-14 QA finding 1).
+- On the exception `__call__` raises when emit had failures (M7-14 QA finding 3), retry the same (latest) run's events with bounded attempts and backoff; never replay an older run after a newer one for the same target.
+- Move M7-14's constructor settings (min_realert default 1 h, max attempts, backoff, lease, send timeout < lease) to settings in app/core/config.py with validated ranges; add to .env.example, forward in compose.yaml (tests/test_compose_config.py enforces it) and add rows to docs/SETUP.md section 11.
 Acceptance criteria:
 - A run whose result changes emits exactly one alert row (fake resolver, fake clock); a repeated identical run emits none; an error run never emits a removed/cleared alert.
-- Emit failures are logged (no secrets, no bodies) and never fail the run nor stop the scheduler.
+- Emit failures are logged (no secrets, no bodies), retried for the latest run only, and never fail the run nor stop the scheduler; a transient DB error on emit does not lose the alert (test with a failing-then-succeeding repository).
+- listed -> cleared -> listed inside `min_realert`: after the window the scheduler delivers "listed" exactly once (fake clock).
 - With ROLE=web no dispatcher task starts; with worker or all exactly one starts; it is cancelled cleanly on shutdown.
 - Invalid setting values stop the app at startup with an i18n error.
 - No network in unit tests; no blocking DB call on the event loop.
 New i18n keys: config errors for the new settings (en + it); exact names follow the existing config error key pattern; locale files touched, so serialize
 Status: todo
-Note: the executor module path and `log_events` location are unverified assumptions from the GM; confirm in code before starting.
+Note: `log_events` is in app/services/monitor_run.py (checked by the GM 2026-11-18). `release_suppressed` and the emit-failure exception come from M7-14 round 2: use their final names from the merged code.
