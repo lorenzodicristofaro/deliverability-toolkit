@@ -478,8 +478,16 @@ when a profile is older than 12 months.
     private, and does not go through the guarded client. Recipient addresses (channel config)
     never become connection targets. The email channel sends with the standard library `smtplib`
     in a worker thread, within 80 percent of `ALERT_SEND_TIMEOUT_SECONDS` (which stays below the
-    delivery lease); results map to `not_configured`, `timeout`, `tls_error`, `connect_error`,
-    `smtp_4xx` (retryable) and `smtp_5xx` (permanent).
+    delivery lease; a test send: 80 percent of the smaller of that and the 60 s test wait, which
+    the API also caps at the send timeout). EHLO names the domain of `SMTP_FROM` (no
+    `getfqdn()` lookup, no container host name). Recipients are plain `local@domain` mailboxes:
+    an ASCII dot-atom local part (no quotes, comments, `%`, source routes) and a domain accepted
+    by `to_ascii_domain` (no IP or address literal, no single label such as `localhost`), checked
+    when a channel is written and again at send time. Results map to `timeout` (also a read
+    timeout smtplib reports as a disconnect), `tls_error` (also STARTTLS not offered or
+    refused), `connect_error`, `smtp_4xx`
+    (retryable) and `not_configured`, `auth_unsupported` (SMTP_USERNAME set, relay offers no
+    AUTH), `smtp_5xx` (permanent).
 - Input validation of domains/IPs (IDNA, length, label rules) at the edge.
 - Regex rules run through `app/core/safe_regex.py` (M5-03): `search_many` runs all
   rules for one text in one worker subprocess with a per-rule deadline; a rule that

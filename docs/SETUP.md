@@ -242,8 +242,8 @@ at startup. `compose.yaml` forwards each one with the same default.
 | `SMTP_HOST` | empty | host name | The SMTP relay for email alerts. Empty: email channels report `not_configured` and their deliveries are abandoned. The relay is trusted infrastructure of the operator and may be on a private network. |
 | `SMTP_PORT` | `587` | 1-65535 | Relay port (use `465` with `SMTP_SECURITY=tls`). |
 | `SMTP_SECURITY` | `starttls` | `starttls`, `tls`, `none` | Transport security; `none` is refused when `SMTP_USERNAME` is set. |
-| `SMTP_USERNAME`, `SMTP_PASSWORD` | empty | text | Relay login; both or neither. The password is never logged. |
-| `SMTP_FROM` | empty | address | Sender address of alert emails; required when `SMTP_HOST` is set. |
+| `SMTP_USERNAME`, `SMTP_PASSWORD` | empty | printable ASCII | Relay login; both or neither. The password is never logged. If set and the relay offers no AUTH, deliveries fail with `auth_unsupported` (permanent). |
+| `SMTP_FROM` | empty | address | Sender address of alert emails; required when `SMTP_HOST` is set. Its domain is the name sent in EHLO. |
 
 Alerts are created by scheduled runs and delivered by the same `worker`/`all` containers, which
 poll for due deliveries every 30 seconds. Delivery needs a valid `ENCRYPTION_KEY` (section 10):

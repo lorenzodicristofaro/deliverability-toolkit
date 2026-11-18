@@ -7,14 +7,17 @@ the guarded client (the guarded SMTP client is for SMTP checks, M9). A recipient
 ever put in the message envelope, never used as a connection target.
 
 Result mapping (stable codes): no relay configured -> permanent `not_configured`; connection
-failure, 4xx, disconnect -> retryable `connect_error` / `smtp_4xx`; timeout -> retryable
-`timeout`; TLS failure -> retryable `tls_error`; 5xx (including a refused login or recipient)
--> permanent `smtp_5xx`.
+failure, 4xx, disconnect -> retryable `connect_error` / `smtp_4xx`; timeout (also a read timeout
+that smtplib reports as a disconnect) -> retryable `timeout`; TLS failure, STARTTLS not offered or
+refused -> retryable `tls_error`; SMTP_USERNAME set but the relay offers no AUTH -> permanent
+`auth_unsupported`; 5xx (including a refused login or recipient) -> permanent `smtp_5xx`.
 
 Timeout. The whole exchange gets `SEND_BUDGET` (0.8) of ALERT_SEND_TIMEOUT_SECONDS, which
-Settings keeps below the delivery lease. Every socket read and write runs under the time left
-of that budget. Name resolution of the relay host is the one step the standard library cannot
-bound; the dispatcher stops waiting at the send timeout regardless.
+Settings keeps below the delivery lease; a test send gets 0.8 of min(that, the dispatcher's
+DEFAULT_TEST_TIMEOUT), so a test never reports `timeout` while the thread still delivers. Every
+socket read and write runs under the time left of that budget. EHLO uses the domain of SMTP_FROM
+(no `getfqdn()` lookup). Name resolution of the relay host is the one step the standard library
+cannot bound; the dispatcher stops waiting at the send timeout regardless.
 
 Safety. No header value can carry CR/LF (control characters are replaced, the subject is capped
 at 150 characters, recipients are re-checked, and `email.message.EmailMessage` with the SMTP
@@ -42,11 +45,13 @@ from typing import Any, Final
 from app.core.config import Settings
 from app.core.i18n import t
 from app.services.alert_dispatch import (
+    DEFAULT_TEST_TIMEOUT,
+    TEST_KIND,
     FieldError,
     RenderedAlert,
     ResolvedChannel,
     SendResult,
-    _recipients,
+    validate_recipients,
 )
 from app.services.alerts import AlertMessage
 
@@ -54,6 +59,7 @@ KIND: Final = "email"
 SEND_BUDGET: Final = 0.8
 MAX_SUBJECT: Final = 150
 NOT_CONFIGURED: Final = "not_configured"
+AUTH_UNSUPPORTED: Final = "auth_unsupported"
 _REMOVED = frozenset({"Cc", "Cf", "Zl", "Zp"})
 
 
@@ -71,6 +77,14 @@ class SmtpSettings:
 
     def __repr__(self) -> str:
         return f"SmtpSettings(host={self.host!r}, port={self.port}, security={self.security!r})"
+
+
+class TlsRefused(smtplib.SMTPException):
+    """The relay answered STARTTLS with an error reply (454, 501, ...)."""
+
+
+class AuthUnavailable(smtplib.SMTPException):
+    """SMTP_USERNAME is set but the relay offers no AUTH (after STARTTLS if configured)."""
 
 
 # (relay, message, envelope recipients) -> None; raises what smtplib/ssl/socket raise.
@@ -95,9 +109,9 @@ def _arm(client: Any, clock: _Clock) -> None:
 
 
 class _Smtp(smtplib.SMTP):
-    def __init__(self, host: str, port: int, clock: _Clock, third: float) -> None:
+    def __init__(self, host: str, port: int, clock: _Clock, third: float, helo: str) -> None:
         self._clock = clock
-        super().__init__(host, port, timeout=third)
+        super().__init__(host, port, local_hostname=helo, timeout=third)
 
     def send(self, s: Any) -> None:
         _arm(self, self._clock)
@@ -110,10 +124,16 @@ class _Smtp(smtplib.SMTP):
 
 class _SmtpSsl(smtplib.SMTP_SSL):
     def __init__(
-        self, host: str, port: int, clock: _Clock, third: float, context: ssl.SSLContext
+        self,
+        host: str,
+        port: int,
+        clock: _Clock,
+        third: float,
+        helo: str,
+        context: ssl.SSLContext,
     ) -> None:
         self._clock = clock
-        super().__init__(host, port, timeout=third, context=context)
+        super().__init__(host, port, local_hostname=helo, timeout=third, context=context)
 
     def send(self, s: Any) -> None:
         _arm(self, self._clock)
@@ -125,22 +145,32 @@ class _SmtpSsl(smtplib.SMTP_SSL):
 
 
 def smtp_transport(cfg: SmtpSettings, message: EmailMessage, recipients: list[str]) -> None:
-    """Deliver through the operator's relay (blocking; run it in a thread)."""
+    """Deliver through the operator's relay (blocking; run it in a thread).
+
+    EHLO names the domain of SMTP_FROM (`local_hostname`), so smtplib never calls
+    `socket.getfqdn()` (an unbounded lookup) and the container host name is not sent."""
     clock = _Clock(cfg.budget)
+    helo = cfg.sender.rpartition("@")[2]
     third = max(cfg.budget / 3, 0.1)  # connect, TLS handshake and banner each stay within it
     context = ssl.create_default_context()
     client: smtplib.SMTP
     if cfg.security == "tls":
-        client = _SmtpSsl(cfg.host, cfg.port, clock, third, context)
+        client = _SmtpSsl(cfg.host, cfg.port, clock, third, helo, context)
     else:
-        client = _Smtp(cfg.host, cfg.port, clock, third)
+        client = _Smtp(cfg.host, cfg.port, clock, third, helo)
     try:
         client.ehlo()
         if cfg.security == "starttls":
-            client.starttls(context=context)
+            try:
+                client.starttls(context=context)
+            except smtplib.SMTPResponseException as exc:
+                raise TlsRefused from exc
             client.ehlo()
         if cfg.username:
-            client.login(cfg.username, cfg.password)
+            try:
+                client.login(cfg.username, cfg.password)
+            except smtplib.SMTPNotSupportedError as exc:
+                raise AuthUnavailable from exc  # the relay offers no AUTH: a settings problem
         client.send_message(message, from_addr=cfg.sender, to_addrs=recipients)
         with contextlib.suppress(smtplib.SMTPException, OSError):
             client.quit()  # the message was accepted already
@@ -219,11 +249,26 @@ def build_message(
 # --- result mapping ----------------------------------------------------------------------------
 
 
+def _timed_out(exc: BaseException) -> bool:
+    """A timeout, also when smtplib re-raised it as SMTPServerDisconnected (a read that timed out
+    closes the connection; the TimeoutError is kept as `__cause__` or `__context__`)."""
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        if isinstance(current, TimeoutError):  # socket.timeout is TimeoutError since 3.10
+            return True
+        seen.add(id(current))
+        current = current.__cause__ or current.__context__
+    return False
+
+
 def map_exception(exc: BaseException) -> SendResult:
     """The send result for an exception of the transport (never its message)."""
-    if isinstance(exc, TimeoutError):
+    if isinstance(exc, AuthUnavailable):
+        return SendResult.permanent(AUTH_UNSUPPORTED)
+    if _timed_out(exc):
         return SendResult.retryable("timeout")
-    if isinstance(exc, ssl.SSLError | smtplib.SMTPNotSupportedError):
+    if isinstance(exc, ssl.SSLError | smtplib.SMTPNotSupportedError | TlsRefused):
         return SendResult.retryable("tls_error")
     if isinstance(exc, smtplib.SMTPRecipientsRefused):
         codes = [c for c, _ in exc.recipients.values()]
@@ -256,11 +301,7 @@ class EmailChannel:
         self._transport = transport
 
     def validate_config(self, config: Mapping[str, Any]) -> list[FieldError]:
-        recipients = config.get("recipients")
-        errors = _recipients(recipients)
-        if not errors and isinstance(recipients, list) and not all(r.isascii() for r in recipients):
-            return [FieldError("recipients", "malformed")]  # no SMTPUTF8 support
-        return errors
+        return validate_recipients(config.get("recipients"))  # ASCII only: no SMTPUTF8
 
     def validate_secrets(self, secrets: Mapping[str, str]) -> list[FieldError]:
         return []
@@ -274,6 +315,9 @@ class EmailChannel:
         if self.validate_config(channel.config):
             return SendResult.permanent("config_invalid")
         recipients = list(channel.config["recipients"])
+        timeout = float(settings.alert_send_timeout_seconds)
+        if alert.kind == TEST_KIND:  # the dispatcher waits min(test timeout, send timeout)
+            timeout = min(timeout, DEFAULT_TEST_TIMEOUT.total_seconds())
         cfg = SmtpSettings(
             host=settings.smtp_host,
             port=settings.smtp_port,
@@ -281,7 +325,7 @@ class EmailChannel:
             username=settings.smtp_username,
             password=settings.smtp_password.get_secret_value(),
             sender=settings.smtp_from,
-            budget=settings.alert_send_timeout_seconds * SEND_BUDGET,
+            budget=timeout * SEND_BUDGET,
         )
         message = build_message(alert, rendered, recipients, cfg.sender, settings.base_url)
         try:

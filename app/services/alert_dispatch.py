@@ -50,6 +50,7 @@ import importlib
 import importlib.util
 import json
 import logging
+import re
 import threading
 from collections import deque
 from collections.abc import Awaitable, Callable, Mapping
@@ -60,6 +61,7 @@ from typing import Any, Final, Protocol, runtime_checkable
 
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.core.domain_names import InvalidDomainName, to_ascii_domain
 from app.core.i18n import t
 from app.core.secrets_crypto import SecretCipher, SecretsError
 from app.core.tenancy import TenantContext
@@ -93,6 +95,9 @@ DEFAULT_TENANT_BATCH: Final = 100
 DEFAULT_DELIVERY_BATCH: Final = 50
 DEFAULT_TEST_CAPACITY: Final = 3
 DEFAULT_TEST_WINDOW: Final = timedelta(minutes=10)
+# Longest wait for a test send. A channel that bounds its own work (email) uses
+# min(this, ALERT_SEND_TIMEOUT_SECONDS) as its budget, so the wait never ends first.
+DEFAULT_TEST_TIMEOUT: Final = DEFAULT_SEND_TIMEOUT
 TEST_CODE: Final = "ALERT_TEST"
 TEST_KIND: Final = "test"
 
@@ -251,20 +256,45 @@ def _fields(
     return dict(value), errors
 
 
-def _recipients(value: object) -> list[FieldError]:
+# Local part: an ASCII dot-atom over a conservative subset of RFC 5322 atext. Left out on purpose:
+# "%" (percent-hack relaying), "!" (bang paths), "/" and "|" (file/pipe delivery on some MTAs),
+# "'", "`", "$", "{", "}" (shell-like metacharacters) and upper case (addresses are normalised).
+_LOCAL_ATOM: Final = r"[a-z0-9#&*+=?^_~-]+"
+_LOCAL_PART: Final = re.compile(rf"{_LOCAL_ATOM}(?:\.{_LOCAL_ATOM})*")
+MAX_LOCAL_PART: Final = 64
+
+
+def is_recipient_address(value: str) -> bool:
+    """A plain `local@domain` mailbox: a normalised (`normalize_email`) address with exactly one
+    "@", an ASCII dot-atom local part (no quotes, comments, "%", source route) and a domain that
+    `to_ascii_domain` accepts unchanged (IDNA and label rules, at least two labels, no IP or
+    address literal, no `localhost`)."""
+    try:
+        if normalize_email(value) != value:
+            return False
+    except ValueError:
+        return False
+    local, sep, domain = value.partition("@")
+    if not sep or "@" in domain or len(local) > MAX_LOCAL_PART:
+        return False
+    if not local.isascii() or not _LOCAL_PART.fullmatch(local):
+        return False
+    try:
+        return to_ascii_domain(domain) == domain
+    except InvalidDomainName:
+        return False
+
+
+def validate_recipients(value: object) -> list[FieldError]:
+    """The `recipients` setting of an email channel: 1..MAX_RECIPIENTS distinct addresses, each
+    `is_recipient_address`. Used when a channel is written (API) and again at send time."""
     if not isinstance(value, list) or not 1 <= len(value) <= MAX_RECIPIENTS:
         return [FieldError("recipients", "count")]
     seen: set[str] = set()
     for item in value:
-        if not isinstance(item, str):
+        if not isinstance(item, str) or not is_recipient_address(item) or item in seen:
             return [FieldError("recipients", "malformed")]
-        try:
-            address = normalize_email(item)
-        except ValueError:
-            return [FieldError("recipients", "malformed")]
-        if address != item or address in seen or any(c in item for c in "\r\n,;<>\"'"):
-            return [FieldError("recipients", "malformed")]
-        seen.add(address)
+        seen.add(item)
     return []
 
 
@@ -296,7 +326,7 @@ def validate_config(
     """Base checks of the non-secret settings of `kind`, then the channel's own (if any)."""
     values, errors = _fields(config, _CONFIG_FIELDS[kind], "config")
     if not errors and "recipients" in values:
-        errors = _recipients(values["recipients"])
+        errors = validate_recipients(values["recipients"])
     channel = registry.get(kind)
     if not errors and channel is not None:
         errors = list(channel.validate_config(values))
@@ -422,7 +452,7 @@ class AlertDispatcher:
         poll_interval: timedelta = DEFAULT_POLL_INTERVAL,
         tenant_batch: int = DEFAULT_TENANT_BATCH,
         delivery_batch: int = DEFAULT_DELIVERY_BATCH,
-        test_timeout: timedelta = DEFAULT_SEND_TIMEOUT,
+        test_timeout: timedelta = DEFAULT_TEST_TIMEOUT,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
         for name, value in (("poll_interval", poll_interval), ("test_timeout", test_timeout)):
@@ -572,6 +602,7 @@ __all__ = [
     "Channel",
     "ChannelRegistry",
     "AlertDispatcher",
+    "DEFAULT_TEST_TIMEOUT",
     "FieldError",
     "RenderedAlert",
     "ResolvedChannel",
@@ -581,9 +612,11 @@ __all__ = [
     "check_url",
     "default_registry",
     "field_key",
+    "is_recipient_address",
     "open_secrets",
     "render",
     "seal_secrets",
     "validate_config",
+    "validate_recipients",
     "validate_secrets",
 ]

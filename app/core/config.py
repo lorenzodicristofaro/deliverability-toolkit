@@ -241,8 +241,10 @@ _SMTP_HOST = re.compile(r"[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?")
 _SMTP_FROM = re.compile(r"[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?")
 
 
-def _has_control(value: str) -> bool:
-    return any(ord(c) < 0x20 or ord(c) == 0x7F for c in value)
+def _printable_ascii(value: str) -> bool:
+    """Only U+0020..U+007E: smtplib encodes AUTH credentials as ASCII (non-ASCII would fail at
+    every send, not at startup) and a control character has no place in a login."""
+    return all(0x20 <= ord(c) <= 0x7E for c in value)
 
 
 _SECRET_FIELDS = ("secret_key", "encryption_key")
@@ -469,15 +471,16 @@ class Settings(BaseSettings):
 
     def _check_smtp(self) -> None:
         """With SMTP_HOST set: a plain host name, a plain From address, credentials as a pair
-        and never in clear text. Without it the other SMTP_* values are ignored."""
+        (printable ASCII) and never in clear text. Without it the other SMTP_* values are
+        ignored."""
         if not self.smtp_host:
             return
         user, password = self.smtp_username, self.smtp_password.get_secret_value()
         problems = [
             ("SMTP_HOST", not _SMTP_HOST.fullmatch(self.smtp_host)),
             ("SMTP_FROM", not _SMTP_FROM.fullmatch(self.smtp_from)),
-            ("SMTP_USERNAME", bool(user) != bool(password) or _has_control(user)),
-            ("SMTP_PASSWORD", _has_control(password)),
+            ("SMTP_USERNAME", bool(user) != bool(password) or not _printable_ascii(user)),
+            ("SMTP_PASSWORD", not _printable_ascii(password)),
             ("SMTP_SECURITY", self.smtp_security == "none" and bool(user)),
         ]
         for name, bad in problems:
