@@ -27,6 +27,11 @@ Entry points:
 - `DnsSnapshotRetentionRepository` (app.repositories.dns_snapshots, M7-08) is the retention system
   entry point for DNS snapshots: its `prune_all_tenants` is the only cross-tenant access to them.
   Not part of `repo_for`; tenant access is `repo_for(ctx).dns_snapshots`.
+- `AlertDispatchRepository` (app.repositories.alert_channels, M7-15) is the delivery loop's system
+  entry point: its `tenants_with_due` is the only cross-tenant read of alert deliveries (tenant
+  ids only). `AlertChannelSecretRotation.rotate_all` re-encrypts every stored channel secret
+  after a key rotation. Neither is part of `repo_for`; tenant access to channels is
+  `repo_for(ctx).alert_channels`.
 
 Cross-tenant ids behave exactly like missing ids (None/False), so upstream maps them to 404.
 """
@@ -38,6 +43,11 @@ from dataclasses import dataclass
 from sqlalchemy.orm import Session
 
 from app.core.tenancy import TenantContext
+from app.repositories.alert_channels import (
+    AlertChannelRepository,
+    AlertChannelSecretRotation,
+    AlertDispatchRepository,
+)
 from app.repositories.alerts import (
     AlertDeliveryRepository,
     AlertRepository,
@@ -78,6 +88,7 @@ class TenantRepositories:
     alerts: AlertRepository
     alert_deliveries: AlertDeliveryRepository
     alert_rules: AlertRuleRepository
+    alert_channels: AlertChannelRepository
 
 
 def repo_for(ctx: TenantContext, session: Session) -> TenantRepositories:
@@ -100,11 +111,15 @@ def repo_for(ctx: TenantContext, session: Session) -> TenantRepositories:
         alerts=AlertRepository(ctx, session),
         alert_deliveries=AlertDeliveryRepository(ctx, session),
         alert_rules=AlertRuleRepository(ctx, session),
+        alert_channels=AlertChannelRepository(ctx, session),
     )
 
 
 __all__ = [
+    "AlertChannelRepository",
+    "AlertChannelSecretRotation",
     "AlertDeliveryRepository",
+    "AlertDispatchRepository",
     "AlertRepository",
     "AlertRuleRepository",
     "CheckRunRepository",

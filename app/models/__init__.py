@@ -1,4 +1,5 @@
 from app.models.alert import Alert, AlertDelivery, AlertRule
+from app.models.alert_channel import AlertChannel
 from app.models.base import Base
 from app.models.check_run import CheckRun
 from app.models.content_rule import ContentRule
@@ -17,6 +18,7 @@ from app.models.user import User
 
 __all__ = [
     "Alert",
+    "AlertChannel",
     "AlertDelivery",
     "AlertRule",
     "Base",
