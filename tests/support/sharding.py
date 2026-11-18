@@ -69,9 +69,15 @@ def load_weights(backend: str | None, path: Path = WEIGHTS_FILE) -> dict[str, fl
     return dict(merged)
 
 
+def is_test_file(name: str) -> bool:
+    """pytest's default `python_files`: `test_*.py` and `*_test.py`."""
+    return name.endswith(".py") and (name.startswith("test_") or name.endswith("_test.py"))
+
+
 def discover_test_files(root: Path) -> list[str]:
     """Every test module under root/tests, as a POSIX path relative to root."""
-    return sorted(p.relative_to(root).as_posix() for p in (root / "tests").rglob("test_*.py"))
+    found = (p for p in (root / "tests").rglob("*.py") if p.is_file() and is_test_file(p.name))
+    return sorted(p.relative_to(root).as_posix() for p in found)
 
 
 def shard_of_files(

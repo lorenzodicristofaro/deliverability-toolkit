@@ -16,6 +16,7 @@ from tests.support.sharding import (
     ShardError,
     assign,
     discover_test_files,
+    is_test_file,
     load_weights,
     parse_shard,
     shard_of_files,
@@ -96,6 +97,38 @@ def test_load_weights_per_backend(tmp_path: Path) -> None:
     # A file measured only on SQLite runs nothing on PostgreSQL: weight 0, not the default.
     assert load_weights("postgresql", path) == {"a": 0.0, "b": 3.0}
     assert load_weights(None, path) == {"a": 1.0, "b": 5.0}
+
+
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [
+        ("test_a.py", True),
+        ("a_test.py", True),
+        ("test_.py", True),
+        ("conftest.py", False),
+        ("sharding.py", False),
+        ("test_a.pyc", False),
+        ("test_a.txt", False),
+        ("a_test.pyx", False),
+        ("atest.py", False),
+        ("Test_a.py", False),
+        ("", False),
+    ],
+)
+def test_is_test_file_matches_pytest_defaults(name: str, expected: bool) -> None:
+    assert is_test_file(name) is expected
+
+
+def test_both_test_file_patterns_land_in_exactly_one_shard(tmp_path: Path) -> None:
+    for rel in ("tests/test_a.py", "tests/sub/b_test.py", "tests/sub/helper.py", "tests/c.txt"):
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_text("")
+    (tmp_path / "tests/test_dir.py").mkdir()  # a directory, not a module
+    files = discover_test_files(tmp_path)
+    assert files == ["tests/sub/b_test.py", "tests/test_a.py"]
+    for total in (1, 2, 3):
+        shards = shard_of_files(files, {}, total)
+        assert sorted(shards) == files
 
 
 def test_weights_from_durations_ignores_other_lines() -> None:

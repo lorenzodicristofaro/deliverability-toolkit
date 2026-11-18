@@ -30,6 +30,7 @@ from tests.support.dns_zones import FakeServerSet, load_zones
 from tests.support.sharding import (
     ShardError,
     discover_test_files,
+    is_test_file,
     load_weights,
     parse_shard,
     shard_of_files,
@@ -266,9 +267,9 @@ def pytest_configure(config: pytest.Config) -> None:
 def pytest_ignore_collect(collection_path: Path, config: pytest.Config) -> bool | None:
     """Skip collecting the test files of other shards (None: no opinion, collect as usual)."""
     mine = config.stash.get(_SHARD_FILES, None)
-    if mine is None or not collection_path.name.startswith("test_"):
+    if mine is None or not is_test_file(collection_path.name) or not collection_path.is_file():
         return None
-    if collection_path.suffix != ".py" or not collection_path.is_relative_to(ROOT / "tests"):
+    if not collection_path.is_relative_to(ROOT / "tests"):
         return None
     return True if collection_path.relative_to(ROOT).as_posix() not in mine else None
 

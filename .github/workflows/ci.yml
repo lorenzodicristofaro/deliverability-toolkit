@@ -48,8 +48,9 @@ on:
 permissions:
   contents: read
 
+# The event name keeps the weekly scheduled run and `main` pushes from cancelling each other.
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 # Tests marked `slow` (redundant regex timing rows, M7-00b) run only on `main` pushes and in the
@@ -171,4 +172,6 @@ jobs:
   # the same docs-only skip as the test jobs (maintainer decision 2026-11-12): the weekly run
   # covers new advisories on quiet weeks.
   pip-audit:
+    # Not on the weekly schedule of this workflow: pip-audit.yml has its own weekly run.
+    if: github.event_name != 'schedule'
     uses: ./.github/workflows/pip-audit.yml
