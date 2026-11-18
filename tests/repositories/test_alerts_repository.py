@@ -522,3 +522,32 @@ def test_concurrent_claims_have_exactly_one_winner(world: World, engine: Engine)
     world.session.expire_all()
     got = world.repos().alert_deliveries.get(d.id)
     assert got is not None and got.attempts == 1
+
+
+# --- suppressed heads (release of suppressed state) ---------------------------------------------
+
+
+def test_suppressed_stream_heads_and_latest_unsuppressed(world: World) -> None:
+    delivered = world.alert(state_hash=h("1"))
+    head = world.alert(state_hash=h("2"), fingerprint=h("fp2"), suppressed=True)
+    # Another stream whose suppressed alert is no longer its head.
+    world.alert(stream=h("s2"), state_hash=h("3"), suppressed=True)
+    world.alert(stream=h("s2"), state_hash=h("4"))
+    # The same stream key on another domain is another stream.
+    other = world.alert(domain="a2", state_hash=h("5"), suppressed=True)
+    world.alert(domain="b1", tenant="b", state_hash=h("6"), suppressed=True)
+    world.session.commit()
+    repo = world.repos().alerts
+    assert [a.id for a in repo.suppressed_stream_heads()] == [head.id, other.id]
+    assert [a.id for a in repo.suppressed_stream_heads(limit=1)] == [head.id]
+    found = repo.latest_unsuppressed_in_stream(world.domains["a1"], h("stream"))
+    assert found is not None and found.id == delivered.id
+    assert repo.latest_unsuppressed_in_stream(world.domains["a2"], h("stream")) is None
+    assert repo.latest_unsuppressed_in_stream("x", h("stream")) is None
+    with pytest.raises(AlertInvalid):
+        repo.latest_unsuppressed_in_stream(world.domains["a1"], "nope")
+    with pytest.raises(AlertInvalid):
+        repo.suppressed_stream_heads(limit=0)
+    b = world.repos("b").alerts
+    assert len(b.suppressed_stream_heads()) == 1
+    assert b.latest_unsuppressed_in_stream(world.domains["a1"], h("stream")) is None

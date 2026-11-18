@@ -1,6 +1,6 @@
 # M7-14 Alert state, dedup and exactly-once delivery design
 Milestone: M7
-Branch: feature/m7-14-alert-dedup
+Branch: feature/m7-14-alert-state-dedup
 Files in scope: app/models/alert.py, app/models/__init__.py, migrations/versions/<next revision>_alerts.py, app/repositories/alerts.py, app/repositories/__init__.py, app/services/alerts.py, ARCHITECTURE.md (alerts paragraph in section 6), tests/services/test_alerts.py, tests/repositories/test_alerts.py
 Out of scope: channel config and secrets (M7-15), concrete channels (M7-16..19), API/UI, alert rule UI
 Depends on: M7-10

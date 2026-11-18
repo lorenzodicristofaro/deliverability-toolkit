@@ -24,13 +24,18 @@ many emitters race or replay (two sessions, or a restart replaying the same run)
 
 Flapping. A true change to a fingerprint that was alerted (not suppressed) less than
 `min_realert` ago is still recorded, as a `suppressed` alert row: visible to the UI and counted,
-never delivered. It is the stream's new latest alert, so the state stays exact.
+never delivered. It is the stream's new latest alert, so the state stays exact. Once the window
+has ended, `release_suppressed(ctx, now)` (called periodically, wiring M7-14c) turns a stream
+whose latest alert is suppressed and differs from the last delivered state into one deliverable
+alert, exactly once; when the final state equals the last delivered one, nothing is sent.
 
 Delivery. A created, not suppressed alert gets one `pending` delivery per channel that the
 tenant's alert rules route its kind to (no rule: none; the alert is still recorded). Delivery is
 at-least-once per channel: a delivery is claimed (attempts + 1, due again after `lease`, which
-is how a crash during a send resumes), sent, and marked `sent` in its own transaction right after
-the send returned, before anything else. A crash between the remote accepting the message and
+is how a crash during a send resumes), sent under `send_timeout` (validated shorter than `lease`;
+a send still running at the timeout is cancelled and is a retryable `timeout` failure, so no
+live send outlasts its lease), and marked `sent` in its own transaction right after the send
+returned, before anything else. A crash between the remote accepting the message and
 that commit re-sends it once the lease expires: exactly-once AT THE REMOTE END cannot be
 guaranteed; the guarantee is on alert creation. A failure is retried with exponential backoff
 (`backoff_base` * 2^(attempt-1), capped at `backoff_cap`) and becomes `abandoned` after
@@ -93,8 +98,10 @@ DEFAULT_MAX_ATTEMPTS: Final = 5
 DEFAULT_BACKOFF_BASE: Final = timedelta(minutes=1)
 DEFAULT_BACKOFF_CAP: Final = timedelta(hours=1)
 DEFAULT_LEASE: Final = timedelta(minutes=5)
+DEFAULT_SEND_TIMEOUT: Final = timedelta(seconds=60)
 DEFAULT_BATCH: Final = 50
 INTERNAL_ERROR: Final = "internal_error"
+SEND_TIMEOUT: Final = "timeout"
 
 
 def _sha(text: str) -> str:
@@ -198,6 +205,15 @@ class DeliveryReport:
     skipped: int = 0
 
 
+class EmitIncomplete(Exception):
+    """Raised by the `EventSink` form when some events could not be recorded (`result.failed`);
+    retrying the same batch is safe."""
+
+    def __init__(self, result: EmitResult) -> None:
+        super().__init__(f"{result.failed} change events not recorded")
+        self.result = result
+
+
 def _positive(value: object, name: str) -> timedelta:
     if not isinstance(value, timedelta) or value <= timedelta(0):
         raise ValueError(f"{name} must be a positive timedelta")
@@ -217,6 +233,7 @@ class AlertService:
         backoff_base: timedelta = DEFAULT_BACKOFF_BASE,
         backoff_cap: timedelta = DEFAULT_BACKOFF_CAP,
         lease: timedelta = DEFAULT_LEASE,
+        send_timeout: timedelta = DEFAULT_SEND_TIMEOUT,
     ) -> None:
         if not isinstance(min_realert, timedelta) or min_realert < timedelta(0):
             raise ValueError("min_realert must be a non-negative timedelta")
@@ -229,16 +246,25 @@ class AlertService:
         self._backoff_base = _positive(backoff_base, "backoff_base")
         self._backoff_cap = _positive(backoff_cap, "backoff_cap")
         self._lease = _positive(lease, "lease")
+        self._send_timeout = _positive(send_timeout, "send_timeout")
+        if self._send_timeout >= self._lease:
+            raise ValueError("send_timeout must be shorter than lease")
 
     # --- creation ------------------------------------------------------------------------------
 
     def __call__(self, ctx: TenantContext, events: Sequence[ChangeEvent]) -> None:
-        """`EventSink` form of `emit`."""
-        self.emit(ctx, events)
+        """`EventSink` form of `emit`. Raises `EmitIncomplete` when an event could not be
+        recorded, so the caller can retry the batch (recorded events are duplicates then).
+        Replay only the LATEST run's events: replaying an older run after newer transitions were
+        recorded is a true change against the stream's latest alert and alerts again."""
+        result = self.emit(ctx, events)
+        if result.failed:
+            raise EmitIncomplete(result)
 
     def emit(self, ctx: TenantContext, events: Sequence[ChangeEvent]) -> EmitResult:
         """Record the alerts of `events`, idempotently (module docstring). Each event has its own
-        transaction: one that fails is logged and counted, the others are still recorded."""
+        transaction: one that fails is logged and counted (`failed`), the others are still
+        recorded. Only the latest run may be replayed (see `__call__`)."""
         if not isinstance(ctx, TenantContext):
             raise TypeError("emit requires a TenantContext")
         counts = {"created": 0, "duplicates": 0, "suppressed": 0, "rejected": 0, "failed": 0}
@@ -335,6 +361,71 @@ class AlertService:
         except CheckRunInvalid:
             return False
 
+    # --- release of suppressed state -----------------------------------------------------------
+
+    def release_suppressed(
+        self, ctx: TenantContext, now: datetime | None = None, *, limit: int = DEFAULT_BATCH
+    ) -> int:
+        """Make sure the tenant ends up notified of each stream's current state. For every
+        stream whose latest alert is `suppressed`, whose fingerprint's `min_realert` window has
+        ended at `now`, and whose state differs from the stream's last delivered (not
+        suppressed) alert, record one deliverable alert of that state (with deliveries per the
+        rules). Idempotent and race-safe: the new row's `state_hash` is derived from the
+        suppressed head's id, so the UNIQUE constraint lets exactly one caller insert it, and it
+        becomes the stream's latest alert. Returns the number of alerts released. Meant to be
+        called periodically (wiring: M7-14c)."""
+        if not isinstance(ctx, TenantContext):
+            raise TypeError("release_suppressed requires a TenantContext")
+        at = self._clock.now() if now is None else now
+        with self._factory.begin() as db:
+            heads = repo_for(ctx, db).alerts.suppressed_stream_heads(limit=limit)
+        released = 0
+        for head in heads:
+            try:
+                with self._factory.begin() as db:
+                    released += self._release_one(repo_for(ctx, db), head, at)
+            except Exception as exc:  # noqa: BLE001 - one stream never blocks the others
+                logger.error(
+                    "suppressed alert %d not released (%s)",
+                    head.id,
+                    type(exc).__name__,
+                    extra={"event": "alerts.release_failed", "tenant_id": ctx.tenant_id},
+                )
+        return released
+
+    def _release_one(self, repos: TenantRepositories, head: AlertRecord, now: datetime) -> int:
+        latest = repos.alerts.latest_in_stream(head.domain_id, head.stream)
+        if latest is None or latest.id != head.id or not latest.suppressed:
+            return 0  # the stream moved on since the read
+        last = repos.alerts.last_unsuppressed_at(head.fingerprint)
+        if last is not None and now - last < self._min_realert:
+            return 0  # still inside the window: a later call releases it
+        delivered = repos.alerts.latest_unsuppressed_in_stream(head.domain_id, head.stream)
+        if delivered is not None and delivered.fingerprint == head.fingerprint:
+            return 0  # the tenant already knows this state
+        alert = repos.alerts.insert_if_absent(
+            head.domain_id,
+            kind=head.kind,
+            stream=head.stream,
+            fingerprint=head.fingerprint,
+            state_hash=_sha(_canon("release", head.fingerprint, head.id)),
+            code=head.code,
+            params=dict(head.params),
+            suppressed=False,
+            created_at=now,
+        )
+        if alert is None:
+            return 0  # another caller released it
+        channels = repos.alert_rules.channels_for(head.kind)
+        repos.alert_deliveries.add_pending(alert.id, channels, now)
+        logger.info(
+            "suppressed alert %d released as alert %d",
+            head.id,
+            alert.id,
+            extra={"event": "alerts.released", "tenant_id": repos.ctx.tenant_id},
+        )
+        return 1
+
     # --- delivery ------------------------------------------------------------------------------
 
     def backoff(self, attempt: int) -> timedelta:
@@ -387,7 +478,12 @@ class AlertService:
             return "skipped"  # another worker has it, or it is no longer due
         attempt = delivery.attempts + 1
         try:
-            await send(ctx, delivery.channel_id, AlertMessage.of(alert))
+            await asyncio.wait_for(
+                send(ctx, delivery.channel_id, AlertMessage.of(alert)),
+                self._send_timeout.total_seconds(),
+            )
+        except TimeoutError:
+            code = SEND_TIMEOUT  # cancelled before the lease ends: retryable
         except DeliveryError as exc:
             code = error_code(exc.code)
         except Exception as exc:  # noqa: BLE001 - a channel bug is a failed attempt
@@ -400,11 +496,18 @@ class AlertService:
         else:
             # Marked before anything else: a retry decision never sees a sent delivery as due.
             sent_at = self._clock.now()
-            await asyncio.to_thread(
+            marked = await asyncio.to_thread(
                 self._write,
                 ctx,
                 lambda r: r.alert_deliveries.mark_sent(delivery.id, attempt, sent_at),
             )
+            if not marked:
+                logger.warning(
+                    "alert delivery %d sent but not marked (state changed meanwhile)",
+                    delivery.id,
+                    extra={"event": "alerts.mark_sent_lost", "tenant_id": ctx.tenant_id},
+                )
+                return "skipped"
             return "sent"
         abandon = attempt >= self._max_attempts
         retry_at = None if abandon else self._clock.now() + self.backoff(attempt)
@@ -434,6 +537,7 @@ __all__ = [
     "AlertService",
     "DeliveryError",
     "DeliveryReport",
+    "EmitIncomplete",
     "EmitResult",
     "Sender",
     "is_valid_event",

@@ -240,17 +240,28 @@ newest snapshot of each domain is never pruned (it is the baseline of the next d
   with `state_hash` = SHA-256(new state, id of the stream's latest alert or 0) and ON CONFLICT DO
   NOTHING (SQLite and PostgreSQL; no check-then-insert): every emitter that read the same stream
   position computes the same key, so concurrent emitters and replays leave one row and only the
-  inserter creates deliveries. A -> B -> A -> B alerts every transition.
+  inserter creates deliveries. A -> B -> A -> B alerts every transition. Only the latest run may
+  be replayed: replaying an older run after newer transitions is a true change and alerts again.
+  The `EventSink` form raises `EmitIncomplete` when an event could not be recorded, so the
+  caller can retry the batch (recorded events are duplicates on retry).
   Flapping: a true change to a fingerprint whose last non-suppressed alert is younger than
   `min_realert` (an `AlertService` setting, default 1 hour) is stored as a `suppressed` row:
-  counted and visible, never delivered, and it is the stream's new state.
+  counted and visible, not delivered, and it is the stream's new state. The tenant still ends up
+  notified of the current state: `release_suppressed(ctx, now)` (sync, called periodically,
+  wiring M7-14c) takes each stream whose latest alert is suppressed, whose fingerprint's window
+  has ended and whose state differs from the stream's last delivered alert, and inserts one
+  deliverable alert of that state (with deliveries) with `state_hash` derived from the
+  suppressed head's id, so concurrent or repeated calls release it exactly once. When the final
+  state equals the last delivered one, nothing is sent.
   Rules: a created, not suppressed alert gets one `pending` delivery per channel that the
   tenant's `alert_rules` route its kind to; no rule means no delivery (the alert is still
   recorded for the UI).
   Delivery (`deliver_due(ctx, send)`, async, database work in threads): each due delivery is
   claimed with a conditional UPDATE (attempts + 1, due again after a lease, so a crash during the
-  send resumes later and two workers never both send), sent through the injected `Sender`, then
-  marked `sent`, or `failed` with exponential backoff (base * 2^(attempt-1), capped) from the
+  send resumes later), sent through the injected `Sender` under `send_timeout` (validated shorter
+  than the lease; a send still running at the timeout is cancelled and is a retryable `timeout`
+  failure, so a live send never outlasts its lease and two workers never send concurrently),
+  then marked `sent` (a lost conditional mark is not counted as sent), or `failed` with exponential backoff (base * 2^(attempt-1), capped) from the
   injected clock, or `abandoned` after `max_attempts`. Failures are stored and logged as a stable
   code only, never a message, response body or secret.
 - Maintenance (M7-09): every `MAINTENANCE_INTERVAL_MINUTES` the scheduler process runs the session

@@ -8,6 +8,7 @@ serializes writers). No network: the sender is a fake.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import threading
@@ -37,6 +38,7 @@ from app.services.alerts import (
     AlertMessage,
     AlertService,
     DeliveryError,
+    EmitIncomplete,
     is_valid_event,
     payload,
     state_hash,
@@ -602,3 +604,165 @@ async def test_deliver_due_is_per_tenant(world: World) -> None:
     assert sender.calls == []
     with pytest.raises(TypeError):
         await world.service().deliver_due(world.ctx.tenant_id, sender)  # type: ignore[arg-type]
+
+
+# --- release of suppressed state (flapping ends notified) --------------------------------------
+
+
+def _flap(world: World, svc: AlertService, states: Sequence[bool]) -> None:
+    for listed in states:
+        world.clock.advance(timedelta(minutes=10))
+        svc.emit(world.ctx, [listing(world, listed)])
+
+
+def test_flapping_ends_with_the_final_state_delivered_once(world: World) -> None:
+    """listed (delivered at T0+10m), cleared (delivered), then listed -> cleared -> listed inside
+    the window: after the window "listed" is delivered once, and never again."""
+    world.route("new_listing", 1)
+    world.route("listing_cleared", 1)
+    svc = world.service(min_realert=timedelta(hours=1))
+    _flap(world, svc, [True, False, True, False, True])
+    assert [a.suppressed for a in world.alerts()] == [False, False, True, True, True]
+    assert world.count(AlertDelivery) == 2
+    assert svc.release_suppressed(world.ctx) == 0  # T0+50m: the window of "listed" is open
+    world.clock.at = T0 + timedelta(minutes=70)
+    assert svc.release_suppressed(world.ctx) == 1
+    assert svc.release_suppressed(world.ctx) == 0
+    assert world.service(min_realert=timedelta(hours=1)).release_suppressed(world.ctx) == 0
+    latest = world.alerts()[-1]
+    assert (latest.kind, latest.suppressed) == ("new_listing", False)
+    deliveries = world.deliveries()
+    assert len(deliveries) == 3 and deliveries[-1].alert_id == latest.id
+    # The released alert is the stream's state: the same event replayed is a duplicate.
+    assert svc.emit(world.ctx, [listing(world, True)]).duplicates == 1
+    assert svc.release_suppressed(world.ctx) == 0
+
+
+def test_nothing_is_released_when_the_final_state_was_delivered(world: World) -> None:
+    world.route("new_listing", 1)
+    world.route("listing_cleared", 1)
+    svc = world.service(min_realert=timedelta(hours=1))
+    _flap(world, svc, [True, False, True, False])  # ends "cleared", delivered at T0+20m
+    world.clock.advance(timedelta(hours=3))
+    assert svc.release_suppressed(world.ctx) == 0
+    assert world.count(Alert) == 4 and world.count(AlertDelivery) == 2
+
+
+def test_release_is_per_tenant(world: World) -> None:
+    svc = world.service(min_realert=timedelta(hours=1))
+    _flap(world, svc, [True, False, True])
+    world.clock.advance(timedelta(hours=3))
+    assert svc.release_suppressed(world.ctx_b) == 0
+    assert svc.release_suppressed(world.ctx) == 1
+    with pytest.raises(TypeError):
+        svc.release_suppressed(world.ctx.tenant_id)  # type: ignore[arg-type]
+
+
+def test_concurrent_releases_release_once(world: World, engine: Engine) -> None:
+    world.route("new_listing", 1)
+    svc = world.service(min_realert=timedelta(hours=1))
+    _flap(world, svc, [True, False, True])
+    world.clock.advance(timedelta(hours=3))
+    services = [world.service(min_realert=timedelta(hours=1)) for _ in range(2)]
+    barrier = threading.Barrier(2)
+
+    def release(i: int) -> int:
+        barrier.wait(timeout=10)
+        return services[i].release_suppressed(world.ctx)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        assert sum(pool.map(release, [0, 1])) == 1
+    assert world.count(Alert) == 4 and world.count(AlertDelivery) == 2
+
+
+def test_releases_racing_past_the_stream_read_release_once(
+    world: World, engine: Engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    if engine.dialect.name != "postgresql":
+        pytest.skip("needs concurrent writers (PostgreSQL)")
+    world.route("new_listing", 1)
+    svc = world.service(min_realert=timedelta(hours=1))
+    _flap(world, svc, [True, False, True])
+    world.clock.advance(timedelta(hours=3))
+    barrier = threading.Barrier(2)
+    original = AlertRepository.latest_in_stream
+
+    def latest_then_wait(self: AlertRepository, *a: Any) -> AlertRecord | None:
+        found = original(self, *a)
+        barrier.wait(timeout=10)
+        return found
+
+    monkeypatch.setattr(AlertRepository, "latest_in_stream", latest_then_wait)
+    services = [world.service(min_realert=timedelta(hours=1)) for _ in range(2)]
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(lambda i: services[i].release_suppressed(world.ctx), [0, 1]))
+    assert sorted(results) == [0, 1]
+    assert world.count(Alert) == 4 and world.count(AlertDelivery) == 2
+
+
+# --- sink retry, send timeout, lost mark ------------------------------------------------------
+
+
+def test_sink_raises_when_an_event_was_not_recorded_and_retry_completes(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    svc = world.service()
+    original = AlertRepository.insert_if_absent
+    calls = {"n": 0}
+
+    def flaky(self: AlertRepository, *a: Any, **kw: Any) -> AlertRecord | None:
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise RuntimeError("database went away")
+        return original(self, *a, **kw)
+
+    monkeypatch.setattr(AlertRepository, "insert_if_absent", flaky)
+    events = [listing(world), ev(world, subject="sbl.example")]
+    with pytest.raises(EmitIncomplete) as info:
+        svc(world.ctx, events)
+    assert (info.value.result.created, info.value.result.failed) == (1, 1)
+    svc(world.ctx, events)  # the retry: the first is a duplicate, the second is recorded
+    assert world.count(Alert) == 2
+
+
+def test_send_timeout_must_be_shorter_than_the_lease(world: World) -> None:
+    with pytest.raises(ValueError):
+        world.service(lease=timedelta(minutes=1), send_timeout=timedelta(minutes=1))
+    with pytest.raises(ValueError):
+        world.service(send_timeout=timedelta(0))
+    world.service(lease=timedelta(minutes=1), send_timeout=timedelta(seconds=59))
+
+
+async def test_a_slow_channel_times_out_and_is_retried(world: World) -> None:
+    world.route("new_listing", 1)
+    svc = world.service(send_timeout=timedelta(milliseconds=50), backoff_base=timedelta(minutes=1))
+    svc.emit(world.ctx, [listing(world)])
+    cancelled = asyncio.Event()
+
+    async def slow(ctx: TenantContext, channel_id: int, message: AlertMessage) -> None:
+        try:
+            await asyncio.sleep(30)
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+
+    assert (await svc.deliver_due(world.ctx, slow)).failed == 1
+    assert cancelled.is_set()  # the send did not outlive its timeout (nor its lease)
+    (d,) = world.deliveries()
+    assert (d.status, d.last_error, d.attempts) == ("failed", "timeout", 1)
+    assert d.next_attempt_at == T0 + timedelta(minutes=1)
+    world.clock.advance(timedelta(minutes=1))
+    assert (await svc.deliver_due(world.ctx, FakeSender())).sent == 1
+
+
+async def test_a_lost_mark_sent_is_not_counted_as_sent(world: World) -> None:
+    world.route("new_listing", 1)
+    svc = world.service()
+    svc.emit(world.ctx, [listing(world)])
+
+    async def send_then_lose_row(ctx: TenantContext, channel_id: int, message: Any) -> None:
+        with world.factory.begin() as db:
+            db.execute(AlertDelivery.__table__.delete())
+
+    report = await svc.deliver_due(world.ctx, send_then_lose_row)
+    assert (report.sent, report.skipped) == (0, 1)

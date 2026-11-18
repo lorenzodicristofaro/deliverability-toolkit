@@ -30,7 +30,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Final, cast
 
-from sqlalchemy import ColumnElement, CursorResult, Insert, Select, Table, select, update
+from sqlalchemy import ColumnElement, CursorResult, Insert, Select, Table, func, select, update
 from sqlalchemy.dialects import postgresql, sqlite
 from sqlalchemy.orm import Session
 
@@ -267,6 +267,47 @@ class AlertRepository(_TenantRepository):
         )
         row = self._session.scalars(stmt).first()
         return None if row is None else AlertRecord.from_model(row)
+
+    def latest_unsuppressed_in_stream(
+        self, domain_id: object, stream: object
+    ) -> AlertRecord | None:
+        """The newest NOT suppressed alert of one stream of the domain (the last state the
+        tenant was notified of)."""
+        did = coerce_id(domain_id)
+        if did is None:
+            return None
+        key = _hash(stream, "stream")
+        stmt = (
+            self._select(Alert.domain_id == did, Alert.stream == key, Alert.suppressed.is_(False))
+            .order_by(Alert.id.desc())
+            .limit(1)
+        )
+        row = self._session.scalars(stmt).first()
+        return None if row is None else AlertRecord.from_model(row)
+
+    def suppressed_stream_heads(self, *, limit: int = DEFAULT_LIMIT) -> list[AlertRecord]:
+        """The latest alert of each of the tenant's streams, where that alert is suppressed;
+        oldest first."""
+        size = _limit(limit)
+        ranked = (
+            select(
+                Alert.id.label("aid"),
+                func.row_number()
+                .over(partition_by=(Alert.domain_id, Alert.stream), order_by=Alert.id.desc())
+                .label("rn"),
+            )
+            .where(Alert.tenant_id == self._ctx.tenant_id)
+            .subquery()
+        )
+        stmt = (
+            self._select(
+                Alert.id.in_(select(ranked.c.aid).where(ranked.c.rn == 1)),
+                Alert.suppressed.is_(True),
+            )
+            .order_by(Alert.id)
+            .limit(size)
+        )
+        return [AlertRecord.from_model(r) for r in self._session.scalars(stmt)]
 
     def last_unsuppressed_at(self, fingerprint: object) -> datetime | None:
         """Creation time of the newest NOT suppressed alert with this fingerprint (the start of
