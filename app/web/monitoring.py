@@ -446,6 +446,9 @@ async def _page(
         display_name=view.display_name,
         tab=tab,
         can_manage=can_manage,
+        can_check=can(
+            web.service.principal, Action.CHECK_RUN, DomainResource(web.ctx.tenant_id, view.id)
+        ),
         error=error,
         flash=_NOTICES.get(notice or ""),
         form=form,

@@ -20,6 +20,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
+from app.api.v1.dns_tools import dns_backend
 from app.api.v1.history import history_clock
 from app.api.v1.monitors import monitor_clock
 from app.core import i18n
@@ -37,6 +38,7 @@ from app.repositories.monitor_targets import MonitorTargetRecord
 from app.web.monitoring import CHART_H, PAD_B, PAD_T, bucket_label, build_chart
 from tests.api.test_domains import B_SECRET_NAME, KEY, World, _cookie, _seed, call
 from tests.services.test_history import seed_run, seed_snapshot
+from tests.support.dns_backend import fake_backend
 from tests.support.socket_guard import db_endpoint, install
 
 NOW = datetime(2026, 11, 17, 9, 30, tzinfo=UTC)
@@ -85,6 +87,8 @@ def world(migrated_db_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[Wor
     application = create_app(settings)
     application.dependency_overrides[history_clock] = _FixedClock
     application.dependency_overrides[monitor_clock] = _FixedClock
+    backend, _ = fake_backend({"default": []})  # ESPs/Authentication tabs: fixtures, no network
+    application.dependency_overrides[dns_backend] = lambda: backend
     try:
         with TestClient(application, raise_server_exceptions=True) as client:
             yield World(client, db, settings, tenant_a, tenant_b, users, domains)
@@ -215,6 +219,33 @@ def test_anonymous_get_redirects_to_login(world: World) -> None:
     r = world.client.get(path(world), headers=HTML, follow_redirects=False)
     assert r.status_code == 303
     assert r.headers["location"].startswith("/login")
+
+
+TAB = 'data-testid="tab-monitoring"'
+
+
+@pytest.mark.parametrize("who", ROLES)
+def test_tab_bar_links_monitoring_for_readers(world: World, who: str) -> None:
+    pages = ["", "/esps", "/authentication"]
+    for suffix in pages:
+        r = get(world, who, f"/domains/{world.domains['assigned']}{suffix}")
+        assert r.status_code == 200, suffix
+        assert f'href="{path(world)}" {TAB}' in r.text, suffix
+    # The Authentication link follows `check.run`, exactly as on the domain page.
+    detail = get(world, who, f"/domains/{world.domains['assigned']}")
+    page = get(world, who, path(world))
+    auth_tab = 'data-testid="tab-authentication"'
+    assert (auth_tab in page.text) is (auth_tab in detail.text)
+
+
+@pytest.mark.parametrize("who", ROLES)
+def test_tab_bar_hides_monitoring_without_monitor_read(world: World, who: str) -> None:
+    set_toggles(world, who, {"monitor.read": False})
+    pages = ["", "/esps", "/authentication"]
+    for suffix in pages:
+        r = get(world, who, f"/domains/{world.domains['assigned']}{suffix}")
+        assert r.status_code == 200, suffix
+        assert TAB not in r.text, suffix
 
 
 def test_no_active_tenant_is_404(world: World) -> None:

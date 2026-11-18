@@ -6,6 +6,7 @@
 <p><a href="/domains/{{ domain_id }}">{{ t("domain.detail.title") }}</a></p>
 <h1 data-testid="monitor-title">{{ t("monitor.tab.heading", domain=display_name|visible) }}</h1>
 <nav class="tabs" aria-label="{{ t('checks.tab.label') }}">
+  {% if can_check %}<a href="/domains/{{ domain_id }}/authentication" data-testid="tab-authentication">{{ t("checks.tab.authentication") }}</a>{% endif %}
   <a href="/domains/{{ domain_id }}/esps" data-testid="tab-esps">{{ t("web.domain.esps.title") }}</a>
   <a href="/domains/{{ domain_id }}/monitoring" aria-current="page" data-testid="tab-monitoring">{{ t("monitor.tab.title") }}</a>
   <a href="/domains/{{ domain_id }}/monitoring?bucket={{ tab.bucket }}" data-testid="monitor-refresh">{{ t("monitor.tab.refresh") }}</a>

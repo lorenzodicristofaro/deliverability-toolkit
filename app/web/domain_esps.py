@@ -225,6 +225,9 @@ async def _page(
         tab=tab,
         can_write=can_write,
         can_run=can_run,
+        can_monitor=can(
+            web.service.principal, Action.MONITOR_READ, DomainResource(web.ctx.tenant_id, view.id)
+        ),
         error=error,
         flash=_NOTICES.get(notice or ""),
         form=form or {"esp_id": "", "return_path_host": "", "tracking_host": ""},

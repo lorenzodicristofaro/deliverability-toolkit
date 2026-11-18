@@ -9,6 +9,7 @@
 <nav class="tabs" aria-label="{{ t('checks.tab.label') }}">
   {% if row.can_check %}<a href="/domains/{{ row.id }}/authentication" data-testid="tab-authentication">{{ t("checks.tab.authentication") }}</a>{% endif %}
   <a href="/domains/{{ row.id }}/esps" data-testid="tab-esps">{{ t("web.domain.esps.title") }}</a>
+  {% if row.can_monitor %}<a href="/domains/{{ row.id }}/monitoring" data-testid="tab-monitoring">{{ t("monitor.tab.title") }}</a>{% endif %}
 </nav>
 <h2>{{ t("domain.detail.status") }}</h2>
 <p class="empty-state">{{ t("landing.domain.never_checked") }}</p>
