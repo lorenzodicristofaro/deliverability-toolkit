@@ -472,7 +472,14 @@ when a profile is older than 12 months.
     them. Unit tests (`tests/net`) use a scripted resolver and `httpx2.MockTransport`; the
     end-to-end tests use a server bound to 127.0.0.1 inside the test with the loopback block
     bypassed through the seam. Sockets to anything but loopback fail those tests.
-  - SMTP: separate ticket, same policy.
+  - SMTP: separate ticket, same policy. The guarded SMTP client is for the SMTP checks (M9).
+  - GM decision (M7-16): the notification SMTP relay (`SMTP_*` env, instance admin setting,
+    SPEC section 3) is operator-configured trusted infrastructure like `RESOLVER_ADDRS`, may be
+    private, and does not go through the guarded client. Recipient addresses (channel config)
+    never become connection targets. The email channel sends with the standard library `smtplib`
+    in a worker thread, within 80 percent of `ALERT_SEND_TIMEOUT_SECONDS` (which stays below the
+    delivery lease); results map to `not_configured`, `timeout`, `tls_error`, `connect_error`,
+    `smtp_4xx` (retryable) and `smtp_5xx` (permanent).
 - Input validation of domains/IPs (IDNA, length, label rules) at the edge.
 - Regex rules run through `app/core/safe_regex.py` (M5-03): `search_many` runs all
   rules for one text in one worker subprocess with a per-rule deadline; a rule that

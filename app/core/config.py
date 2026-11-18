@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ipaddress
 import logging
+import re
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -85,6 +86,8 @@ ALERT_BACKOFF_SECONDS_MAX = 86400
 DEFAULT_ALERT_LEASE_SECONDS = 300
 ALERT_LEASE_SECONDS_MIN = 10
 ALERT_LEASE_SECONDS_MAX = 3600
+DEFAULT_SMTP_PORT = 587
+SMTP_FIELD_MAX_LENGTH = 320
 DEFAULT_ALERT_SEND_TIMEOUT_SECONDS = 60
 ALERT_SEND_TIMEOUT_SECONDS_MIN = 1
 ALERT_SEND_TIMEOUT_SECONDS_MAX = 3599
@@ -234,6 +237,14 @@ def parse_port_list(value: str, name: str) -> tuple[int, ...]:
     return tuple(ports)
 
 
+_SMTP_HOST = re.compile(r"[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?")
+_SMTP_FROM = re.compile(r"[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?")
+
+
+def _has_control(value: str) -> bool:
+    return any(ord(c) < 0x20 or ord(c) == 0x7F for c in value)
+
+
 _SECRET_FIELDS = ("secret_key", "encryption_key")
 
 
@@ -242,7 +253,7 @@ class Settings(BaseSettings):
 
     Construction validates everything and raises ConfigError (never pydantic's ValidationError,
     whose messages echo input values). ConfigError params carry variable names, never secret
-    values; secrets are SecretStr so repr/str mask them. SMTP_* is out of scope until M7.
+    values; secrets are SecretStr so repr/str mask them. SMTP_* is the alert email relay (M7-16).
     """
 
     model_config = SettingsConfigDict(extra="ignore", frozen=True)
@@ -382,6 +393,15 @@ class Settings(BaseSettings):
         le=ALERT_SEND_TIMEOUT_SECONDS_MAX,
     )
 
+    # Notification SMTP relay (M7-16; ARCHITECTURE section 9: trusted operator infrastructure, not
+    # the guarded client). Empty SMTP_HOST: email channels report `not_configured`.
+    smtp_host: str = ""
+    smtp_port: int = Field(default=DEFAULT_SMTP_PORT, ge=1, le=65535)
+    smtp_security: Literal["starttls", "tls", "none"] = "starttls"
+    smtp_username: str = Field(default="", max_length=SMTP_FIELD_MAX_LENGTH)
+    smtp_password: SecretStr = Field(default=SecretStr(""), max_length=SMTP_FIELD_MAX_LENGTH)
+    smtp_from: str = Field(default="", max_length=SMTP_FIELD_MAX_LENGTH)
+
     @field_validator("secret_key", "encryption_key", mode="after")
     @classmethod
     def _not_blank(cls, value: SecretStr) -> SecretStr:
@@ -401,6 +421,11 @@ class Settings(BaseSettings):
     @classmethod
     def _upper(cls, value: Any) -> Any:
         return value.strip().upper() if isinstance(value, str) else value
+
+    @field_validator("smtp_security", mode="before")
+    @classmethod
+    def _lower_security(cls, value: Any) -> Any:
+        return value.strip().lower() if isinstance(value, str) else value
 
     @field_validator("resolver_mode", "role", mode="before")
     @classmethod
@@ -433,6 +458,7 @@ class Settings(BaseSettings):
                 timeout=str(self.alert_send_timeout_seconds),
                 lease=str(self.alert_lease_seconds),
             )
+        self._check_smtp()
         if not self.parsed_resolver_addrs() and self.resolver_mode in ("custom", "unbound"):
             raise ConfigError(CONFIG_RESOLVER_ADDRS_REQUIRED_KEY, mode=self.resolver_mode)
         # Parsed once here: an invalid entry fails at startup, requests reuse the result.
@@ -440,6 +466,23 @@ class Settings(BaseSettings):
         self._outbound_ports = parse_port_list(
             self.outbound_http_allowed_ports, "OUTBOUND_HTTP_ALLOWED_PORTS"
         )
+
+    def _check_smtp(self) -> None:
+        """With SMTP_HOST set: a plain host name, a plain From address, credentials as a pair
+        and never in clear text. Without it the other SMTP_* values are ignored."""
+        if not self.smtp_host:
+            return
+        user, password = self.smtp_username, self.smtp_password.get_secret_value()
+        problems = [
+            ("SMTP_HOST", not _SMTP_HOST.fullmatch(self.smtp_host)),
+            ("SMTP_FROM", not _SMTP_FROM.fullmatch(self.smtp_from)),
+            ("SMTP_USERNAME", bool(user) != bool(password) or _has_control(user)),
+            ("SMTP_PASSWORD", _has_control(password)),
+            ("SMTP_SECURITY", self.smtp_security == "none" and bool(user)),
+        ]
+        for name, bad in problems:
+            if bad:
+                raise ConfigError(CONFIG_INVALID_VALUE_KEY, name=name)
 
     def outbound_http_ports(self) -> tuple[int, ...]:
         """OUTBOUND_HTTP_ALLOWED_PORTS as parsed at construction (never empty)."""

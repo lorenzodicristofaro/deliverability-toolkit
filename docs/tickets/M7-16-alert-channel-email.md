@@ -13,4 +13,4 @@ Acceptance criteria:
 - Send via a thread/async-safe SMTP library call with timeout; result mapping: connection/4xx -> retryable, 5xx -> permanent, TLS failure -> retryable with code.
 - Tests with a fake SMTP transport (no network): success, 4xx, 5xx, timeout, injection attempts in domain names and params, missing settings -> channel reports `permanent` with code `not_configured`.
 New i18n keys: ALERT_EMAIL_SUBJECT, ALERT_EMAIL_BODY intro/footer keys (en + it)
-Status: todo
+Status: done

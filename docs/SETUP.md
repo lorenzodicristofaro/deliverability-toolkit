@@ -239,6 +239,11 @@ at startup. `compose.yaml` forwards each one with the same default.
 | `ALERT_BACKOFF_CAP_SECONDS` | `3600` | 1-86400 | Longest delay between attempts; not shorter than `ALERT_BACKOFF_BASE_SECONDS`. |
 | `ALERT_LEASE_SECONDS` | `300` | 10-3600 | A delivery being sent is retried after this if the container stopped mid-send. |
 | `ALERT_SEND_TIMEOUT_SECONDS` | `60` | 1-3599 | One send is cancelled after this (a retryable failure); must be shorter than `ALERT_LEASE_SECONDS`. |
+| `SMTP_HOST` | empty | host name | The SMTP relay for email alerts. Empty: email channels report `not_configured` and their deliveries are abandoned. The relay is trusted infrastructure of the operator and may be on a private network. |
+| `SMTP_PORT` | `587` | 1-65535 | Relay port (use `465` with `SMTP_SECURITY=tls`). |
+| `SMTP_SECURITY` | `starttls` | `starttls`, `tls`, `none` | Transport security; `none` is refused when `SMTP_USERNAME` is set. |
+| `SMTP_USERNAME`, `SMTP_PASSWORD` | empty | text | Relay login; both or neither. The password is never logged. |
+| `SMTP_FROM` | empty | address | Sender address of alert emails; required when `SMTP_HOST` is set. |
 
 Alerts are created by scheduled runs and delivered by the same `worker`/`all` containers, which
 poll for due deliveries every 30 seconds. Delivery needs a valid `ENCRYPTION_KEY` (section 10):
