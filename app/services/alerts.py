@@ -22,6 +22,15 @@ none): every emitter that read the same stream position computes the same key, a
 ON CONFLICT DO NOTHING on (tenant_id, fingerprint, state_hash) lets exactly one row exist, however
 many emitters race or replay (two sessions, or a restart replaying the same run).
 
+Latest run only. Replaying an older run after a newer one's transitions were recorded is a true
+change against the stream's latest alert and would alert again (a stale head, e.g. "listed" after
+"cleared"). The scheduled run passes `latest=LatestRun(target_id, started_at)` (the
+`last_run_at` it stored); each event's transaction then first locks the target row while its
+`last_run_at` is still that run's (`lock_latest_run`: SELECT .. FOR UPDATE on PostgreSQL, a no-op
+conditional UPDATE taking the single writer lock on SQLite), and only then reads the locked
+stream head and inserts. A newer run can neither store nor emit between the check and the insert;
+an event of a run that is no longer the latest is counted `superseded`, which is not a failure.
+
 Flapping. A true change to a fingerprint that was alerted (not suppressed) less than
 `min_realert` ago is still recorded, as a `suppressed` alert row: visible to the UI and counted,
 never delivered. It is the stream's new latest alert, so the state stays exact. Once the window
@@ -219,6 +228,26 @@ class EmitResult:
     rejected: int = 0
     failed: int = 0
     deliveries: int = 0
+    superseded: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class LatestRun:
+    """The run whose events are emitted: its monitor target and the `last_run_at` it stored
+    (timezone-aware). Events are recorded only while that is still the target's latest run."""
+
+    target_id: int
+    started_at: datetime
+
+
+def _valid_latest(latest: object) -> bool:
+    return (
+        isinstance(latest, LatestRun)
+        and type(latest.target_id) is int
+        and latest.target_id > 0
+        and isinstance(latest.started_at, datetime)
+        and latest.started_at.tzinfo is not None
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -296,24 +325,50 @@ class AlertService:
 
     # --- creation ------------------------------------------------------------------------------
 
-    def __call__(self, ctx: TenantContext, events: Sequence[ChangeEvent]) -> None:
+    def __call__(
+        self,
+        ctx: TenantContext,
+        events: Sequence[ChangeEvent],
+        *,
+        latest: LatestRun | None = None,
+    ) -> None:
         """`EventSink` form of `emit`. Raises `EmitIncomplete` when an event could not be
         recorded, so the caller can retry the batch (recorded events are duplicates then).
-        Replay only the LATEST run's events: replaying an older run after newer transitions were
-        recorded is a true change against the stream's latest alert and alerts again."""
-        result = self.emit(ctx, events)
+        Superseded events (a newer run exists, see `latest`) are not a failure: no retry."""
+        result = self.emit(ctx, events, latest=latest)
         if result.failed:
             raise EmitIncomplete(result)
 
-    def emit(self, ctx: TenantContext, events: Sequence[ChangeEvent]) -> EmitResult:
+    def emit(
+        self,
+        ctx: TenantContext,
+        events: Sequence[ChangeEvent],
+        *,
+        latest: LatestRun | None = None,
+    ) -> EmitResult:
         """Record the alerts of `events`, idempotently (module docstring). Each event has its own
         transaction: one that fails is logged and counted (`failed`), the others are still
-        recorded. Only the latest run may be replayed (see `__call__`)."""
+        recorded. With `latest`, an event is recorded only if that run is still the target's
+        latest, checked in the event's own transaction (module docstring, "Latest run only");
+        once a newer run is seen, the remaining events are `superseded` too. Without `latest`
+        the caller must only replay the latest run's events."""
         if not isinstance(ctx, TenantContext):
             raise TypeError("emit requires a TenantContext")
-        counts = {"created": 0, "duplicates": 0, "suppressed": 0, "rejected": 0, "failed": 0}
+        if latest is not None and not _valid_latest(latest):
+            raise TypeError("latest must be a LatestRun with a positive id and an aware time")
+        counts = {
+            "created": 0,
+            "duplicates": 0,
+            "suppressed": 0,
+            "rejected": 0,
+            "failed": 0,
+            "superseded": 0,
+        }
         deliveries = 0
         for event in events:
+            if counts["superseded"]:
+                counts["superseded"] += 1
+                continue
             if not is_valid_event(event):
                 counts["rejected"] += 1
                 logger.warning(
@@ -323,7 +378,7 @@ class AlertService:
                 continue
             try:
                 with self._factory.begin() as db:
-                    outcome, added = self._emit_one(repo_for(ctx, db), event)
+                    outcome, added = self._emit_one(repo_for(ctx, db), event, latest)
             except Exception as exc:  # noqa: BLE001 - one event never blocks the others
                 counts["failed"] += 1
                 logger.error(
@@ -334,9 +389,23 @@ class AlertService:
                 continue
             counts[outcome] += 1
             deliveries += added
+        if counts["superseded"]:
+            logger.warning(
+                "%d change events not recorded (a newer run of the target exists)",
+                counts["superseded"],
+                extra={"event": "alerts.emit_superseded", "tenant_id": ctx.tenant_id},
+            )
         return EmitResult(deliveries=deliveries, **counts)
 
-    def _emit_one(self, repos: TenantRepositories, event: ChangeEvent) -> tuple[str, int]:
+    def _emit_one(
+        self, repos: TenantRepositories, event: ChangeEvent, run: LatestRun | None
+    ) -> tuple[str, int]:
+        # The latest-run guard comes first and holds the target row until commit, so the head
+        # read, the decision and the insert below all happen while no newer run can land.
+        if run is not None and not repos.monitor_targets.lock_latest_run(
+            run.target_id, run.started_at
+        ):
+            return "superseded", 0
         now = self._clock.now()
         stream = stream_key(event)
         latest = locked_head(repos, event.domain_id, stream)
@@ -618,6 +687,7 @@ __all__ = [
     "DeliveryReport",
     "EmitIncomplete",
     "EmitResult",
+    "LatestRun",
     "Sender",
     "is_valid_event",
     "payload",

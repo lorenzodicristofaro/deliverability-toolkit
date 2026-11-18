@@ -277,12 +277,11 @@ newest snapshot of each domain is never pruned (it is the baseline of the next d
   backoff, and only while it is still the latest run of that target: the latest started in this
   process, and before each retry the latest stored (the target's `last_run_at` is still this
   run's start; a failed check is a failed attempt), which keeps a retry from replaying an older
-  run after a newer one another replica already stored. The guard is not complete across
-  replicas: check and insert are separate transactions, so a rare window remains where a
-  transient error plus a newer run of the same target on another worker within the retry window
-  (about 6 s) can replay an older state out of order and insert a wrong head change (e.g.
-  "listed" after "cleared"); tracked as follow-up M7-14d (check and insert in the same
-  transaction inside the alerts service). Other sink errors are logged and never fail the run.
+  run after a newer one another replica already stored. That is a pre-filter; the guard
+  (M7-14d) is in `AlertService.emit(latest=LatestRun)`, which re-checks `last_run_at` in each
+  insert's transaction under a target row lock (PostgreSQL `FOR UPDATE`, SQLite no-op UPDATE =
+  writer lock) and counts a superseded event as success, not a retryable failure. Other sink
+  errors are logged and never fail the run.
   The lifespan
   (`app/main.py`) starts two tasks next to the scheduler: `AlertReleaser.run`
   (`app/services/monitor_run.py`) every 30 s and the M7-15 `AlertDispatcher.run` loop (not

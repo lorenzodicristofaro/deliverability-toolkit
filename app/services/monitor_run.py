@@ -36,15 +36,13 @@ One run of a `ScheduledRun`:
    recorded, e.g. a transient database error), the same events are offered again, at most
    `emit_attempts` times in all with exponential backoff from `emit_backoff`, and only while this
    is still the latest run of the target: started by this executor (in memory) and, before each
-   retry, stored (the target's `last_run_at` in the database is still this run's start), which
-   keeps a retry from replaying an older run after a newer one another worker already stored
-   (M7-14: replaying an older run alerts again). A failed check counts as a failed attempt (same
-   retry and backoff). The guard is not complete across workers: the check and the insert are
-   separate transactions, so a rare window remains where a transient error plus a newer run of
-   the same target on another worker within the retry window (about 6 s) can replay an older
-   state out of order and insert a wrong head change (e.g. "listed" after "cleared"). Tracked as
-   follow-up M7-14d (check and insert in the same transaction inside the alerts service). Any
-   other sink exception, or the last failed attempt, is logged by type and never fails the run.
+   retry, stored (the target's `last_run_at` in the database is still this run's start), a cheap
+   pre-filter (M7-14: replaying an older run alerts again). A failed check counts as a failed
+   attempt (same retry and backoff). Correctness across workers comes from the `AlertService`
+   sink: it gets `LatestRun(target, last_run_at)` and checks it in each insert's own transaction,
+   under the target row lock (M7-14d), so an older run's retry records nothing once a newer run
+   is stored and reports that as success, not a failure. Any other sink exception, or the last
+   failed attempt, is logged by type and never fails the run.
    Suppressed alerts are released by `AlertReleaser` (below), independently of runs.
 
 Not produced: certificate/key expiry events (no check reads them before M9; see change_detect).
@@ -78,7 +76,7 @@ from app.repositories.dns_snapshots import (
     DnsSnapshotRecord,
     SnapshotCursor,
 )
-from app.services.alerts import AlertService, EmitIncomplete
+from app.services.alerts import AlertService, EmitIncomplete, LatestRun
 from app.services.change_detect import (
     ChangeEvent,
     CheckInput,
@@ -420,7 +418,11 @@ class MonitorRunExecutor:
                 )
                 return
             try:
-                await asyncio.to_thread(self._sink, ctx, events)
+                if isinstance(self._sink, AlertService) and stored_at is not None:
+                    latest = LatestRun(target_id, stored_at)
+                    await asyncio.to_thread(self._sink, ctx, events, latest=latest)
+                else:
+                    await asyncio.to_thread(self._sink, ctx, events)
                 return
             except EmitIncomplete as exc:
                 self._attempt_failed(ctx, target_id, attempt, f"{exc.result.failed} failed")
@@ -450,7 +452,8 @@ class MonitorRunExecutor:
 
     def _still_latest(self, ctx: TenantContext, target_id: int, stored_at: datetime) -> bool:
         """The target's stored `last_run_at` is still `stored_at` (no newer run stored since,
-        by any worker). A missing target counts as superseded."""
+        by any worker). A missing target counts as superseded. A pre-filter only: the
+        `AlertService` sink repeats the check in the insert's transaction (M7-14d)."""
         with self._factory() as db:
             try:
                 target = repo_for(ctx, db).monitor_targets.get(target_id)
