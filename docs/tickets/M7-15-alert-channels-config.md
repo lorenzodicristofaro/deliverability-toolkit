@@ -18,7 +18,7 @@ New i18n keys: alert.channel.* validation errors, permission label for `alert.ma
 Notes from M7-14b follow-ups (low priority, may be split out):
 - `get_cipher()` is cached with functools.cache; with new callers here, add a shared conftest fixture that clears the cache (today only tests/core/test_secrets_crypto.py does).
 - No command exists yet to re-encrypt stored secrets after key rotation; docs/SETUP.md section 10 says it comes with this ticket.
-Status: in-review
+Status: done (merged dacd1bb, QA APPROVE round 1 + should-fix verified)
 Implementation notes (coder, 2026-11-18):
 - Migration 0017 follows 0016 (M7-14). No FK from `alert_deliveries.channel_id` / `alert_rules.channel_id` to `alert_channels`: adding it needs edits to app/models/alert.py and to M7-14 tests that use free channel ids (tests/migrations/test_0016_alerts.py, tests/repositories/test_alerts_repository.py, tests/services/test_alerts.py), all outside this ticket. `alert_channels` has UNIQUE (id, tenant_id) ready for a composite FK; until then deleting a channel deletes its rules and deliveries in the same transaction (what CASCADE would do). GM 2026-11-18: FK is a follow-up (GM adds it to TODO).
 - Router registered in app/api/__init__.py (where `api_router` includes every v1 router), not app/main.py. GM 2026-11-18: accepted.

@@ -334,7 +334,11 @@ Tickets (docs/tickets/M7-*.md, split 2026-11-13; model in brackets):
   - [ ] Follow-up (low): `get_cipher()` in app/core/secrets_crypto.py is cached with functools.cache; when M7-15 adds callers, add a shared conftest fixture that clears the cache (today only tests/core/test_secrets_crypto.py does)
   - [ ] Follow-up (low): no command yet to re-encrypt stored secrets after key rotation (docs/SETUP.md section 10 says it comes with M7-15)
   - [x] Follow-up (low, done in M7-09): .env.example has a bare `ENCRYPTION_KEY=` with no hint that it must be a Fernet key (comma-separated for rotation)
-- [ ] M7-15 alert channel config, encrypted secrets, dispatcher (opus; depends M7-14, M7-14b, M7-11; alert.manage = owner, admin)
+- [x] M7-15 alert channel config, encrypted secrets, dispatcher (opus; depends M7-14, M7-14b, M7-11; alert.manage = owner, admin)
+  - Status: done (dacd1bb, QA APPROVE; opus). Migration 0017; API /api/v1/alert-channels (alert.manage owner+admin); dispatcher run_once/run(stop) on M7-14 deliver_due; permanent failure and deleted channel -> abandoned at once (scope extended by GM). Defaults recorded in the ticket notes.
+  - [ ] Follow-up (medium): FK alert_deliveries.channel_id -> alert_channels (needs app/models/alert.py and the M7-14 tests that use free channel ids); today channel delete removes its rules and deliveries in the same transaction.
+  - [ ] Follow-up (medium): operator command to re-encrypt stored secrets after ENCRYPTION_KEY rotation (repository rotate_all exists and is tested) + docs/SETUP.md section 10 text.
+  - [ ] Follow-up (low, QA nits): if the tenant is deleted mid-create, the tenant FK error is answered 409 "name taken" (re-check name_taken after rollback); test-send limit per (tenant, channel id) resets when a channel is recreated; tenants_with_due takes the lowest 100 tenant ids per pass (fairness, see M7-14c); no ARCHITECTURE paragraph on alert channels yet (M7-20 docs).
 - [ ] M7-16 alert channel email (sonnet; depends M7-15)
 - [ ] M7-21b domain ownership verification by email (opus; depends M7-21a, M7-16; parallel-safe no)
 - [ ] M7-17 alert channel generic webhook (sonnet; depends M7-15, M7-01)
