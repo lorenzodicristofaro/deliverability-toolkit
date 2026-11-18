@@ -18,5 +18,12 @@ New i18n keys: alert.channel.* validation errors, permission label for `alert.ma
 Notes from M7-14b follow-ups (low priority, may be split out):
 - `get_cipher()` is cached with functools.cache; with new callers here, add a shared conftest fixture that clears the cache (today only tests/core/test_secrets_crypto.py does).
 - No command exists yet to re-encrypt stored secrets after key rotation; docs/SETUP.md section 10 says it comes with this ticket.
-Status: todo
+Status: in-review
+Implementation notes (coder, 2026-11-18):
+- Migration 0017 follows 0016 (M7-14). No FK from `alert_deliveries.channel_id` / `alert_rules.channel_id` to `alert_channels`: adding it needs edits to app/models/alert.py and to M7-14 tests that use free channel ids (tests/migrations/test_0016_alerts.py, tests/repositories/test_alerts_repository.py, tests/services/test_alerts.py), all outside this ticket. `alert_channels` has UNIQUE (id, tenant_id) ready for a composite FK; until then deleting a channel deletes its rules and deliveries in the same transaction (what CASCADE would do). Proposed follow-up ticket.
+- Router registered in app/api/__init__.py (where `api_router` includes every v1 router), not app/main.py.
+- Project choices (not vendor facts): webhook/slack/teams URLs must be https; signing secret 16..256 printable ASCII; email 1..10 recipients; 50 channels per tenant; 3 test sends per channel per 10 minutes (in memory, per process); poll interval 30 s. M7-14c may move them to settings.
+- `permanent` results are retried like `retryable` until M7-14's max_attempts: M7-14 has no "abandon now" path in `deliver_due`.
+- Suite-wide test files changed: tests/core/test_permissions.py (alert.manage row, action list, matrix size, toggle block), tests/tenancy/test_matrix.py (6 entries, `b_alert_channel`), tests/tenancy/test_id_range.py (`CHANNEL_ID_ROUTES`), tests/conftest.py (autouse fixture clearing `get_cipher` cache, M7-14b follow-up).
+- Not done: the operator command to re-encrypt secrets after key rotation and its docs/SETUP.md section 10 text (CLI and SETUP.md are outside the files in scope); the repository entry point `AlertChannelSecretRotation.rotate_all` exists and is tested. ARCHITECTURE section 6 has no "Alert channels" paragraph yet (file not in scope).
 Note: the migration chain head is now 0013 (dns_snapshots, M7-08, merged 05cd067); the new revision follows it (or a later head if M7-14 merges first).

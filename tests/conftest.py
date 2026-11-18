@@ -24,6 +24,7 @@ from sqlalchemy import Engine, event, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import ArgumentError
 
+from app.core import secrets_crypto
 from app.core.db import create_db_engine
 from app.models import Base
 from tests.support.dns_zones import FakeServerSet, load_zones
@@ -334,6 +335,15 @@ def seed_table_access(
             f"{request.node.nodeid} touched a global knowledge table but its module is in "
             f"SEEDLESS_MODULES, so the seed sync did not run: {statements[0][:200]}"
         )
+
+
+@pytest.fixture(autouse=True)
+def _fresh_secret_cipher() -> Iterator[None]:
+    """`get_cipher()` is cached per process (M7-14b): clear it around every test, so a test that
+    changes ENCRYPTION_KEY never sees, or leaves behind, another test's cipher (M7-15)."""
+    secrets_crypto.get_cipher.cache_clear()
+    yield
+    secrets_crypto.get_cipher.cache_clear()
 
 
 @pytest.fixture(scope="session")

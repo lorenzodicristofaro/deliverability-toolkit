@@ -49,6 +49,7 @@ from tests.tenancy.conftest import World, assert_pristine, leaks
 from tests.tenancy.test_matrix import (
     LEAVES,
     Leaf,
+    b_alert_channel,
     b_custom_check,
     b_rule,
     b_selector,
@@ -331,6 +332,45 @@ def test_out_of_range_custom_check_id_is_an_unknown_check(
         assert not [hint for hint in LIMIT_HINTS if hint in response.text.casefold()]
     assert not leaks(world, response, logs)
     assert b_custom_check(world) == foreign
+    assert_pristine(world)
+
+
+# Alert channel routes (M7-15): `alert.manage` only, so a client viewer gets 403 for every id.
+CHANNEL_ID_ROUTES: dict[tuple[str, str], Any] = {
+    ("GET", "/api/v1/alert-channels/{channel_id}"): None,
+    ("PATCH", "/api/v1/alert-channels/{channel_id}"): {"enabled": False},
+    ("DELETE", "/api/v1/alert-channels/{channel_id}"): None,
+    ("POST", "/api/v1/alert-channels/{channel_id}/test"): None,
+}
+
+
+@BOUNDARY_PARAMS
+@pytest.mark.parametrize(("who", "status"), [("owner", 404), ("viewer", 403)])
+@pytest.mark.parametrize("key", list(CHANNEL_ID_ROUTES), ids=" ".join)
+def test_out_of_range_channel_id_is_an_unknown_channel(
+    world: World,
+    logs: pytest.LogCaptureFixture,
+    key: tuple[str, str],
+    who: str,
+    status: int,
+    value: int,
+) -> None:
+    method, template = key
+
+    def send(channel_id: int) -> Any:
+        path = template.replace("{channel_id}", str(channel_id))
+        return world.send(who, method, path, json=CHANNEL_ID_ROUTES[key])
+
+    foreign = b_alert_channel(world)
+    unknown_outcome = _outcome(send(UNKNOWN_ID))
+    foreign_outcome = _outcome(send(foreign.id))
+    response = send(value)
+    assert _outcome(response) == unknown_outcome == foreign_outcome
+    assert response.status_code == status
+    if value > MAX_ID:
+        assert not [hint for hint in LIMIT_HINTS if hint in response.text.casefold()]
+    assert not leaks(world, response, logs)
+    assert b_alert_channel(world) == foreign
     assert_pristine(world)
 
 
@@ -659,7 +699,11 @@ def test_every_path_parameter_goes_through_the_shared_parser() -> None:
 
 def test_every_numeric_id_route_has_a_behaviour_row() -> None:
     assert numeric_id_routes(LEAVES) == (
-        set(ID_ROUTES) | set(RULE_ID_ROUTES) | set(SELECTOR_ID_ROUTES) | set(CUSTOM_CHECK_ID_ROUTES)
+        set(ID_ROUTES)
+        | set(RULE_ID_ROUTES)
+        | set(SELECTOR_ID_ROUTES)
+        | set(CUSTOM_CHECK_ID_ROUTES)
+        | set(CHANNEL_ID_ROUTES)
     )
 
 

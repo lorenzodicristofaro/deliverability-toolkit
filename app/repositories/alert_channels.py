@@ -278,7 +278,8 @@ class AlertDispatchRepository:
         if type(limit) is not int or not 1 <= limit <= MAX_LIMIT:
             raise AlertChannelInvalid("limit", "out_of_range")
         stmt = (
-            select(AlertDelivery.tenant_id).distinct()
+            select(AlertDelivery.tenant_id)
+            .distinct()
             .where(
                 AlertDelivery.status.in_(DUE_STATUSES),
                 AlertDelivery.next_attempt_at <= at,
